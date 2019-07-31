@@ -1,8 +1,9 @@
 #!/bin/bash
 
-prefix="Proxy1"
+prefix="Store1"
 name="Node"
 
+GOOS=linux go get
 GOOS=linux go build redeo_lambda.go
 zip LambdaStore redeo_lambda
 
