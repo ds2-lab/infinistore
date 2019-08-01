@@ -34,7 +34,9 @@ var (
 
 var (
 	lambdaLis net.Listener
-	cMap      = make(map[int]chan interface{}) // client channel mapping table
+	//cMap      = make(map[int]chan interface{}) // client channel mapping table
+	//cMap      = hashmap.New(1024 * 1024)
+	cMap      = make([]chan interface{}, 1024*1024)
 	filePath  = "/tmp/pidLog.txt"
 	timeStamp = time.Now()
 	reqMap    = make(map[string]*dataEntry)
@@ -81,7 +83,7 @@ func nanoLog(handle nanolog.Handle, args ...interface{}) error {
 	} else if handle == resp.LogServer2Client {
 		logMu.Lock()
 		entry := reqMap[key]
-		delete(reqMap, key)
+		//delete(reqMap, key)
 		logMu.Unlock()
 
 		entry.server2Client = args[3].(int64)
@@ -357,8 +359,14 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 			// if abandon response, cmd must be GET
 			if abandon {
 				obj.Cmd = "get"
+				//c, err := cMap.Get(obj.Id.ConnId)
+				//if err == false {
+				//	fmt.Println("get channel err", err)
+				//}
+				//c := cMap[obj.Id.ConnId]
+				//cMap.Get(obj.Id.ConnId <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Cmd: "get"}
 				cMap[obj.Id.ConnId] <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Cmd: "get"}
-				if err = nanoLog(resp.LogProxy, obj.Cmd, obj.Id.ReqId, obj.Id.ChunkId, t2.UnixNano(), int64(time.Since(t2)), int64(0)); err != nil {
+				if err := nanoLog(resp.LogProxy, obj.Cmd, obj.Id.ReqId, obj.Id.ChunkId, t2.UnixNano(), int64(time.Since(t2)), int64(0)); err != nil {
 					fmt.Println("LogProxy err ", err)
 				}
 			}
@@ -391,6 +399,10 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 			}
 			obj.Cmd = "get"
 			if !abandon {
+				//c, err := cMap.Get(obj.Id.ConnId)
+				//if err == false {
+				//	fmt.Println("get channel err", err)
+				//}
 				cMap[obj.Id.ConnId] <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Body: res, Cmd: "get"}
 			}
 		case resp.TypeInt:
@@ -399,6 +411,10 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 				fmt.Println("response err is ", err)
 			}
 			obj.Cmd = "set"
+			//c, ok := cMap.Get(obj.Id.ConnId)
+			//if ok == false {
+			//	fmt.Println("get channel err", err)
+			//}
 			cMap[obj.Id.ConnId] <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Body: []byte{1}, Cmd: "set"}
 		case resp.TypeError:
 			err, _ := l.R.ReadError()
