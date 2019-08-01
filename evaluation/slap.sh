@@ -6,6 +6,7 @@ fi
 
 PWD=`dirname $0`
 ENTRY=`date "+%Y%m%d%H%M"`
+NODE_PREFIX="Store1Node"
 
 source $PWD/util.sh
 
@@ -69,7 +70,7 @@ function perform(){
         PRESET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_SET"
         PREGET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_GET"
 
-        update_lambda_timeout Node $((TIME+i*10))
+        update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
         wait
         start_proxy $PREPROXY &
         while [ ! -f /tmp/pidLog.txt ]
@@ -102,7 +103,7 @@ N=(3)
 mkdir -p $PWD/$ENTRY
 for mem in 128 256 # 512 1024 1536 2048 3008
 do
-    update_lambda_mem Store1Node $mem
+    update_lambda_mem $NODE_PREFIX $mem
     for sz in 10485760 20971520 # 41943040 62914020 83886080 104857600
     do
         for k in {0..4}
