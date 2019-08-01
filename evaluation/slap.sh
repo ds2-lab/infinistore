@@ -102,7 +102,7 @@ N=(3)
 mkdir -p $PWD/$ENTRY
 for mem in 128 256 # 512 1024 1536 2048 3008
 do
-    update_lambda_mem Node $mem
+    update_lambda_mem Store1Node $mem
     for sz in 10485760 20971520 # 41943040 62914020 83886080 104857600
     do
         for k in {0..4}
