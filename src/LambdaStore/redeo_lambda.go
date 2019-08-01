@@ -33,7 +33,7 @@ const OP_GET = "1"
 const OP_SET = "0"
 
 var (
-	server     = "184.73.144.223:6379" // 10Gbps ec2 server UbuntuProxy0
+	server     = "3.217.213.43:6379" // 10Gbps ec2 server UbuntuProxy0
 	lambdaConn net.Conn
 	//lambdaConn, _ = net.Dial("tcp", "172.31.18.174:6379") // 10Gbps ec2 server Proxy1
 	srv     = redeo.NewServer(nil)
