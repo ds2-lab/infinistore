@@ -1,6 +1,9 @@
 #!/bin/bash
 
-prefix=$1
+prefix="Store1Node"
+if [ "$1" != "" ] ; then
+  prefix=$1
+fi
 mem=3008
 # concurrency=30
 
