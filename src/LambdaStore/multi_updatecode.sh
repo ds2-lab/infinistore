@@ -7,12 +7,12 @@ mem=3008
 echo "compiling lambda code..."
 GOOS=linux go build redeo_lambda.go
 echo "compress file..."
-zip Lambda2SmallJPG redeo_lambda
+zip LambdaStore redeo_lambda
 echo "updating lambda code.."
 
 for i in {0..13}
 do
-    aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
+    aws lambda update-function-code --function-name $prefix$i --zip-file fileb://LambdaStore.zip
    # aws lambda update-function-configuration --function-name $prefix$i --memory-size $mem
 #    aws lambda update-function-configuration --function-name $prefix$name$i --timeout 300
 #    aws lambda update-function-configuration --function-name $prefix$name$i --handler redeo_lambda
