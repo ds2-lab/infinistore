@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,7 +37,6 @@ const OP_SET = "0"
 var (
 	server     = "3.217.213.43:6379" // 10Gbps ec2 server UbuntuProxy0
 	lambdaConn net.Conn
-	//lambdaConn, _ = net.Dial("tcp", "172.31.18.174:6379") // 10Gbps ec2 server Proxy1
 	srv     = redeo.NewServer(nil)
 	myMap   = make(map[string]*Chunk)
 	isFirst = true
@@ -46,7 +46,8 @@ var (
 )
 
 func HandleRequest() {
-	timeOut := time.Duration(300 * time.Second)
+	var active int32
+	timeOut := time.NewTimer(getTimeout())
 	done := make(chan struct{})
 	dataGatherer := make(chan *DataEntry, 10)
 	dataDepository := make([]*DataEntry, 0, 100)
@@ -54,17 +55,20 @@ func HandleRequest() {
 
 	if isFirst == true {
 		log.Debug("Ready to connect %s", server)
-		lambdaConn, connErr := net.Dial("tcp", server)
+
+		var connErr error
+		lambdaConn, connErr = net.Dial("tcp", server)
 		if connErr != nil {
 			log.Error("Failed to connect server %s: %v", server, connErr)
 			return
 		}
+		log.Info("Connection to %v established.", lambdaConn.RemoteAddr())
 
 		isFirst = false
 		go func() {
-			log.Debug("conn is", lambdaConn.LocalAddr(), lambdaConn.RemoteAddr())
 			// Define handlers
 			srv.HandleFunc("get", func(w resp.ResponseWriter, c *resp.Command) {
+				atomic.AddInt32(&active, 1)
 				t := time.Now()
 				log.Debug("In GET handler")
 
@@ -101,7 +105,6 @@ func HandleRequest() {
 					return
 				}
 				d3 := time.Since(t3)
-
 				dt := time.Since(t)
 
 				log.Debug("AppendBody duration is ", d2)
@@ -110,9 +113,12 @@ func HandleRequest() {
 				log.Debug("Get complete, Key: %s, ConnID:%s, ChunkID:%s", key, connId, chunk.id)
 				dataDeposited.Add(1)
 				dataGatherer <- &DataEntry{OP_GET, "200", reqId, chunk.id, d2, d3, dt}
+				atomic.AddInt32(&active, -1)
+				resetTimer(timeOut)
 			})
 
 			srv.HandleFunc("set", func(w resp.ResponseWriter, c *resp.Command) {
+				atomic.AddInt32(&active, 1)
 				t := time.Now()
 				log.Debug("In SET handler")
 				//if c.ArgN() != 3 {
@@ -143,10 +149,14 @@ func HandleRequest() {
 				log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s, Item length", key, connId, chunkId, len(val))
 				dataDeposited.Add(1)
 				dataGatherer <- &DataEntry{OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t)}
+				atomic.AddInt32(&active, -1)
+				resetTimer(timeOut)
 			})
 
 			srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
 				log.Debug("in the data function")
+
+				timeOut.Stop()
 
 				dataDeposited.Wait()
 
@@ -196,13 +206,36 @@ func HandleRequest() {
 	}()
 
 	// timeout control
-	select {
-	case <-done:
-		return
-	case <-time.After(timeOut):
-		log.Debug("Lambda timeout, going to return function")
-		return
+	for {
+		select {
+		case <-done:
+			return
+		case <-timeOut.C:
+			if atomic.LoadInt32(&active) > 0 {
+				resetTimer(timeOut)
+				break
+			}
+			log.Debug("Lambda timeout, going to return function")
+			return
+		}
 	}
+}
+
+func getTimeout() time.Duration {
+	return 15 * time.Second
+}
+
+func resetTimer(timer *time.Timer) {
+	// Drain the timer to be accurate and safe to reset.
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timeout := getTimeout()
+	timer.Reset(timeout)
+	log.Debug("Timeout reset: %v", timeout)
 }
 
 func remoteGet(bucket string, key string) []byte {
