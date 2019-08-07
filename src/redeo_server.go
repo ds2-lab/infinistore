@@ -264,7 +264,7 @@ func initial(lambdaSrv *redeo.Server) redeo.Group {
 		}
 	} else {
 		for i := range group.Arr {
-			node := newLambdaInstance("Store1Node" + strconv.Itoa(i))
+			node := newLambdaInstance("Store1VPCNode" + strconv.Itoa(i))
 			log.Info("[%s lambda store has registered]", node.Name)
 			// register lambda instance to group
 			group.Arr[i] = node

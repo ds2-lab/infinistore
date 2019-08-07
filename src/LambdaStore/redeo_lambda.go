@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
 	"github.com/wangaoone/redeo"
@@ -33,9 +34,11 @@ type DataEntry struct {
 
 const OP_GET = "1"
 const OP_SET = "0"
+const TICK = int64(100 * time.Millisecond)
+const TICK_ERROR = int64(2 * time.Millisecond)
 
 var (
-	server     = "3.217.213.43:6379" // 10Gbps ec2 server UbuntuProxy0
+	server     = "172.31.78.171:6379" // 10Gbps ec2 server UbuntuProxy0
 	lambdaConn net.Conn
 	srv     = redeo.NewServer(nil)
 	myMap   = make(map[string]*Chunk)
@@ -43,10 +46,12 @@ var (
 	log     = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_WARN,
 	}
+	start time.Time
 )
 
 func HandleRequest() {
 	var active int32
+	start = time.Now()
 	timeOut := time.NewTimer(getTimeout())
 	done := make(chan struct{})
 	dataGatherer := make(chan *DataEntry, 10)
@@ -222,7 +227,7 @@ func HandleRequest() {
 }
 
 func getTimeout() time.Duration {
-	return 15 * time.Second
+	return time.Duration(int64(math.Ceil(float64(time.Now().Sub(start).Nanoseconds() + TICK_ERROR) / float64(TICK))) * TICK - TICK_ERROR)
 }
 
 func resetTimer(timer *time.Timer) {
