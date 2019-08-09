@@ -1,6 +1,6 @@
 #!/bin/bash
 
-prefix="Store1Node"
+prefix="Store1VPCNode"
 if [ "$1" != "" ] ; then
   prefix=$1
 fi

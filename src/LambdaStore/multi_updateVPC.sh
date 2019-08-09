@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PREFIX="Store1VPCNode"
-SUBNETS="subnet-2b304b24,subnet-2b304b24"
+SUBNETS="subnet-b53a6bff,subnet-fcde0bc2"
 SGS="sg-079f6cc4e658209c3"
 
 echo "updating lambda code.."
