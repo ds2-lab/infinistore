@@ -5,9 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/ScottMansfield/nanolog"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/wangaoone/LambdaObjectstore/lib/logger"
 	"github.com/wangaoone/redeo"
 	"github.com/wangaoone/redeo/resp"
 	"io"
@@ -21,11 +19,13 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"github.com/wangaoone/LambdaObjectstore/lib/logger"
+
+	"github.com/wangaoone/LambdaObjectstore/src/proxy/lambdastore"
 )
 
 const MaxLambdaStores = 14
 const LambdaStoreName = "LambdaStore"
+const LambdaPrefix = "Proxy1Node"
 
 var (
 	replica       = flag.Bool("replica", true, "Enable lambda replica deployment")
@@ -33,7 +33,7 @@ var (
 	prefix        = flag.String("prefix", "log", "log file prefix")
 	dataCollected sync.WaitGroup
 	log           = &logger.ColorLogger{
-		Level: logger.LOG_LEVEL_INFO,
+		Level: logger.LOG_LEVEL_ALL,
 	}
 )
 
@@ -187,13 +187,8 @@ func main() {
 				// Collect data
 				log.Info("Collecting data...")
 				for _, node := range group.Arr {
-					node.W.WriteCmdString("data")
-					err := node.W.Flush()
-					if err != nil {
-						log.Warn("Failed to submit data request: %v", err)
-						continue
-					}
 					dataCollected.Add(1)
+					go collectData(node.(*lambdastore.Instance))
 				}
 				log.Info("Waiting data from Lambda")
 				dataCollected.Wait()
@@ -241,15 +236,15 @@ func main() {
 
 // initial lambda group
 func initial(lambdaSrv *redeo.Server) redeo.Group {
-	group := redeo.Group{Arr: make([]*redeo.LambdaInstance, MaxLambdaStores), MemCounter: 0}
+	group := redeo.Group{Arr: make([]redeo.LambdaInstance, MaxLambdaStores), MemCounter: 0}
 	if *replica == true {
 		for i := range group.Arr {
-			node := newLambdaInstance(LambdaStoreName)
+			node := lambdastore.NewInstance(LambdaStoreName)
+			node.SetLogLevel(log.Level)
 			log.Info("[No.%d replication lambda store has registered.]", i)
 			// register lambda instance to group
 			group.Arr[i] = node
-			node.Alive = true
-			go lambdaTrigger(node)
+			node.Validate()
 			// start a new server to receive conn from lambda store
 			node.Cn = lambdaSrv.Accept(lambdaLis)
 			log.Info("[start a new conn, lambda store has connected: %v]", node.Cn.RemoteAddr())
@@ -264,12 +259,12 @@ func initial(lambdaSrv *redeo.Server) redeo.Group {
 		}
 	} else {
 		for i := range group.Arr {
-			node := newLambdaInstance("Store1VPCNode" + strconv.Itoa(i))
+			node := lambdastore.NewInstance("Store1VPCNode" + strconv.Itoa(i))
+			node.SetLogLevel(log.Level)
 			log.Info("[%s lambda store has registered]", node.Name)
 			// register lambda instance to group
 			group.Arr[i] = node
-			node.Alive = true
-			go lambdaTrigger(node)
+			node.Validate()
 			// start a new server to receive conn from lambda store
 			node.Cn = lambdaSrv.Accept(lambdaLis)
 			log.Info("[start a new conn, lambda store has connected: %v]", node.Cn.RemoteAddr())
@@ -286,15 +281,6 @@ func initial(lambdaSrv *redeo.Server) redeo.Group {
 	return group
 }
 
-// create new lambda instance
-func newLambdaInstance(name string) *redeo.LambdaInstance {
-	return &redeo.LambdaInstance{
-		Name:  name,
-		Alive: false,
-		C:     make(chan *redeo.ServerReq, 1024*1024),
-	}
-}
-
 // blocking on lambda peek Type
 // lambda handle incoming lambda store response
 //
@@ -303,7 +289,7 @@ func newLambdaInstance(name string) *redeo.LambdaInstance {
 // field 2 : chunk id
 // field 3 : obj val
 
-func LambdaPeek(l *redeo.LambdaInstance) {
+func LambdaPeek(l *lambdastore.Instance) {
 	for {
 		var obj redeo.Response
 		// field 0 for cmd
@@ -334,12 +320,15 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 			}
 
 			switch cmd {
+			case "pong":
+				pongHandler(l)
+				err = errors.New("continue")
 			case "get":
 			case "set":
 				setHandler(l, t2)
 				err = errors.New("continue")
 			case "data":
-				collectDataFromLambda(l)
+				receiveData(l)
 				err = errors.New("continue")
 			default:
 				err = errors.New(cmd)
@@ -393,6 +382,7 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 			continue
 		}
 
+		log.Debug("GET peek complete, send to client channel", connId, obj.Id.ReqId, chunkId)
 		cMap[obj.Id.ConnId] <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Body: res, Cmd: obj.Cmd}
 		time0 := time.Since(t2)
 		if err := nanoLog(resp.LogProxy, obj.Cmd, obj.Id.ReqId, obj.Id.ChunkId, t2.UnixNano(), int64(time0), int64(time9)); err != nil {
@@ -401,7 +391,21 @@ func LambdaPeek(l *redeo.LambdaInstance) {
 	}
 }
 
-func setHandler(l *redeo.LambdaInstance, t time.Time) {
+func pongHandler(l *lambdastore.Instance) {
+	log.Debug("In lambda PONG peek, %s", l.Name)
+	// pong peek lambdaId
+	_, _ = l.R.ReadBulkString()
+
+	select {
+	case <-l.Validated:
+		// Validated
+	default:
+		close(l.Validated)
+	}
+}
+
+func setHandler(l *lambdastore.Instance, t time.Time) {
+	log.Debug("In lambda set peek, %s", l.Name)
 	var obj redeo.Response
 	connId, _ := l.R.ReadBulkString()
 	obj.Id.ConnId, _ = strconv.Atoi(connId)
@@ -409,6 +413,7 @@ func setHandler(l *redeo.LambdaInstance, t time.Time) {
 	chunkId, _ := l.R.ReadBulkString()
 	obj.Id.ChunkId, _ = strconv.ParseInt(chunkId, 10, 64)
 
+	log.Debug("SET peek complete, send to client channel, %s,%s,%s", connId, obj.Id.ReqId, chunkId)
 	cMap[obj.Id.ConnId] <- &redeo.Chunk{ChunkId: obj.Id.ChunkId, ReqId: obj.Id.ReqId, Body: []byte{1}, Cmd: "set"}
 	if err := nanoLog(resp.LogProxy, "set", obj.Id.ReqId, obj.Id.ChunkId, t.UnixNano(), int64(time.Since(t)), int64(0)); err != nil {
 		log.Warn("LogProxy err %v", err)
@@ -417,18 +422,11 @@ func setHandler(l *redeo.LambdaInstance, t time.Time) {
 
 // lambda Handler
 // lambda handle incoming client request
-func lambdaHandler(l *redeo.LambdaInstance) {
+func lambdaHandler(l *lambdastore.Instance) {
 	for {
-		a := <-l.C /*blocking on lambda facing channel*/
+		a := <-l.C() /*blocking on lambda facing channel*/
 		// check lambda status first
-		l.AliveLock.Lock()
-		if l.Alive == false {
-			log.Info("[Lambda store is not alive, need to activate: %s]", l.Name)
-			l.Alive = true
-			// trigger lambda
-			go lambdaTrigger(l)
-		}
-		l.AliveLock.Unlock()
+		triggered := l.Validate()
 		//*
 		// req from client
 		//*
@@ -437,6 +435,7 @@ func lambdaHandler(l *redeo.LambdaInstance) {
 		chunkId := strconv.FormatInt(a.Id.ChunkId, 10)
 		// get cmd argument
 		cmd := strings.ToLower(a.Cmd)
+		log.Debug("trigger: %v (%s)", triggered, l.Name)
 		switch cmd {
 		case "set": /*set or two argument cmd*/
 			l.W.MyWriteCmd(a.Cmd, connId, a.Id.ReqId, chunkId, a.Key, a.Body)
@@ -454,25 +453,18 @@ func lambdaHandler(l *redeo.LambdaInstance) {
 	}
 }
 
-func lambdaTrigger(l *redeo.LambdaInstance) {
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-
-	client := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
-
-	_, err := client.Invoke(&lambda.InvokeInput{FunctionName: aws.String(l.Name)})
+func collectData(l *lambdastore.Instance) {
+	// trigger lambda
+	l.Validate()
+	l.W.WriteCmdString("data")
+	err := l.W.Flush()
 	if err != nil {
-		log.Error("Error calling LambdaFunction: %v", err)
+		log.Warn("Failed to submit data request: %v", err)
+		dataCollected.Done()
 	}
-
-	log.Info("[Lambda store deactivated: %s]", l.Name)
-	l.AliveLock.Lock()
-	l.Alive = false
-	l.AliveLock.Unlock()
 }
 
-func collectDataFromLambda(l *redeo.LambdaInstance) {
+func receiveData(l *lambdastore.Instance) {
 	strLen, err := l.R.ReadBulkString()
 	len := 0
 	if err != nil {
