@@ -39,7 +39,8 @@ const TICK_ERROR_EXTEND = int64(50 * time.Millisecond)
 const TICK_ERROR = int64(2 * time.Millisecond)
 
 var (
-	server     = "172.31.46.36:6379" // 10Gbps ec2 server UbuntuProxy0
+	// server     = "172.31.46.36:6379" // w VPC
+	server  = "3.217.213.43:6379" // w/o VPC
 	lambdaConn net.Conn
 	srv        = redeo.NewServer(nil)
 	myMap      = make(map[string]*Chunk)
@@ -314,6 +315,6 @@ func main() {
 		atomic.AddInt32(&active, -1)
 		resetTimerWithExtension(timeOut, TICK_ERROR_EXTEND)
 	})
-	
+
 	lambda.Start(HandleRequest)
 }
