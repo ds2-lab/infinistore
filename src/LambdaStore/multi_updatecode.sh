@@ -4,7 +4,7 @@ PREFIX="Store1VPCNode"
 if [ "$1" != "" ] ; then
   PREFIX=$1
 fi
-mem=3008
+mem=1024
 # concurrency=30
 
 echo "compiling lambda code..."
@@ -17,7 +17,7 @@ for i in {0..13}
 do
      aws lambda update-function-code --function-name $PREFIX$i --zip-file fileb://LambdaStore.zip
      # aws lambda update-function-configuration --function-name $PREFIX$i --memory-size $mem
-     # aws lambda update-function-configuration --function-name $PREFIX$i --timeout $2
+     aws lambda update-function-configuration --function-name $PREFIX$i --timeout $2
 #    aws lambda update-function-configuration --function-name $PREFIX$i --handler redeo_lambda
 #    aws lambda put-function-concurrency --function-name $PREFIX$i --reserved-concurrent-executions $concurrency
 done
