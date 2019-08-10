@@ -25,7 +25,7 @@ import (
 
 const MaxLambdaStores = 14
 const LambdaStoreName = "LambdaStore"
-const LambdaPrefix = "Proxy1Node"
+const LambdaPrefix = "Store1VPCNode"
 
 var (
 	replica       = flag.Bool("replica", true, "Enable lambda replica deployment")
@@ -259,7 +259,7 @@ func initial(lambdaSrv *redeo.Server) redeo.Group {
 		}
 	} else {
 		for i := range group.Arr {
-			node := lambdastore.NewInstance("Store1VPCNode" + strconv.Itoa(i))
+			node := lambdastore.NewInstance(LambdaPrefix + strconv.Itoa(i))
 			node.SetLogLevel(log.Level)
 			log.Info("[%s lambda store has registered]", node.Name)
 			// register lambda instance to group
