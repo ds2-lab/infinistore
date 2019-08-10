@@ -39,8 +39,8 @@ const TICK_ERROR_EXTEND = int64(50 * time.Millisecond)
 const TICK_ERROR = int64(2 * time.Millisecond)
 
 var (
-	// server     = "172.31.46.36:6379" // w VPC
-	server  = "3.217.213.43:6379" // w/o VPC
+	server     = "172.31.39.156:6379" // w VPC
+	// server  = "3.217.213.43:6379" // w/o VPC
 	lambdaConn net.Conn
 	srv        = redeo.NewServer(nil)
 	myMap      = make(map[string]*Chunk)
@@ -62,7 +62,10 @@ func HandleRequest() {
 	start = time.Now()
 	atomic.StoreInt32(&active, 0)
 	done = make(chan struct{})
-	timeOut = time.NewTimer(getTimeout(TICK_ERROR))
+	timeOut = time.NewTimer(0)
+	var clear sync.WaitGroup
+
+	resetTimer(timeOut)
 
 	if isFirst == true {
 		log.Debug("Ready to connect %s", server)
@@ -84,7 +87,10 @@ func HandleRequest() {
 	pongHandler(lambdaConn)
 
 	// data gathering
-	go func() {
+	go func(clear *sync.WaitGroup) {
+		clear.Add(1)
+		defer clear.Done()
+
 		for {
 			select {
 			case <-done:
@@ -94,27 +100,39 @@ func HandleRequest() {
 				dataDeposited.Done()
 			}
 		}
-	}()
+	}(&clear)
 
 	// timeout control
-	for {
-		select {
-		case <-done:
-			return
-		case <-timeOut.C:
-			if atomic.LoadInt32(&active) > 0 {
-				resetTimer(timeOut)
-				break
+	func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-timeOut.C:
+				if atomic.LoadInt32(&active) > 0 {
+					resetTimer(timeOut)
+					break
+				}
+				timeOut.Stop()
+				log.Debug("Lambda timeout, return(%v).", time.Since(start))
+				Done()
+				return
 			}
-			close(done)
-			timeOut.Stop()
-			log.Debug("Lambda timeout, return(%v).", time.Since(start))
-			return
 		}
-	}
+	}()
 
+	clear.Wait()
 	done = nil
 	timeOut = nil
+}
+
+func Done() {
+	select {
+	case <-done:
+		// closed
+	default:
+		close(done)
+	}
 }
 
 func pongHandler(conn net.Conn) {
@@ -306,7 +324,7 @@ func main() {
 		// No need to close server, it will serve the new connection next time.
 		dataDepository = dataDepository[:0]
 		isFirst = true
-		close(done)
+		Done()
 	})
 
 	srv.HandleFunc("ping", func(w resp.ResponseWriter, c *resp.Command) {
