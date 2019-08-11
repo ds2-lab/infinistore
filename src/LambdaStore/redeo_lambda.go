@@ -34,7 +34,7 @@ var (
 	myMap      = make(map[string]*types.Chunk)
 	isFirst    = true
 	log        = &logger.ColorLogger{
-		Level: logger.LOG_LEVEL_WARN,
+		Level: logger.LOG_LEVEL_ALL,
 	}
 	dataGatherer = make(chan *types.DataEntry, 10)
 	dataDepository = make([]*types.DataEntry, 0, 100)
