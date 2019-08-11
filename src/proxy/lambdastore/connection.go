@@ -155,6 +155,14 @@ func (conn *Connection) ServeLambda() {
 	}
 }
 
+func (conn *Connection) Ping() {
+	conn.w.WriteCmdString("ping")
+	err := conn.w.Flush()
+	if err != nil {
+		conn.log.Warn("Flush pipeline error(ping): %v", err)
+	}
+}
+
 func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda.")
 
