@@ -3,7 +3,7 @@
 
 PREFIX=$1
 
-for i in {0..13}
+for i in {0..64}
 do
     aws logs delete-log-group --log-group-name /aws/lambda/$PREFIX$i
 done

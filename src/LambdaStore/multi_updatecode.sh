@@ -13,7 +13,7 @@ echo "compress file..."
 zip LambdaStore redeo_lambda
 echo "updating lambda code.."
 
-for i in {0..13}
+for i in {0..64}
 do
      aws lambda update-function-code --function-name $PREFIX$i --zip-file fileb://LambdaStore.zip
      aws lambda update-function-configuration --function-name $PREFIX$i --memory-size $mem --timeout $2

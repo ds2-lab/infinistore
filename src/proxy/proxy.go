@@ -9,7 +9,7 @@ import (
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/lambdastore"
 )
 
-const NumLambdaClusters = 14
+const NumLambdaClusters = 64
 const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Store1VPCNode"
 
