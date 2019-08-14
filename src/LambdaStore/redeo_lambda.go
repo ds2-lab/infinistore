@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
-  "github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
 	"github.com/wangaoone/redeo"
 	"github.com/wangaoone/redeo/resp"
-//	"github.com/wangaoone/s3gof3r"
+	"os/exec"
+	"strings"
+
+	//	"github.com/wangaoone/s3gof3r"
 	"io"
 	"net"
 	"runtime"
@@ -17,9 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	prototol "github.com/wangaoone/LambdaObjectstore/src/types"
-	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/types"
 	lambdaTimeout "github.com/wangaoone/LambdaObjectstore/src/LambdaStore/timeout"
+	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/types"
+	prototol "github.com/wangaoone/LambdaObjectstore/src/types"
 )
 
 const OP_GET = "1"
@@ -36,27 +39,37 @@ var (
 	log        = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_ALL,
 	}
-	dataGatherer = make(chan *types.DataEntry, 10)
+	dataGatherer   = make(chan *types.DataEntry, 10)
 	dataDepository = make([]*types.DataEntry, 0, 100)
-	dataDeposited sync.WaitGroup
-	timeout = lambdaTimeout.New(0)
+	dataDeposited  sync.WaitGroup
+	timeout        = lambdaTimeout.New(0)
 
-	active  int32
-	mu      sync.RWMutex
-	done    chan struct{}
-	id      uint64
+	active   int32
+	mu       sync.RWMutex
+	done     chan struct{}
+	id       uint64
+	hostName string
 )
 
 func init() {
-	goroutings := runtime.GOMAXPROCS(0)
-	if goroutings < EXPECTED_GOMAXPROCS {
-		log.Debug("Set GOMAXPROCS to %d (original %d)", EXPECTED_GOMAXPROCS, goroutings)
+	goroutines := runtime.GOMAXPROCS(0)
+	if goroutines < EXPECTED_GOMAXPROCS {
+		log.Debug("Set GOMAXPROCS to %d (original %d)", EXPECTED_GOMAXPROCS, goroutines)
 		runtime.GOMAXPROCS(EXPECTED_GOMAXPROCS)
 	} else {
-		log.Debug("GOMAXPROCS %d", goroutings)
+		log.Debug("GOMAXPROCS %d", goroutines)
 	}
 	timeout.SetLogger(log)
 	adapt()
+
+	cmd := exec.Command("uname", "-a")
+	host, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Debug("cmd.Run() failed with %s\n", err)
+	}
+
+	hostName = strings.Split(string(host), " #")[0]
+	log.Debug("hostname is: %s", hostName)
 }
 
 func adapt() {
@@ -172,7 +185,7 @@ func Done() {
 	mu.Lock()
 	defer mu.Unlock()
 
-  resetDoneLocked()
+	resetDoneLocked()
 	doneLocked()
 }
 
@@ -315,22 +328,33 @@ func main() {
 		atomic.AddInt32(&active, -1)
 	})
 
-	srv.HandleFunc("set", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleStreamFunc("set", func(w resp.ResponseWriter, c *resp.CommandStream) {
 		atomic.AddInt32(&active, 1)
 		timeout.Requests++
 		extension := lambdaTimeout.TICK_ERROR
 		if timeout.Requests > 1 {
 			extension = lambdaTimeout.TICK
 		}
+		defer func() {
+			timeout.ResetWithExtension(extension)
+			atomic.AddInt32(&active, -1)
+		}()
 
 		t := time.Now()
 		log.Debug("In SET handler")
 
-		connId := c.Arg(0).String()
-		reqId := c.Arg(1).String()
-		chunkId := c.Arg(2).String()
-		key := c.Arg(3).String()
-		val := c.Arg(4).Bytes()
+		connId, _ := c.NextArg().String()
+		reqId, _ := c.NextArg().String()
+		chunkId, _ := c.NextArg().String()
+		key, _ := c.NextArg().String()
+		valReader, err := c.Next()
+		if err != nil {
+			log.Error("Error on get value reader: %v", err)
+		}
+		val, err := valReader.ReadAll()
+		if err != nil {
+			log.Error("Error on get value: %v", err)
+		}
 		myMap[key] = &types.Chunk{chunkId, val}
 
 		// write Key, clientId, chunkId, body back to server
@@ -347,9 +371,6 @@ func main() {
 			dataDeposited.Add(1)
 			dataGatherer <- &types.DataEntry{OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t)}
 		}
-
-		timeout.ResetWithExtension(extension)
-		atomic.AddInt32(&active, -1)
 	})
 
 	srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
@@ -363,9 +384,9 @@ func main() {
 		w.AppendBulkString("data")
 		w.AppendBulkString(strconv.Itoa(len(dataDepository)))
 		for _, entry := range dataDepository {
-			format := fmt.Sprintf("%s,%s,%s,%s,%d,%d,%d",
+			format := fmt.Sprintf("%s,%s,%s,%s,%d,%d,%d,%s",
 				entry.Op, entry.ReqId, entry.ChunkId, entry.Status,
-				entry.Duration, entry.DurationAppend, entry.DurationFlush)
+				entry.Duration, entry.DurationAppend, entry.DurationFlush,hostName)
 			w.AppendBulkString(format)
 
 			//w.AppendBulkString(entry.Op)
