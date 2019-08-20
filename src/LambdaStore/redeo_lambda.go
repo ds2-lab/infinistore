@@ -333,7 +333,7 @@ func main() {
 				log.Error("Error on flush(error 404): %v", err)
 			}
 			dataDeposited.Add(1)
-			dataGatherer <- &types.DataEntry{OP_GET, "404", reqId, "-1", 0, 0, time.Since(t)}
+			dataGatherer <- &types.DataEntry{OP_GET, "404", reqId, "-1", 0, 0, time.Since(t), lambdaReqId}
 			return
 		}
 
@@ -359,7 +359,7 @@ func main() {
 		log.Debug("Total duration is %v", dt)
 		log.Debug("Get complete, Key: %s, ConnID:%s, ChunkID:%s", key, connId, chunk.Id)
 		dataDeposited.Add(1)
-		dataGatherer <- &types.DataEntry{OP_GET, "200", reqId, chunk.Id, 0, d3, dt}
+		dataGatherer <- &types.DataEntry{OP_GET, "200", reqId, chunk.Id, 0, d3, dt, lambdaReqId}
 	})
 
 	srv.HandleStreamFunc("set", func(w resp.ResponseWriter, c *resp.CommandStream) {
@@ -417,7 +417,7 @@ func main() {
 
 		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s, Item length %d", key, connId, chunkId, len(val))
 		dataDeposited.Add(1)
-		dataGatherer <- &types.DataEntry{OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t)}
+		dataGatherer <- &types.DataEntry{OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), lambdaReqId}
 	})
 
 	srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
@@ -433,7 +433,7 @@ func main() {
 		for _, entry := range dataDepository {
 			format := fmt.Sprintf("%s,%s,%s,%s,%d,%d,%d,%s,%s,%s",
 				entry.Op, entry.ReqId, entry.ChunkId, entry.Status,
-				entry.Duration, entry.DurationAppend, entry.DurationFlush, hostName, lambdacontext.FunctionName, lambdaReqId)
+				entry.Duration, entry.DurationAppend, entry.DurationFlush, hostName, lambdacontext.FunctionName, entry.LambdaReqId)
 			w.AppendBulkString(format)
 
 			//w.AppendBulkString(entry.Op)
