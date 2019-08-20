@@ -72,7 +72,6 @@ function perform(){
         PREGET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_GET"
 
         update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
-        wait
         start_proxy $PREPROXY &
         while [ ! -f /tmp/pidLog.txt ]
         do
