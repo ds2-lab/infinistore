@@ -1,7 +1,10 @@
 package types
 
 import (
+	"errors"
 )
+
+var ErrNoSpareDeployment = errors.New("No spare deployment")
 
 type ClientReqCounter struct {
 	Cmd          string
@@ -16,11 +19,13 @@ type Id struct {
 	ChunkId string
 }
 
-type Group struct {
-	All        []LambdaInstance
-	MemCounter uint64
+type LambdaDeployment interface {
+	Name() string
+	Id() uint64
+	Reset(new LambdaDeployment, old LambdaDeployment)
 }
 
-type LambdaInstance interface {
-	C() chan *Request
+type MigrationScheduler interface {
+	StartMigrator(uint64) (string, error)
+	GetDestination(uint64) (LambdaDeployment, error)
 }

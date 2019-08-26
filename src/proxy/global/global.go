@@ -10,8 +10,20 @@ import (
 
 var (
 	// Clients        = make([]chan interface{}, 1024*1024)
-	Stores         *types.Group
-	DataCollected  sync.WaitGroup
-	Log            logger.ILogger
-	ReqMap         = hashmap.New(1024)
+	DataCollected   sync.WaitGroup
+	Log             logger.ILogger
+	ReqMap          = hashmap.New(1024)
+	Migrator        types.MigrationScheduler
+	BasePort        = 6378
+	BaseMigratorPort = 6380
+	ServerIp        string
 )
+
+func init() {
+	ip, err := GetPrivateIp()
+	if err != nil {
+		panic(err)
+	}
+
+	ServerIp = ip
+}

@@ -2,6 +2,9 @@ package types
 
 // Input
 type InputEvent struct {
-	Id   uint64   `json:"id"`
-	Timeout int   `json:"timeout"`
+	Cmd          string `json:"cmd"`
+	Id           uint64 `json:"id"`
+	Proxy        string `json:"proxy"`
+	Timeout      int    `json:"timeout"`
+	Addr         string `json:"addr"`
 }

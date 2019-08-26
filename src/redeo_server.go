@@ -12,7 +12,6 @@ import (
 	"syscall"
 
 	"github.com/wangaoone/LambdaObjectstore/src/proxy"
-	"github.com/wangaoone/LambdaObjectstore/src/proxy/types"
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/global"
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/collector"
 )
@@ -54,13 +53,13 @@ func main() {
 	log.Info("======================================")
 	log.Info("replica: %v || isPrint: %v", *replica, *isPrint)
 	log.Info("======================================")
-	clientLis, err := net.Listen("tcp", ":6378")
+	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
 		os.Exit(1)
 		return
 	}
-	lambdaLis, err = net.Listen("tcp", ":6379")
+	lambdaLis, err = net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort + 1))
 	if err != nil {
 		log.Error("Failed to listen lambdas: %v", err)
 		os.Exit(1)
@@ -100,18 +99,7 @@ func main() {
 
 		// Collect data
 		log.Info("Collecting data...")
-		for _, node := range global.Stores.All {
-			global.DataCollected.Add(1)
-			// send data command
-			node.C() <- &types.Request{ Cmd: "data" }
-		}
-		log.Info("Waiting data from Lambda")
-		global.DataCollected.Wait()
-		if err := collector.Flush(); err != nil {
-			log.Error("Failed to save data from lambdas: %v", err)
-		} else {
-			log.Info("Data collected.")
-		}
+		prxy.CollectData()
 
 		prxy.Close(lambdaLis)
 		prxy.Release()

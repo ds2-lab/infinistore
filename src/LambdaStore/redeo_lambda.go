@@ -20,21 +20,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	protocol "github.com/wangaoone/LambdaObjectstore/src/types"
 	lambdaTimeout "github.com/wangaoone/LambdaObjectstore/src/LambdaStore/timeout"
 	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/types"
-	protocol "github.com/wangaoone/LambdaObjectstore/src/types"
+	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/migrator"
+	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/storage"
 )
 
-const OP_GET = "1"
-const OP_SET = "0"
-const EXPECTED_GOMAXPROCS = 2
+const (
+	OP_GET              = "1"
+	OP_SET              = "0"
+	EXPECTED_GOMAXPROCS = 2
+	LIFESPAN            = 60
+	STATUSCODE          = 202
+)
 
 var (
-	server     = "172.31.39.156:6379" // w VPC
-	// server  = "3.217.213.43:6379" // w/o VPC
+	startTime  = time.Now()
+	server     string // Passed from proxy dynamically.
 	lambdaConn net.Conn
 	srv        = redeo.NewServer(nil)
-	myMap      = make(map[string]*types.Chunk)
+	store      types.Storage = storage.New()
 	isFirst    = true
 	log        = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_ALL,
@@ -47,12 +53,13 @@ var (
 	// at the same time.
 	pongLimiter = make(chan struct{}, 1)
 
-	active      int32
-	mu          sync.RWMutex
-	done        chan struct{}
-	id          uint64
-	hostName    string
-	lambdaReqId string
+	active       int32
+	mu           sync.RWMutex
+	done         chan struct{}
+	id           uint64
+	hostName     string
+	lambdaReqId  string
+	migrClient   *migrator.Client
 )
 
 func init() {
@@ -89,12 +96,15 @@ func adapt() {
 	}
 }
 
-func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
+func getAwsReqId(ctx context.Context) string {
 	lc, ok := lambdacontext.FromContext(ctx)
 	if ok == false {
-		log.Debug("not ok get lambda context")
+		log.Debug("get lambda context failed %v", ok)
 	}
-	lambdaReqId = lc.AwsRequestID
+	return lc.AwsRequestID
+}
+
+func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	if input.Timeout > 0 {
 		deadline, _ := ctx.Deadline()
 		timeout.RestartWithCalibration(deadline.Add(-time.Duration(input.Timeout) * time.Second))
@@ -106,13 +116,57 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	var clear sync.WaitGroup
 	issuePong()
 
-	// log.Debug("Routings on requesting: %d", runtime.NumGoroutine())
+	// get lambda invoke reqId
+	lambdaReqId = getAwsReqId(ctx)
 
+	// migration triggered lambda
+	if input.Cmd == "migrate" {
+		if len(input.Addr) == 0 {
+			log.Error("No migrator set.")
+			return nil
+		}
+
+		// connect to migrator
+		migrClient = migrator.NewClient()
+ 		if err := migrClient.Connect(input.Addr); err != nil {
+			log.Error("Failed to connect migrator %s: %v", input.Addr, err)
+			return nil
+		}
+
+		// Send hello
+		reader, err := migrClient.Send("mhello")
+		if err != nil {
+			log.Error("Failed to hello source on migrator: %v", err)
+			return nil
+		}
+
+		// Apply store adapter to coordinate migration and normal requests
+		store = migrClient.GetStoreAdapter(store)
+
+		// Reader will be avaiable after connecting and source being replaced
+		go func() {
+			atomic.AddInt32(&active, 1)
+			defer atomic.AddInt32(&active, -1)
+
+			migrClient.Migrate(reader, store)
+			store = store.(*migrator.StorageAdapter).Restore()
+			migrClient.Close()
+			migrClient = nil
+		}()
+	}
+
+	// log.Debug("Routings on requesting: %d", runtime.NumGoroutine())
 	id = input.Id
 
 	if isFirst == true {
 		timeout.ResetWithExtension(lambdaTimeout.TICK_ERROR)
 
+		if len(input.Proxy) == 0 {
+			log.Error("No proxy set.")
+			return nil
+		}
+
+		server = input.Proxy
 		log.Debug("Ready to connect %s, id %d", server, id)
 		var connErr error
 		lambdaConn, connErr = net.Dial("tcp", server)
@@ -132,7 +186,13 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 			}
 			lambdaConn = nil
 			isFirst = true
-			Done()
+
+			// Flag destination is ready or we are done.
+			if migrClient != nil {
+				migrClient.SetReady()
+			} else {
+				Done()
+			}
 		}()
 	} else {
 		timeout.ResetWithExtension(lambdaTimeout.TICK_ERROR_EXTEND)
@@ -164,10 +224,29 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 				return
 			case <-timeout.C:
 				mu.Lock()
-
 				if atomic.LoadInt32(&active) > 0 {
 					timeout.Reset()
 					mu.Unlock()
+					break
+				} else if time.Since(startTime).Minutes() >= LIFESPAN {
+					// Time to migarate
+					// Disable timer so Reset will not work.
+					timeout.Disable()
+					mu.Unlock()
+
+					// Initiate migration
+					migrClient = migrator.NewClient()
+					log.Info("Initiate migration.")
+					initiator := func() error { return initMigrateHandler(lambdaConn) }
+					for err := migrClient.Initiate(initiator); err != nil; {
+						log.Warn("Fail to initiaiate migration: %v", err)
+						log.Warn("Retry migration")
+
+						err = migrClient.Initiate(initiator)
+					}
+
+					// No more timeout, just wait for done
+					log.Debug("Migration initiated.")
 					break
 				}
 				doneLocked()
@@ -194,6 +273,11 @@ func ResetDone() {
 func Done() {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Migrating? Wait it is over
+	if migrClient != nil {
+		return
+	}
 
 	resetDoneLocked()
 	doneLocked()
@@ -249,8 +333,8 @@ func issuePong() {
 }
 
 func pongHandler(conn net.Conn) {
-	pongWriter := resp.NewResponseWriter(conn)
-	pong(pongWriter)
+	writer := resp.NewResponseWriter(conn)
+	pong(writer)
 }
 
 func pong(w resp.ResponseWriter) {
@@ -271,6 +355,13 @@ func pong(w resp.ResponseWriter) {
 		return
 	}
 	log.Debug("PONG(%v)", timeout.Since())
+}
+
+func initMigrateHandler(conn net.Conn) error {
+	writer := resp.NewResponseWriter(conn)
+	// init backup cmd
+	writer.AppendBulkString("initMigrate")
+	return writer.Flush()
 }
 
 // func remoteGet(bucket string, key string) []byte {
@@ -309,10 +400,7 @@ func main() {
 		if timeout.Requests > 1 {
 			extension = lambdaTimeout.TICK
 		}
-		defer func() {
-			timeout.ResetWithExtension(extension)
-			atomic.AddInt32(&active, -1)
-		}()
+		var respError *types.ResponseError
 
 		t := time.Now()
 		log.Debug("In GET handler")
@@ -321,45 +409,59 @@ func main() {
 		reqId := c.Arg(1).String()
 		key := c.Arg(3).String()
 
+		defer func() {
+			if respError != nil {
+				log.Warn("Failed to get %s: %v", key, respError)
+				w.AppendErrorf("Failed to get %s: %v", key, respError)
+				if err := w.Flush(); err != nil {
+					log.Error("Error on flush: %v", err)
+				}
+				dataDeposited.Add(1)
+				dataGatherer <- &types.DataEntry{OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), lambdaReqId}
+			}
+			timeout.ResetWithExtension(extension)
+			atomic.AddInt32(&active, -1)
+		}()
+
 		//val, err := myCache.Get(key)
 		//if err == false {
 		//	log.Debug("not found")
 		//}
-		chunk, found := myMap[key]
-		if found == false {
-			log.Warn("%s not found", key)
-			w.AppendErrorf("%s not found", key)
-			if err := w.Flush(); err != nil {
-				log.Error("Error on flush(error 404): %v", err)
+		t2 := time.Now()
+		chunkId, stream, err := store.Get(key)
+		d2 := time.Since(t2)
+
+		if err == nil {
+			// construct lambda store response
+			response := &types.Response{
+				ResponseWriter: w,
+				Cmd:            c.Name,
+				ConnId:         connId,
+				ReqId:          reqId,
+				ChunkId:        chunkId,
+				BodyStream:      stream,
 			}
+			response.Prepare()
+
+			t3 := time.Now()
+			if err := response.Flush(); err != nil {
+				log.Error("Error on flush(get key %s): %v", key, err)
+				return
+			}
+			d3 := time.Since(t3)
+
+			dt := time.Since(t)
+			log.Debug("Streaming duration is %v", d3)
+			log.Debug("Total duration is %v", dt)
+			log.Debug("Get complete, Key: %s, ConnID:%s, ChunkID:%s", key, connId, chunkId)
 			dataDeposited.Add(1)
-			dataGatherer <- &types.DataEntry{OP_GET, "404", reqId, "-1", 0, 0, time.Since(t), lambdaReqId}
-			return
+			dataGatherer <- &types.DataEntry{OP_GET, "200", reqId, chunkId, d2, d3, dt, lambdaReqId}
+		} else if err == types.ErrNotFound {
+			// Not found
+			respError = types.NewResponseError(404, err)
+		} else {
+			respError = types.NewResponseError(500, err)
 		}
-
-		// construct lambda store response
-		response := &types.Response{
-			ResponseWriter: w,
-			Cmd:            "get",
-			ConnId:         connId,
-			ReqId:          reqId,
-			ChunkId:        chunk.Id,
-			Body:           chunk.Body,
-		}
-		response.Prepare()
-		t3 := time.Now()
-		if err := response.Flush(); err != nil {
-			log.Error("Error on flush(get key %s): %v", key, err)
-			return
-		}
-
-		d3 := time.Since(t3)
-		dt := time.Since(t)
-		log.Debug("Flush duration is %v", d3)
-		log.Debug("Total duration is %v", dt)
-		log.Debug("Get complete, Key: %s, ConnID:%s, ChunkID:%s", key, connId, chunk.Id)
-		dataDeposited.Add(1)
-		dataGatherer <- &types.DataEntry{OP_GET, "200", reqId, chunk.Id, 0, d3, dt, lambdaReqId}
 	})
 
 	srv.HandleStreamFunc("set", func(w resp.ResponseWriter, c *resp.CommandStream) {
@@ -399,7 +501,7 @@ func main() {
 			}
 			return
 		}
-		myMap[key] = &types.Chunk{chunkId, val}
+		store.Set(key, chunkId, val)
 
 		// write Key, clientId, chunkId, body back to server
 		response := &types.Response{
@@ -468,6 +570,76 @@ func main() {
 		issuePong()
 		pong(w)
 		atomic.AddInt32(&active, -1)
+	})
+
+	srv.HandleFunc("migrate", func(w resp.ResponseWriter, c *resp.Command) {
+		atomic.AddInt32(&active, 1)
+		defer atomic.AddInt32(&active, -1)
+
+		log.Debug("In BACKUP handler")
+
+		timeout.Disable()
+		timeout.Stop()
+
+		// addr:port
+		addr := c.Arg(0).String()
+		deployment := c.Arg(1).String()
+		newId, _ := c.Arg(2).Int()
+
+		if migrClient == nil {
+			// Migration initiated by proxy
+			migrClient = migrator.NewClient()
+		}
+
+		// dial to migrator
+		if err := migrClient.Connect(addr); err != nil {
+			return
+		}
+
+		if err := migrClient.TriggerDestination(deployment, &protocol.InputEvent{
+			Cmd: "migrate",
+			Id: uint64(newId),
+			Proxy: server,
+			Addr: addr,
+		}); err != nil {
+			return
+		}
+
+		// Now, we serve migration connection
+		go func() {
+			migrClient.Start(srv)
+			// Migration ends or is interrupted.
+
+			// Should be ready if migration ended.
+			if migrClient.IsReady() {
+				// Reset client and end lambda
+				migrClient = nil
+				Done()
+			}
+		}()
+	})
+
+	srv.HandleFunc("mhello", func(w resp.ResponseWriter, c *resp.Command) {
+		if migrClient == nil {
+			log.Error("Migration is not initiated.")
+			return
+		}
+
+		// Wait for ready, which means connection to proxy is closed and we are safe to proceed.
+		<-migrClient.Ready()
+
+		// TODO: Transfer data
+
+		// Send key list by access time
+		w.AppendBulkString("mhello")
+		w.AppendBulkString(strconv.Itoa(store.Len()))
+		for key := range store.Keys() {
+			w.AppendBulkString(key)
+		}
+		if err := w.Flush(); err != nil {
+			log.Error("Error on mhello::flush: %v", err)
+			return
+		}
 	})
 
 	// log.Debug("Routings on launching: %d", runtime.NumGoroutine())

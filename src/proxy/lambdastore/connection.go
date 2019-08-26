@@ -12,35 +12,35 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wangaoone/LambdaObjectstore/src/proxy/types"
-	"github.com/wangaoone/LambdaObjectstore/src/proxy/global"
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/collector"
+	"github.com/wangaoone/LambdaObjectstore/src/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/src/proxy/types"
 )
 
 var (
-	defaultConnectionLog = &logger.ColorLogger {
+	defaultConnectionLog = &logger.ColorLogger{
 		Prefix: fmt.Sprintf("Undesignated "),
-		Color: true,
+		Color:  true,
 	}
 )
 
 type Connection struct {
-	instance     *Instance
-	log          logger.ILogger
-	cn           net.Conn
-	w            *resp.RequestWriter
-	r            resp.ResponseReader
-	mu           sync.Mutex
-	closed       chan struct{}
+	instance *Instance
+	log      logger.ILogger
+	cn       net.Conn
+	w        *resp.RequestWriter
+	r        resp.ResponseReader
+	mu       sync.Mutex
+	closed   chan struct{}
 }
 
 func NewConnection(c net.Conn) *Connection {
 	conn := &Connection{
 		log: defaultConnectionLog,
-		cn: c,
+		cn:  c,
 		// wrap writer and reader
-		w: resp.NewRequestWriter(c),
-		r: resp.NewResponseReader(c),
+		w:      resp.NewRequestWriter(c),
+		r:      resp.NewResponseReader(c),
 		closed: make(chan struct{}),
 	}
 	defaultConnectionLog.Level = global.Log.GetLevel()
@@ -116,8 +116,10 @@ func (conn *Connection) ServeLambda() {
 				conn.setHandler(start)
 			case "data":
 				conn.receiveData()
+			case "initMigrate":
+				go conn.initMigrateHandler()
 			default:
-				conn.log.Warn("Unsupport response type: %s", cmd)
+				conn.log.Warn("Unsupported response type: %s", cmd)
 			}
 		}
 	}
@@ -139,7 +141,10 @@ func (conn *Connection) pongHandler() {
 	id, _ := conn.r.ReadInt()
 
 	// Lock up lambda instance
-	instance := global.Stores.All[int(id)].(*Instance)
+	instance, exists := Registry.Instance(uint64(id))
+	if !exists {
+		conn.log.Error("Failed to match lambda: %d", id)
+	}
 	instance.flagValidated(conn)
 	if undesignated {
 		conn.log.Debug("PONG from lambda confirmed.")
@@ -163,7 +168,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		return
 	}
 
-	rsp := &types.Response{ Cmd: "get" }
+	rsp := &types.Response{Cmd: "get"}
 	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
@@ -214,7 +219,7 @@ func (conn *Connection) getHandler(start time.Time) {
 func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET from lambda.")
 
-	rsp := &types.Response{ Cmd: "set", Body: []byte{1} }
+	rsp := &types.Response{Cmd: "set", Body: []byte{1}}
 	connId, _ := conn.r.ReadBulkString()
 	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
@@ -254,4 +259,10 @@ func (conn *Connection) receiveData() {
 	}
 	conn.log.Info("Data collected, %d in total.", len)
 	global.DataCollected.Done()
+}
+
+func (conn *Connection) initMigrateHandler() {
+	conn.log.Debug("Request to initiate migration")
+
+	conn.instance.Migrate()
 }
