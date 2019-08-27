@@ -1,6 +1,6 @@
 package proxy
 
-const LambdaMaxDeployments = 1000
-const NumLambdaClusters = 64
+const LambdaMaxDeployments = 64
+const NumLambdaClusters = 32
 const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Store1VPCNode"
