@@ -4,7 +4,7 @@ PREFIX="Store1VPCNode"
 if [ "$1" != "" ] ; then
   PREFIX="$1"
 fi
-mem=512
+mem=256
 
 echo "compiling lambda code..."
 GOOS=linux go build redeo_lambda.go

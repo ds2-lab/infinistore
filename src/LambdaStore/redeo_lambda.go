@@ -35,7 +35,7 @@ const (
 	OP_GET              = "1"
 	OP_SET              = "0"
 	EXPECTED_GOMAXPROCS = 2
-	LIFESPAN            = 60
+	LIFESPAN            = 5
 	S3BUCKET            = "tianium.default"
 )
 
