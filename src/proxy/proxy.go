@@ -18,9 +18,9 @@ import (
 )
 
 type Proxy struct {
-	log       logger.ILogger
-	group     *Group
-	metaMap   *hashmap.HashMap
+	log     logger.ILogger
+	group   *Group
+	metaMap *hashmap.HashMap
 
 	initialized int32
 	ready       chan struct{}
@@ -34,7 +34,7 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group: NewGroup(NumLambdaClusters),
+		group:   NewGroup(NumLambdaClusters),
 		metaMap: hashmap.New(1024),
 		ready:   make(chan struct{}),
 	}
@@ -118,14 +118,15 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataShards), int(parityShards), 0})
 
 	// Check if the chunk key(key + chunkId) exists
+	chunkKey := fmt.Sprintf("%s@%s", chunkId, string(key))
 	request := &types.Request{
 		Id:           types.Id{connId, reqId, chunkId},
 		Cmd:          strings.ToLower(c.Name),
-		Key:          key,
+		Key:          []byte(chunkKey),
 		BodyStream:   bodyStream,
 		ChanResponse: client.Responses(),
 	}
-	lambdaDest, _ := p.metaMap.GetOrInsert(fmt.Sprintf("%s@%s", chunkId, string(key)), int(lambdaId))
+	lambdaDest, _ := p.metaMap.GetOrInsert(chunkKey, int(lambdaId))
 	// Send chunk to the corresponding lambda instance in group
 	p.group.Instance(lambdaDest.(int)).C() <- request
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
@@ -148,19 +149,20 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"get", int(dataShards), int(parityShards), 0})
 
 	// key is "key"+"chunkId"
-	lambdaDest, ok := p.metaMap.Get(fmt.Sprintf("%s@%s", chunkId, string(key)))
+	chunkKey := fmt.Sprintf("%s@%s", chunkId, string(key))
+	lambdaDest, ok := p.metaMap.Get(chunkKey)
 	// p.log.Debug("KEY is", key.String(), "IN GET, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaDestination)
 	if !ok {
-		p.log.Warn("KEY %s(%s) not found in lambda store, please set first.", key.String(), chunkId)
-		w.AppendErrorf("KEY %s(%s) not found in lambda store, please set first.", key.String(), chunkId)
+		p.log.Warn("KEY %s not found in lambda store, please set first.", chunkKey)
+		w.AppendErrorf("KEY %s not found in lambda store, please set first.", chunkKey)
 		w.Flush()
 		return
 	}
 	// Send request to lambda channel
 	p.group.Instance(lambdaDest.(int)).C() <- &types.Request{
-		Id: types.Id{ connId, reqId, chunkId },
-		Cmd: strings.ToLower(c.Name),
-		Key: key,
+		Id:           types.Id{connId, reqId, chunkId},
+		Cmd:          strings.ToLower(c.Name),
+		Key:          []byte(chunkKey),
 		ChanResponse: client.Responses(),
 	}
 }
@@ -198,7 +200,7 @@ func (p *Proxy) CollectData() {
 	for i, _ := range p.group.All {
 		global.DataCollected.Add(1)
 		// send data command
-		p.group.Instance(i).C() <- &types.Control{ Cmd: "data" }
+		p.group.Instance(i).C() <- &types.Request{Cmd: "data"}
 	}
 	p.log.Info("Waiting data from Lambda")
 	global.DataCollected.Wait()
