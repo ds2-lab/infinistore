@@ -217,6 +217,8 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 				session.Done()
 			}
 		}(session.Connection)
+	} else if input.Cmd == "warmup" {
+		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
@@ -282,8 +284,6 @@ func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 		}
 	}
 }
-
-
 
 func issuePong() {
 	mu.Lock()
@@ -377,9 +377,11 @@ func remotePut(bucket string, k string, f string) {
 	// Perform an upload.
 	result, err := uploader.Upload(upParams)
 	if err != nil {
-		log.Error("err is ", err)
+		log.Error("Failed to upload data: %v", err)
+		return
 	}
-	log.Debug("upload to S3 res: ", result.Location)
+	
+	log.Info("Data uploaded to S3: %v", result.Location)
 }
 
 func gatherData(prefix string) {
