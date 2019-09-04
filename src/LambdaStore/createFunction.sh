@@ -10,7 +10,7 @@ zip LambdaStore redeo_lambda
 
 echo "Creating lambda functions..."
 
-for i in {0..64}
+for i in {0..299}
 do
 	aws lambda create-function \
 	--function-name $PREFIX$i \
