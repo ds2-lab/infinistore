@@ -15,7 +15,7 @@ echo "updating lambda code.."
 echo "putting code zip to s3"
 aws s3api put-object --bucket tianium.default --key lambdastore.zip --body LambdaStore.zip
 
-for i in {0..63}
+for i in {0..299}
 do
      aws lambda update-function-code --function-name $PREFIX$i --s3-bucket tianium.default --s3-key lambdastore.zip
      aws lambda update-function-configuration --function-name $PREFIX$i --memory-size $mem --timeout $2
