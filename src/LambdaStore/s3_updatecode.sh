@@ -1,26 +1,19 @@
 #!/bin/bash
 
+PWD=`dirname $0`
 PREFIX="Store1VPCNode"
+KEY="redeo_lambda"
+cluster=300
 mem=1024
 
 echo "compiling lambda code..."
-GOOS=linux go build redeo_lambda.go
+GOOS=linux go build $KEY.go
 echo "compress file..."
-zip LambdaStore redeo_lambda
+zip $KEY $KEY
 echo "updating lambda code.."
 
 echo "putting code zip to s3"
-aws s3api put-object --bucket tianium.default --key lambdastore.zip --body LambdaStore.zip
+aws s3api put-object --bucket tianium.default --key $KEY.zip --body $KEY.zip
 
-for i in {0..299}
-do
-     aws lambda update-function-code --function-name $PREFIX$i --s3-bucket tianium.default --s3-key lambdastore.zip
-     if [ "$1" != "" ] ; then
-       aws lambda update-function-configuration --function-name $PREFIX$i --memory-size $mem --timeout $1
-     fi
-     # aws lambda update-function-configuration --function-name $PREFIX$i --timeout $2
-#    aws lambda update-function-configuration --function-name $PREFIX$i --handler redeo_lambda
-#    aws lambda put-function-concurrency --function-name $PREFIX$i --reserved-concurrent-executions $concurrency
-done
-
+go run $PWD/../../sbin/deploy_function.go -code=true -config=true -prefix=$PREFIX -vpc=true -key=$KEY -cluster=$cluster -mem=$mem -timeout=$1
 go clean
