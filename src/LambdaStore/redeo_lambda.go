@@ -257,11 +257,10 @@ func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 	case <-session.WaitDone():
 		return
 	case <-session.Timeout.C():
-		// FIXME: We must call unlock here.
+		// There's no turning back.
 		session.Timeout.Halt()
 
 		if lifetime.IsTimeUp() && store.Len() > 0 {
-			session.Unlock()
 			// Time to migrate
 			// Check of number of keys in store is necessary. As soon as there is any value
 			// in the store and time up, we should start migration.
@@ -281,8 +280,8 @@ func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 			}
 			log.Debug("Migration initiated.")
 		} else {
-			session.DoneLocked()
-			session.Unlock()
+			byeHandler(session.Connection)
+			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return
 		}
@@ -328,6 +327,13 @@ func initMigrateHandler(conn net.Conn) error {
 	writer := resp.NewResponseWriter(conn)
 	// init backup cmd
 	writer.AppendBulkString("initMigrate")
+	return writer.Flush()
+}
+
+func byeHandler(conn net.Conn) error {
+	writer := resp.NewResponseWriter(conn)
+	// init backup cmd
+	writer.AppendBulkString("bye")
 	return writer.Flush()
 }
 
@@ -576,9 +582,11 @@ func main() {
 		session := lambdaLife.GetSession()
 		if session == nil {
 			// Possibilities are ping may comes after HandleRequest returned
+			log.Debug("PING ignored: session ended.")
 			return
 		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND) && !session.IsMigrating() {
 			// Failed to extend timeout, do nothing and prepare to return from lambda.
+			log.Debug("PING ignored: timeout extension denied.")
 			return
 		}
 
@@ -636,8 +644,7 @@ func main() {
 				session.Done()
 			} else if requestFromProxy {
 				session.Migrator = nil
-				session.Timeout.Enable()
-				session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
+				session.Timeout.Restart(lambdaLife.TICK_ERROR)
 			}
 		}(session)
 	})
