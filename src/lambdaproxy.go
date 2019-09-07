@@ -24,7 +24,7 @@ var (
 		Level: logger.LOG_LEVEL_WARN,
 	}
 	lambdaLis net.Listener
-	filePath  = "/tmp/pidLog.txt"
+	filePath  = "/tmp/lambdaproxy.pid"
 )
 
 func init() {
@@ -125,7 +125,7 @@ func main() {
 	<-done
 	prxy.Release()
 	proxy.CleanUpScheduler()
-	
+
 	err = os.Remove(filePath)
 	if err != nil {
 		log.Error("Failed to remove PID: %v", err)
