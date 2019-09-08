@@ -12,7 +12,7 @@ NODE_PREFIX="Store1VPCNode"
 source $PWD/util.sh
 
 function perform(){
-    PREPROXY=$PWD/$ENTRY/dryrun
+    PREPROXY=$PWD/$ENTRY/dryrun-
 
     start_proxy $PREPROXY
 }
