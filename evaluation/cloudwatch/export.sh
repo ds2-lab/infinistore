@@ -14,5 +14,5 @@ endTime=$(date  -j -f "%Y-%m-%d %H:%M:%S" "$end" +%s)000
 for i in {0..399}
 do
     aws logs create-export-task --log-group-name $LAMBDA$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$i
-    sleep 1s
+    sleep 2s
 done
