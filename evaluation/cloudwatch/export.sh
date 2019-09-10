@@ -1,6 +1,6 @@
 #!/bin/bash
 LAMBDA="/aws/lambda/Store1VPCNode"
-FILE="/lambda/"
+FILE="lambda/"
 
 PREFIX=$1
 start=$2
