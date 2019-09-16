@@ -28,7 +28,7 @@ function perform(){
 	cat /tmp/lambdaproxy.pid
 	#        set
 	sleep 1s
-	playback 10 2 $SCALE $CLUSTER $FILE $COMPACT
+	playback 30 6 $SCALE $CLUSTER $FILE $COMPACT
 	kill -2 `cat /tmp/lambdaproxy.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/lambdaproxy.pid ]
