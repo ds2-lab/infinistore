@@ -206,6 +206,11 @@ func main() {
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 	svc := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
+	if *create {
+		for i := *from; i < *to; i++ {
+			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)
+		}
+	}
 	if *code {
 		for j := int64(0); j < group; j++ {
 			fmt.Println(j)
@@ -229,11 +234,6 @@ func main() {
 			}
 			wg.Wait()
 			time.Sleep(1 * time.Second)
-		}
-	}
-	if *create {
-		for i := *from; i < *to; i++ {
-			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)
 		}
 	}
 }
