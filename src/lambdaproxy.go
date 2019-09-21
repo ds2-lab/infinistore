@@ -21,7 +21,7 @@ var (
 	isPrint       = flag.Bool("isPrint", false, "Enable log printing")
 	prefix        = flag.String("prefix", "log", "log file prefix")
 	log           = &logger.ColorLogger{
-		Level: logger.LOG_LEVEL_WARN,
+		Level: logger.LOG_LEVEL_INFO,
 	}
 	lambdaLis net.Listener
 	filePath  = "/tmp/lambdaproxy.pid"
