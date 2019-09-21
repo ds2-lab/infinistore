@@ -27,12 +27,13 @@ var (
 	key     = flag.String("key", "redeo_lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
-	batch   = flag.Int64("batch", 10, "batch Number, no need to modify")
+	batch   = flag.Int64("batch", 2, "batch Number, no need to modify")
 	mem     = flag.Int64("mem", 256, "the memory of lambda")
 
 	subnet = []*string{
 		aws.String("subnet-b53a6bff"),
 		aws.String("subnet-fcde0bc2"),
+		aws.String("subnet-68c24e46"),
 	}
 	securityGroup = []*string{
 		aws.String("sg-079f6cc4e658209c3"),
