@@ -6,10 +6,10 @@ microbench:
 	./slap.sh 1>./log 2>&1 &
 
 simulate:
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 0.1 -compact 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 10 2 0.1 -compact 1>./log 2>&1 &
 
 playback:
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 0.1 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 10 2 0.1 1>./log 2>&1 &
 
 start-server:
 	./server.sh 1>./log 2>&1 &

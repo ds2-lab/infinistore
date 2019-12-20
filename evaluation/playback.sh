@@ -14,8 +14,10 @@ source $PWD/util.sh
 function perform(){
 	FILE=$1
 	CLUSTER=$2
-	SCALE=$3
-	COMPACT=$4
+  DATANUM=$3
+  PARITYNUM=$4
+	SCALE=$5
+	COMPACT=$6
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
@@ -28,7 +30,7 @@ function perform(){
 	cat /tmp/lambdaproxy.pid
 	#        set
 	sleep 1s
-	playback 30 6 $SCALE $CLUSTER $FILE $COMPACT
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT
 	kill -2 `cat /tmp/lambdaproxy.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/lambdaproxy.pid ]
@@ -40,7 +42,7 @@ function perform(){
 mkdir -p $PWD/$ENTRY
 
 START=`date +"%Y-%m-%d %H:%M:%S"`
-perform $1 $2 $3 $4
+perform $1 $2 $3 $4 $5 $6
 mv $PWD/log $PWD/$ENTRY.log
 END=`date +"%Y-%m-%d %H:%M:%S"`
 
