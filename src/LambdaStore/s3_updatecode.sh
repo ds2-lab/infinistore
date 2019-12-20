@@ -4,7 +4,7 @@ PWD=`dirname $0`
 PREFIX="Store1VPCNode"
 KEY="redeo_lambda"
 cluster=400
-mem=1024
+mem=1536
 
 echo "compiling lambda code..."
 GOOS=linux go build $KEY.go

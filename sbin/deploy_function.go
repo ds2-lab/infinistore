@@ -33,7 +33,6 @@ var (
 	subnet = []*string{
 		aws.String("subnet-b53a6bff"),
 		aws.String("subnet-fcde0bc2"),
-		aws.String("subnet-68c24e46"),
 	}
 	securityGroup = []*string{
 		aws.String("sg-079f6cc4e658209c3"),
