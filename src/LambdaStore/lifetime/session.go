@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/wangaoone/LambdaObjectstore/src/types"
 	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/migrator"
 )
 
@@ -15,6 +16,7 @@ var (
 
 type Session struct {
 	Id        string
+	Input     *protocol.InputEvent
 	Requests  int
 	Clear     sync.WaitGroup
 	Migrator  *migrator.Client

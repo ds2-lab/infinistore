@@ -45,6 +45,7 @@ type InstanceRegistry interface {
 
 type Instance struct {
 	*Deployment
+	Meta      Meta
 
 	cn        *Connection
 	chanReq   chan interface{}
@@ -88,6 +89,8 @@ func (ins *Instance) C() chan interface{} {
 
 func (ins *Instance) WarmUp() {
 	ins.validate(true)
+	// Force reset
+	ins.resetCoolTimer()
 }
 
 func (ins *Instance) Validate() *Connection {
@@ -109,12 +112,18 @@ func (ins *Instance) validate(warmUp bool) *Connection {
 			triggered := ins.alive == INSTANCE_DEAD && ins.tryTriggerLambda(warmUp)
 			if triggered {
 				return ins.validated()
-			} else if warmUp {
+			} else if warmUp && !global.IsWarmupWithFixedInterval() {
 				return ins.flagValidated(ins.cn)
 			}
 
-			// Ping is issued to ensure alive
-			ins.cn.Ping()
+			if warmUp {
+				// For fix interval warming up, signal lambda store.
+				// If timeout, the second attempt with launch lambda with "warmup" command.
+				ins.cn.WarmUp()
+			} else {
+				// Ping is issued to ensure alive
+				ins.cn.Ping()
+			}
 
 			// Start timeout, ping may get stucked anytime.
 			timeout := timeouts.Get().(*time.Timer)
@@ -163,37 +172,14 @@ func (ins *Instance) HandleRequests() {
 		select {
 		case <-ins.closed:
 			return
-		case req := <-ins.chanReq: /*blocking on lambda facing channel*/
-			var err error
-			for i := 0; i < MAX_RETRY; i++ {
-				if i > 0 {
-					ins.log.Debug("Attempt %d", i)
-				}
-				// Check lambda status first
-				validateStart := time.Now()
-				// Once active connection is confirmed, keep alive on serving.
-				conn := ins.Validate()
-				validateDuration := time.Since(validateStart)
-
-				if conn == nil {
-					// Check if conn is valid, nil if ins get closed
-					return
-				}
-				err = ins.handleRequest(conn, req, validateDuration)
-				if err == nil {
-					break
-				}
-			}
-			if err != nil {
-				ins.log.Error("Max retry reaches, give up")
-				if request, ok := req.(*types.Request); ok {
-					request.SetResponse(err)
-				}
-			}
-			ins.warmUp()
 		case <-ins.coolTimer.C:
 			// Warm up
 			ins.WarmUp()
+		case req := <-ins.chanReq: /*blocking on lambda facing channel*/
+			err := ins.tryRequest(req)
+			if err != nil {
+				return
+			}
 		}
 	}
 }
@@ -310,6 +296,15 @@ func (ins *Instance) triggerLambdaLocked(warmUp bool) {
 		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix: global.Prefix,
 		Log:    global.Log.GetLevel(),
+		Flags:  global.Flags,
+		Meta:   protocol.Meta{
+			Term:            ins.Meta.Term,
+			Updates:         ins.Meta.Updates,
+			Hash:            ins.Meta.Hash,
+			SnapShotTerm:    ins.Meta.SnapShotTerm,
+			SnapshotUpdates: ins.Meta.SnapshotUpdates,
+			SnapshotSize:    ins.Meta.SnapshotSized,
+		},
 	}
 	if warmUp {
 		event.Cmd = "warmup"
@@ -393,6 +388,37 @@ func (ins *Instance) validated() *Connection {
 	return ins.lastValidated
 }
 
+func (ins *Instance) tryRequest(req interface{}) error {
+	var err error
+	for i := 0; i < MAX_RETRY; i++ {
+		if i > 0 {
+			ins.log.Debug("Attempt %d", i)
+		}
+		// Check lambda status first
+		validateStart := time.Now()
+		// Once active connection is confirmed, keep alive on serving.
+		conn := ins.Validate()
+		validateDuration := time.Since(validateStart)
+
+		if conn == nil {
+			// Check if conn is valid, nil if ins get closed
+			return ErrConnectionClosed
+		}
+		err = ins.handleRequest(conn, req, validateDuration)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		ins.log.Error("Max retry reaches, give up")
+		if request, ok := req.(*types.Request); ok {
+			request.SetResponse(err)
+		}
+	}
+	ins.warmUp()
+	return nil
+}
+
 func (ins *Instance) handleRequest(conn *Connection, req interface{}, validateDuration time.Duration) error {
 	switch req.(type) {
 	case *types.Request:
@@ -474,6 +500,14 @@ func (ins *Instance) isClosedLocked() bool {
 }
 
 func (ins *Instance) warmUp() {
+	if global.IsWarmupWithFixedInterval() {
+		return
+	}
+
+	ins.resetCoolTimer()
+}
+
+func (ins *Instance) resetCoolTimer() {
 	if !ins.coolTimer.Stop() {
 		select{
 		case <-ins.coolTimer.C:

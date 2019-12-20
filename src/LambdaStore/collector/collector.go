@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"io"
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -16,14 +17,14 @@ import (
 	"github.com/wangaoone/LambdaObjectstore/src/LambdaStore/lifetime"
 )
 
-const (
-	S3BUCKET                       = "tianium.default"
-)
-
 var (
+	AWSRegion      string
+	S3Bucket       string
+
 	Prefix         string
 	HostName       string
 	FunctionName   string
+
 
 	dataGatherer                   = make(chan *types.DataEntry, 10)
 	dataDepository                 = make([]*types.DataEntry, 0, 100)
@@ -77,27 +78,24 @@ func Save(l *lifetime.Lifetime) {
 	}
 
 	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, l.Id())
-	s3Put(S3BUCKET, key, data.String())
+	s3Put(S3Bucket, key, data)
 	dataDepository = dataDepository[:0]
 }
 
-func s3Put(bucket string, key string, f string) {
+func s3Put(bucket string, key string, body io.Reader) {
 	// The session the S3 Uploader will use
 	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
 		SharedConfigState: awsSession.SharedConfigEnable,
-		Config:            aws.Config{Region: aws.String("us-east-1")},
+		Config:            aws.Config{Region: aws.String(AWSRegion)},
 	}))
 
 	// Create an uploader with the session and default options
 	uploader := s3manager.NewUploader(sess)
 
-	// Upload input parameters
-	file := strings.NewReader(f)
-
 	upParams := &s3manager.UploadInput{
 		Bucket: &bucket,
 		Key:    &key,
-		Body:   file,
+		Body:   body,
 	}
 	// Perform an upload.
 	result, err := uploader.Upload(upParams)

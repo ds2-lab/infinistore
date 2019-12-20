@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
@@ -26,7 +27,6 @@ import (
 
 const (
 	EXPECTED_GOMAXPROCS = 2
-	LIFESPAN            = 5 * time.Minute
 )
 
 var (
@@ -57,6 +57,9 @@ func init() {
 	} else {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
+
+	collector.AWSRegion = AWS_REGION
+	collector.S3Bucket = S3S3_COLLECTOR_BUCKET
 }
 
 func getAwsReqId(ctx context.Context) string {
@@ -75,6 +78,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	lifetime.RebornIfDead()
 	session := lambdaLife.GetOrCreateSession()
 	session.Id = getAwsReqId(ctx)
+	session.Input = &input
 	defer lambdaLife.ClearSession()
 
 	session.Timeout.SetLogger(log)
@@ -93,110 +97,24 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	log.Debug("New lambda invocation: %v", input.Cmd)
 
 	// migration triggered lambda
-	if input.Cmd == "migrate" {
-		collector.Send(&types.DataEntry{ Op: types.OP_MIGRATION, Session: session.Id })
-
-		if len(input.Addr) == 0 {
-			log.Error("No migrator set.")
-			return nil
-		}
-
-		mu.Lock()
-		if proxyConn != nil {
-			// The connection is not closed on last invocation, reset.
-			proxyConn.Close()
-			proxyConn = nil
-			lifetime.Reborn()
-		}
-		mu.Unlock()
-
-		// connect to migrator
-		session.Migrator = migrator.NewClient()
-		if err := session.Migrator.Connect(input.Addr); err != nil {
-			log.Error("Failed to connect migrator %s: %v", input.Addr, err)
-			return nil
-		}
-
-		// Send hello
-		reader, err := session.Migrator.Send("mhello", nil)
-		if err != nil {
-			log.Error("Failed to hello source on migrator: %v", err)
-			return nil
-		}
-
-		// Apply store adapter to coordinate migration and normal requests
-		adapter := session.Migrator.GetStoreAdapter(store)
-		store = adapter
-
-		// Reader will be avaiable after connecting and source being replaced
-		go func(s *lambdaLife.Session) {
-			// In-session gorouting
-			s.Timeout.Busy()
-			defer s.Timeout.DoneBusy()
-
-			s.Migrator.Migrate(reader, store)
-			s.Migrator = nil
-			store = adapter.Restore()
-		}(session)
+	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
+		return nil
 	}
 
+	// Check connection
 	mu.Lock()
 	session.Connection = proxyConn
 	mu.Unlock()
-
+	// Connect proxy and serve
 	if session.Connection == nil {
-		if len(input.Proxy) == 0 {
-			log.Error("No proxy set.")
-			return nil
+		if err := connect(&input, session); err != nil {
+			return err
 		}
-
-		storeId = input.Id
-		proxy = input.Proxy
-		log.Debug("Ready to connect %s, id %d", proxy, storeId)
-		var connErr error
-		session.Connection, connErr = net.Dial("tcp", proxy)
-		if connErr != nil {
-			log.Error("Failed to connect proxy %s: %v", proxy, connErr)
-			return connErr
-		}
-		mu.Lock()
-		proxyConn = session.Connection
-		mu.Unlock()
-		log.Info("Connection to %v established (%v)", proxyConn.RemoteAddr(), session.Timeout.Since())
-
-		go func(conn net.Conn) {
-			// Cross session gorouting
-			err := srv.ServeForeignClient(conn)
-			if err != nil && err != io.EOF {
-				log.Info("Connection closed: %v", err)
-			} else {
-				log.Info("Connection closed.")
-			}
-			conn.Close()
-
-			session := lambdaLife.GetOrCreateSession()
-			mu.Lock()
-			defer mu.Unlock()
-			if session.Connection == nil {
-				// Connection unset, but connection from previous invocation is lost.
-				proxyConn = nil
-				lifetime.Reborn()
-				return
-			} else if session.Connection != conn {
-				// Connection changed.
-				return
-			}
-
-			// Flag destination is ready or we are done.
-			proxyConn = nil
-			if session.Migrator != nil {
-				session.Migrator.SetReady()
-			} else {
-				lifetime.Rest()
-				session.Done()
-			}
-		}(session.Connection)
+		// Cross session gorouting
+		go serve(session.Connection)
 	}
+
+	// Extend timeout for expecting requests except invocation with cmd "warmup".
 	if input.Cmd == "warmup" {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
 		collector.Send(&types.DataEntry{ Op: types.OP_WARMUP, Session: session.Id })
@@ -206,17 +124,77 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	// append PONG back to proxy on being triggered
 	pongHandler(session.Connection)
 
-	// data gathering
+	// Start data collector
 	go collector.Collect(session)
 
-	// timeout control
-	Wait(session, lifetime)
-
+	// Adaptive timeout control
+	wait(session, lifetime)
 	log.Debug("All routing cleared(%d) at %v", runtime.NumGoroutine(), session.Timeout.Since())
 	return nil
 }
 
-func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
+func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
+	if len(input.Proxy) == 0 {
+		return errors.New("No proxy specified.")
+	}
+
+	storeId = input.Id
+	proxy = input.Proxy
+	log.Debug("Ready to connect %s, id %d", proxy, storeId)
+
+	var connErr error
+	session.Connection, connErr = net.Dial("tcp", proxy)
+	if connErr != nil {
+		log.Error("Failed to connect proxy %s: %v", proxy, connErr)
+		return connErr
+	}
+
+	mu.Lock()
+	proxyConn = session.Connection
+	mu.Unlock()
+	log.Info("Connection to %v established (%v)", proxyConn.RemoteAddr(), session.Timeout.Since())
+	return nil
+}
+
+func serve(conn net.Conn) {
+	// Cross session gorouting
+	err := srv.ServeForeignClient(conn)
+	if err != nil && err != io.EOF {
+		log.Info("Connection closed: %v", err)
+	} else {
+		log.Info("Connection closed.")
+	}
+	conn.Close()
+
+	// Handle closed connection differently based on whether it is a legacy connection or not.
+	session := lambdaLife.GetOrCreateSession()
+	mu.Lock()
+	defer mu.Unlock()
+	if session.Connection == nil {
+		// Legacy connection and the connection of current session has not be initialized:
+		//   Reset proxyConn and lifetime.
+		proxyConn = nil
+		lifetime.Reborn()
+		return
+	} else if session.Connection != conn {
+		// Legacy connection and the connection of current session is initialized:
+		//   Do nothing.
+		return
+	} else {
+		// The connection of current session is closed.
+		//   Signal migrator is ready and start migration;
+		//   Or we are done.
+		proxyConn = nil
+		if session.Migrator != nil {
+			session.Migrator.SetReady()
+		} else {
+			lifetime.Rest()
+			session.Done()
+		}
+	}
+}
+
+func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 	defer session.Clear.Wait()
 
 	select {
@@ -289,6 +267,55 @@ func pong(w resp.ResponseWriter) error {
 	}
 
 	return nil
+}
+
+func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) bool {
+	collector.Send(&types.DataEntry{ Op: types.OP_MIGRATION, Session: session.Id })
+
+	if len(session.Input.Addr) == 0 {
+		log.Error("No migrator set.")
+		return false
+	}
+
+	mu.Lock()
+	if proxyConn != nil {
+		// The connection is not closed on last invocation, reset.
+		proxyConn.Close()
+		proxyConn = nil
+		lifetime.Reborn()
+	}
+	mu.Unlock()
+
+	// connect to migrator
+	session.Migrator = migrator.NewClient()
+	if err := session.Migrator.Connect(input.Addr); err != nil {
+		log.Error("Failed to connect migrator %s: %v", input.Addr, err)
+		return false
+	}
+
+	// Send hello
+	reader, err := session.Migrator.Send("mhello", nil)
+	if err != nil {
+		log.Error("Failed to hello source on migrator: %v", err)
+		return false
+	}
+
+	// Apply store adapter to coordinate migration and normal requests
+	adapter := session.Migrator.GetStoreAdapter(store)
+	store = adapter
+
+	// Reader will be avaiable after connecting and source being replaced
+	go func(s *lambdaLife.Session) {
+		// In-session gorouting
+		s.Timeout.Busy()
+		defer s.Timeout.DoneBusy()
+
+		s.Migrator.Migrate(reader, store)
+		s.Migrator = nil
+		store = adapter.Restore()
+	}(session)
+
+	return true
 }
 
 func initMigrateHandler(conn net.Conn) error {

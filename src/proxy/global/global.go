@@ -5,6 +5,7 @@ import (
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
 	"sync"
 
+	protocol "github.com/wangaoone/LambdaObjectstore/src/types"
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/types"
 )
 
@@ -18,6 +19,7 @@ var (
 	BaseMigratorPort = 6380
 	ServerIp         string
 	Prefix           string
+	Flags            uint64
 )
 
 func init() {
@@ -29,4 +31,9 @@ func init() {
 	}
 
 	ServerIp = ip
+	Flags = protocol.FLAG_WARMUP_FIXED_INTERVAL | protocol.FLAG_REPLICATE_ON_WARMUP
+}
+
+func IsWarmupWithFixedInterval() bool {
+	return Flags & protocol.FLAG_WARMUP_FIXED_INTERVAL > 0
 }

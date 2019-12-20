@@ -29,6 +29,23 @@ type Storage interface {
 	Keys()  <-chan string
 }
 
+type Meta struct {
+	Term     uint64
+	Updates  uint64
+	Size     uint64
+	Hash     string
+	MetaLogs []*MetaLog
+}
+
+type MetaLog struct {
+	Op       uint32
+	Key      string
+	Id       string
+	Size     uint64
+	Offset   uint64
+	Ret     chan error
+}
+
 // For storage
 type Chunk struct {
 	Key      string

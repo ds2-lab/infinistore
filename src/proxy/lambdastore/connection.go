@@ -173,6 +173,14 @@ func (conn *Connection) Ping() {
 	}
 }
 
+func (conn *Connection) WarmUp() {
+	conn.w.WriteCmdString("warmup")
+	err := conn.w.Flush()
+	if err != nil {
+		conn.log.Warn("Flush pipeline error(warmup): %v", err)
+	}
+}
+
 func (conn *Connection) SetResponse(rsp *types.Response) bool {
 	if len(conn.chanWait) == 0 {
 		conn.log.Error("Unexpected response: %v", rsp)
