@@ -20,6 +20,14 @@ go get -u github.com/seiflotfy/cuckoofilter
 [ecRedis](https://github.com/wangaoone/ecRedis)  
 [redeo](https://github.com/wangaoone/redeo)  
 [redbench](https://github.com/tddg/redbench)
+
 ### Proxy Port
 Client facing port： 6379  
 Lambda facing port: 6380
+
+### Todos
+
+* Minimize incremental backup cost, the minimize cost is equal to a warmup cost.
+* On backup promote to serve, backup itself immiediately.
+* Because of the warmup, we may discover lambda failure earlier, and recover data from inexpensive storage without compromising request latency if detected.
+* Add clock LRU.
