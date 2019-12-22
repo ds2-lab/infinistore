@@ -8,3 +8,4 @@ lambda.zip
 *.zip
 evaluation/cloudwatch/data
 evaluation/downloaded
+evaluation/data

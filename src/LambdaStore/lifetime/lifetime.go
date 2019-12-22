@@ -4,6 +4,8 @@ import (
 	"time"
 )
 
+const IMMORTAL = true
+
 type Lifetime struct {
 	birthtime time.Time
 	alive     bool
@@ -34,6 +36,9 @@ func (l *Lifetime) RebornIfDead() {
 }
 
 func (l *Lifetime) IsTimeUp() bool {
+	if IMMORTAL {
+		return false
+	}
 	return int64(time.Since(l.birthtime)) >= int64(l.expected)
 }
 
