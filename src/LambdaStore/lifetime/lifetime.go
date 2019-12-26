@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-const IMMORTAL = false
+const IMMORTAL = true
 
 type Lifetime struct {
 	birthtime time.Time
