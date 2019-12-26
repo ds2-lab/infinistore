@@ -1,14 +1,21 @@
 deploy:
 	aws configure
-	aws s3api put-bucket-policy --bucket tianium.default --policy file:///home/ubuntu/go/src/github.com/wangaoone/LambdaObjectstore/evaluation/cloudwatch/policy.json
+	aws s3api put-bucket-policy --bucket tianium.default --policy file://$(GOPATH)/src/github.com/wangaoone/LambdaObjectstore/evaluation/cloudwatch/policy.json
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
-simulate:
+build-simulator:
+	go build $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+	mv playback $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+
+simulate: build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 10 2 0.1 -compact dryrun
+
+simulate: build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 10 2 0.1 -compact 1>./log 2>&1 &
 
-playback:
+playback: build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 10 2 0.1 1>./log 2>&1 &
 
 start-server:

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$GOPATH" == "" ] ; then
-  echo "No \$GOPATH defined. Install go and set \$GOPATH first."
+	echo "No \$GOPATH defined. Install go and set \$GOPATH first."
 fi
 
 PWD=`dirname $0`
@@ -14,8 +14,8 @@ source $PWD/util.sh
 function perform(){
 	FILE=$1
 	CLUSTER=$2
-  DATANUM=$3
-  PARITYNUM=$4
+	DATANUM=$3
+	PARITYNUM=$4
 	SCALE=$5
 	COMPACT=$6
 
@@ -39,12 +39,34 @@ function perform(){
 	done
 }
 
-mkdir -p $PWD/$ENTRY
+function dry_perform(){
+	FILE=$1
+	CLUSTER=$2
+	DATANUM=$3
+	PARITYNUM=$4
+	SCALE=$5
+	COMPACT=$6
 
+	dryrun $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT
+}
+
+if [ "$7" == "dryrun" ]; then
+	dry_perform $1 $2 $3 $4 $5 $6
+else
+	mkdir -p $PWD/$ENTRY
+
+<<<<<<< HEAD
 START=`date +"%Y-%m-%d %H:%M:%S"`
 perform $1 $2 $3 $4 $5 $6
 mv $PWD/log $PWD/$ENTRY.log
 END=`date +"%Y-%m-%d %H:%M:%S"`
+=======
+	START=`date +"%Y-%m-%d %H:%M:%S"`
+	perform $1 $2 $3 $4 $5 $6
+	mv $PWD/log $PWD/$ENTRY.log
+	END=`date +"%Y-%m-%d %H:%M:%S"`
+>>>>>>> master
 
-echo "Transfering logs from CloudWatch to S3: $START - $END ..."
-cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
+	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
+	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
+fi
