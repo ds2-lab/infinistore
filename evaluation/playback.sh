@@ -55,17 +55,10 @@ if [ "$7" == "dryrun" ]; then
 else
 	mkdir -p $PWD/$ENTRY
 
-<<<<<<< HEAD
-START=`date +"%Y-%m-%d %H:%M:%S"`
-perform $1 $2 $3 $4 $5 $6
-mv $PWD/log $PWD/$ENTRY.log
-END=`date +"%Y-%m-%d %H:%M:%S"`
-=======
 	START=`date +"%Y-%m-%d %H:%M:%S"`
 	perform $1 $2 $3 $4 $5 $6
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
->>>>>>> master
 
 	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
 	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
