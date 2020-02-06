@@ -12,12 +12,9 @@ import (
 	"time"
 )
 
-const (
-	BUCKET = "tianium.default"
-	ROLE   = "arn:aws:iam::022127035044:role/lambda-store"
-)
-
 var (
+	ROLE    = flag.String("role", "arn:aws:iam::037862857942:role/ProxyNoVPC", "IAM role for lambda")
+	BUCKET  = flag.String("bucket", "ao.lambda.code", "S3 Bucket")
 	code    = flag.Bool("code", false, "update function code")
 	config  = flag.Bool("config", false, "update function config")
 	create  = flag.Bool("create", false, "create function")
@@ -27,15 +24,15 @@ var (
 	key     = flag.String("key", "lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
-	batch   = flag.Int64("batch", 2, "batch Number, no need to modify")
+	batch   = flag.Int64("batch", 10, "batch Number, no need to modify")
 	mem     = flag.Int64("mem", 256, "the memory of lambda")
-
-	subnet = []*string{
-		aws.String("subnet-b53a6bff"),
-		aws.String("subnet-fcde0bc2"),
+	subnet  = []*string{
+		aws.String("subnet-eeb536c0"),
+		aws.String("subnet-f94739f6"),
+		aws.String("subnet-f432faca"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-079f6cc4e658209c3"),
+		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
 	}
 )
 
@@ -51,9 +48,9 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 		FunctionName: aws.String(name),
 		Handler:      aws.String(*key),
 		MemorySize:   aws.Int64(*mem),
-		Role:         aws.String(ROLE),
-		Timeout:      aws.Int64(*timeout),
-		VpcConfig:    vpcConfig,
+		//Role:         aws.String("arn:aws:iam::123456789012:role/lambda_basic_execution"),
+		Timeout:   aws.Int64(*timeout),
+		VpcConfig: vpcConfig,
 		//VpcConfig: &lambda.VpcConfig{SubnetIds: subnet, SecurityGroupIds: securityGroup},
 		//VpcConfig: &lambda.VpcConfig{},
 	}
@@ -91,7 +88,7 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	input := &lambda.UpdateFunctionCodeInput{
 		FunctionName: aws.String(name),
-		S3Bucket:     aws.String(BUCKET),
+		S3Bucket:     aws.String(*BUCKET),
 		S3Key:        aws.String(fmt.Sprintf("%s.zip", *key)),
 	}
 	result, err := svc.UpdateFunctionCode(input)
@@ -126,7 +123,6 @@ func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 }
 
 func createFunction(name string, svc *lambda.Lambda) {
-	fmt.Println("create:", name)
 	var vpcConfig *lambda.VpcConfig
 	if *vpc {
 		vpcConfig = &lambda.VpcConfig{SubnetIds: subnet, SecurityGroupIds: securityGroup}
@@ -135,13 +131,13 @@ func createFunction(name string, svc *lambda.Lambda) {
 	}
 	input := &lambda.CreateFunctionInput{
 		Code: &lambda.FunctionCode{
-			S3Bucket: aws.String(BUCKET),
+			S3Bucket: aws.String(*BUCKET),
 			S3Key:    aws.String(fmt.Sprintf("%s.zip", *key)),
 		},
 		FunctionName: aws.String(name),
 		Handler:      aws.String(*key),
 		MemorySize:   aws.Int64(*mem),
-		Role:         aws.String(ROLE),
+		Role:         aws.String(*ROLE),
 		Runtime:      aws.String("go1.x"),
 		Timeout:      aws.Int64(*timeout),
 		VpcConfig:    vpcConfig,
@@ -174,30 +170,9 @@ func createFunction(name string, svc *lambda.Lambda) {
 		return
 	}
 
-	fmt.Println(name, '\n', result)
+	fmt.Println(name, "\n", result)
 	//wg.Done()
 }
-
-//func upload(sess *session.Session) {
-//	// Create an uploader with the session and default options
-//	uploader := s3manager.NewUploader(sess)
-//
-//	f, err := os.Open(fileName)
-//	if err != nil {
-//		fmt.Println("failed to open file", fileName, err)
-//	}
-//
-//	// Upload the file to S3.
-//	result, err := uploader.Upload(&s3manager.UploadInput{
-//		Bucket: aws.String(BUCKET),
-//		Key:    aws.String(KEY),
-//		Body:   f,
-//	})
-//	if err != nil {
-//		fmt.Println("failed to upload file", err)
-//	}
-//	fmt.Println("file uploaded to", result.Location)
-//}
 
 func main() {
 	flag.Parse()
@@ -238,4 +213,5 @@ func main() {
 			time.Sleep(1 * time.Second)
 		}
 	}
+	fmt.Println(float64(*to-*from), "total finished")
 }

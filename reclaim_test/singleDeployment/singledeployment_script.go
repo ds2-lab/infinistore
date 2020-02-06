@@ -29,9 +29,9 @@ var (
 	counter = 0
 	name    = flag.String("name", "reclaim", "lambda function name")
 	num     = flag.Int("count", 1, "lambda Count")
-	m       = flag.Int64("m", 10, "periodic warmup minute")
+	s       = flag.Int64("s", 30, "periodic warmup minute")
 	h       = flag.Int64("h", 2, "total time for exp")
-	pre     = flag.String("prefix", "log", "prefix for output log file")
+	pre     = flag.String("log", "log", "prefix for output log file")
 	LogData = nanolog.AddLogger("%s")
 	errChan = make(chan error, 1)
 )
@@ -42,7 +42,7 @@ func main() {
 	var sum int32
 	lambdaGroup := make([]*lambdaInstance, *num)
 
-	nanoLogout, err := os.Create(fmt.Sprintf("%s_%d_%d.clog", *pre, *m, *h))
+	nanoLogout, err := os.Create(fmt.Sprintf("%s_%d_%d.clog", *pre, *s, *h))
 
 	if err != nil {
 		panic(err)
@@ -69,7 +69,7 @@ func main() {
 	log.Println("==================")
 
 	// get timer
-	duration1 := time.Duration(*m) * time.Minute
+	duration1 := time.Duration(*s) * time.Second
 	t := time.NewTimer(duration1)
 	duration2 := time.Duration(*h) * time.Minute
 	t2 := time.NewTimer(duration2)
@@ -145,4 +145,3 @@ func lambdaTrigger(l *lambdaInstance, wg *sync.WaitGroup, s *int32) {
 	l.change = false
 	wg.Done()
 }
-
