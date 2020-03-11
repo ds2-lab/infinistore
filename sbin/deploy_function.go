@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ROLE = "arn:aws:iam::037862857942:role/ProxyNoVPC"
+	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
 )
 
 var (
