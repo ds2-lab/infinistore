@@ -1,17 +1,18 @@
 package server
 
 import (
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/google/uuid"
 
 	//	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -23,6 +24,7 @@ type Proxy struct {
 	log       logger.ILogger
 	group     *Group
 	metaStore *Placer
+	balancer  *Balancer
 
 	initialized int32
 	ready       chan struct{}
@@ -30,7 +32,7 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(NumLambdaClusters)
+	group := NewGroup(NumLambdaClusters) // use Cluster number to initial group
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
@@ -39,6 +41,7 @@ func New(replica bool) *Proxy {
 		},
 		group:     group,
 		metaStore: NewPlacer(NewMataStore(), group),
+		balancer:  NewBalancer(NewMataStore(), group),
 		ready:     make(chan struct{}),
 	}
 
@@ -54,7 +57,7 @@ func New(replica bool) *Proxy {
 		node.Meta.Capacity = InstanceCapacity
 		node.Meta.IncreaseSize(InstanceOverhead)
 
-		// Initialize instance, this is not neccessary if the start time of the instance is acceptable.
+		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
 		go func() {
 			node.WarmUp()
 			if atomic.AddInt32(&p.initialized, 1) == int32(p.group.Len()) {
@@ -133,32 +136,38 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.metaStore.NewMeta(
 		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
+	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
 
-	meta, _, postProcess := p.metaStore.GetOrInsert(key, prepared)
-	if meta.Deleted {
-		// Object may be evicted in somecase:
-		// 1: Some chunks were set.
-		// 2: Placer evicted this object (unlikely).
-		// 3: We got evicted meta.
-		p.log.Warn("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
-		w.AppendErrorf("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
-		w.Flush()
-		return
-	}
-	if postProcess != nil {
-		postProcess(p.dropEvicted)
-	}
+	p.log.Debug("before balance, lambdaId is %v", lambdaId)
+	meta := p.balancer.GetOrInsert(key, prepared)
+	//if meta.Deleted {
+	//	// Object may be evicted in some cases:
+	//	// 1: Some chunks were set.
+	//	// 2: Placer evicted this object (unlikely).
+	//	// 3: We got evicted meta.
+	//	p.log.Warn("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
+	//	w.AppendErrorf("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
+	//	w.Flush()
+	//	return
+	//}
+	//if postProcess != nil {
+	//	postProcess(p.dropEvicted)
+	//}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
+	p.log.Debug("After balance, lambdaId is %v", lambdaDest)
+
+	// fix the order
+	p.balancer.Adapt(lambdaDest)
 
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	p.group.Instance(lambdaDest).C() <- &types.Request{
-		Id:           types.Id{connId, reqId, chunkId},
-		Cmd:          strings.ToLower(c.Name),
-		Key:          chunkKey,
-		BodyStream:   bodyStream,
-		ChanResponse: client.Responses(),
+		Id:              types.Id{connId, reqId, chunkId},
+		Cmd:             strings.ToLower(c.Name),
+		Key:             chunkKey,
+		BodyStream:      bodyStream,
+		ChanResponse:    client.Responses(),
 		EnableCollector: true,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
@@ -174,7 +183,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	dataChunks, _ := c.Arg(3).Int()
 	parityChunks, _ := c.Arg(4).Int()
 
-	// Start couting time.
+	// Start counting time.
 	if err := collector.Collect(collector.LogStart, "get", reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
@@ -196,10 +205,10 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 	p.group.Instance(lambdaDest).C() <- &types.Request{
-		Id:           types.Id{connId, reqId, chunkId},
-		Cmd:          strings.ToLower(c.Name),
-		Key:          chunkKey,
-		ChanResponse: client.Responses(),
+		Id:              types.Id{connId, reqId, chunkId},
+		Cmd:             strings.ToLower(c.Name),
+		Key:             chunkKey,
+		ChanResponse:    client.Responses(),
 		EnableCollector: true,
 	}
 }

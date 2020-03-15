@@ -7,9 +7,9 @@ import (
 )
 
 const LambdaMaxDeployments = 400
-const NumLambdaClusters = 400
+const NumLambdaClusters = 200
 
-//const LambdaStoreName = "LambdaStore"
+const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Proxy1Node"
 const InstanceWarmTimout = 1 * time.Minute
 const InstanceCapacity = 1536 * 1000000 // MB

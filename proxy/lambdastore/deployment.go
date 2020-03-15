@@ -12,6 +12,8 @@ type Deployment struct {
 	id        uint64
 	replica   bool
 	log       logger.ILogger
+
+	Block int
 }
 
 func NewDeployment(name string, id uint64, replica bool) *Deployment {

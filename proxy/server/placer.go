@@ -18,13 +18,13 @@ type PlacerMeta struct {
 	pos        [2]int // Positions on both primary and secondary array.
 	visited    bool
 	visitedAt  time.Time
-	confirmed  []bool
+	confirmed  []bool // same length with placement True: set complete; False: not sure
 	numConfirmed int
-	swapMap    Placement // For decision from LRU
-	evicts     *Meta
-	suggestMap Placement // For decision from balancer
+	swapMap    Placement // For decision from LRU // evict object // availability slot
+	evicts     *Meta // meta has already evicted
+	suggestMap Placement // For decision from load balancer
 	once       *sync.Once
-	action     MetaDoPostProcess
+	action     MetaDoPostProcess // proxy call back function
 }
 
 func newPlacerMeta(numChunks int) *PlacerMeta {
@@ -88,11 +88,11 @@ func NewPlacer(store *MetaStore, group *Group) *Placer {
 	return placer
 }
 
-func (p *Placer) NewMeta(key string, sliceSize int, numChunks int, chunk int, lambdaId int, chunkSize int64) *Meta {
+func (p *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, lambdaId int, chunkSize int64) *Meta {
 	meta := NewMeta(key, numChunks, chunkSize)
 	p.group.InitMeta(meta, sliceSize)
-	meta.Placement[chunk] = lambdaId
-	meta.lastChunk = chunk
+	meta.Placement[chunkId] = lambdaId
+	meta.lastChunk = chunkId
 	return meta
 }
 
@@ -251,9 +251,9 @@ func (p *Placer) NextAvailableObject(meta *Meta) bool {
 		if p.objects[p.secondary] == nil || cap(p.objects[p.secondary]) < len(p.objects[p.primary]) {
 			p.objects[p.secondary] = make([]*Meta, 1, 2*len(p.objects[p.primary]))
 		} else {
-			p.objects[p.secondary] = p.objects[p.secondary][:1] // Alwarys append from the 2nd position.
+			p.objects[p.secondary] = p.objects[p.secondary][:1] // Always append from the 2nd position.
 		}
-		p.cursorBound = len(p.objects[p.primary]) // CusorBound is fixed once start iteration.
+		p.cursorBound = len(p.objects[p.primary]) // CursorBound is fixed once start iteration.
 		p.cursor = 1
 	}
 
@@ -278,7 +278,7 @@ func (p *Placer) NextAvailableObject(meta *Meta) bool {
 			meta.placerMeta.swapMap = copyPlacement(meta.placerMeta.swapMap, m.Placement)
 			meta.placerMeta.evicts = m
 
-			p.objects[p.primary][meta.placerMeta.pos[p.primary]] = nil // unset old position
+			p.objects[p.primary][meta.placerMeta.pos[p.primary]] = nil // unset old position;  meta'location to be nil
 			meta.placerMeta.pos[p.primary] = p.cursor
 			p.objects[p.primary][p.cursor] = meta // replace
 			m = meta

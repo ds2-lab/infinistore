@@ -1,28 +1,29 @@
 package server
 
-import(
-	"github.com/mason-leap-lab/infinicache/proxy/types"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Group struct {
-	All         []*GroupInstance
+	All []*GroupInstance
 
-	size        int
-	sliceBase   uint64
+	size      int
+	sliceBase uint64
 }
 
 type GroupInstance struct {
 	types.LambdaDeployment
-	group       *Group
-	idx         int
+	group *Group
+	idx   int
 }
 
 func NewGroup(num int) *Group {
 	return &Group{
-		All: make([]*GroupInstance, num),
+		All:  make([]*GroupInstance, num),
 		size: num,
 	}
 }
@@ -38,7 +39,7 @@ func (g *Group) InitMeta(meta *Meta, sliceSize int) *Meta {
 }
 
 func (g *Group) Reserve(idx int, d types.LambdaDeployment) *GroupInstance {
-	return &GroupInstance{ d, g, idx }
+	return &GroupInstance{d, g, idx}
 }
 
 func (g *Group) Set(ins *GroupInstance) {

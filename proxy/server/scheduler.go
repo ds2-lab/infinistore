@@ -1,14 +1,15 @@
 package server
 
-import(
+import (
 	"errors"
 	"fmt"
+
 	"github.com/cornelk/hashmap"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/migrator"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const DEP_STATUS_POOLED = 0
@@ -17,17 +18,17 @@ const DEP_STATUS_ACTIVATING = 2
 const IN_DEPLOYMENT_MIGRATION = false
 
 var (
-	scheduler    *Scheduler
+	scheduler *Scheduler
 )
 
 type Scheduler struct {
-	pool           chan *lambdastore.Deployment
-	actives        *hashmap.HashMap
+	pool    chan *lambdastore.Deployment
+	actives *hashmap.HashMap
 }
 
 func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 	s := &Scheduler{
-		pool: make(chan *lambdastore.Deployment, numDeployment + 1), // Allocate extra 1 buffer to avoid blocking
+		pool:    make(chan *lambdastore.Deployment, numDeployment+1), // Allocate extra 1 buffer to avoid blocking
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
@@ -127,7 +128,7 @@ func (s *Scheduler) ClearAll() {
 
 // MigrationScheduler implementations
 func (s *Scheduler) StartMigrator(lambdaId uint64) (string, error) {
-	m := migrator.New(global.BaseMigratorPort + int(lambdaId), true)
+	m := migrator.New(global.BaseMigratorPort+int(lambdaId), true)
 	err := m.Listen()
 	if err != nil {
 		return "", err
