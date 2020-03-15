@@ -3,8 +3,6 @@ package lambdastore
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"net"
 	"strconv"
@@ -12,9 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/mason-leap-lab/redeo/resp"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/proxy/types"
 )
 
 var (

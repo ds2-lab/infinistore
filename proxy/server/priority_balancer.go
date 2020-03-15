@@ -4,9 +4,9 @@ import (
 	"container/heap"
 	"fmt"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
 )
 
 type PriorityQueue []*lambdastore.Instance
@@ -74,6 +74,7 @@ func (b *Balancer) GetOrInsert(key string, newMeta *Meta) *Meta {
 	lambdaId := newMeta.Placement[chunk]
 
 	meta, got, _ := b.Placer.store.GetOrInsert(key, newMeta)
+	b.log.Debug("got status is %v", got)
 	if got {
 		newMeta.close()
 	}
@@ -82,9 +83,16 @@ func (b *Balancer) GetOrInsert(key string, newMeta *Meta) *Meta {
 
 	b.Placer.mu.Lock()
 	defer b.Placer.mu.Unlock()
+	//b.log.Debug("queue is %v", b.Queue)
+	b.log.Debug("meta placement is %v", meta.Placement)
+
+	b.log.Debug("queue [%v] size is %v", chunk, b.Queue[chunk].Size())
+	b.log.Debug("placement before %v", newMeta.Placement)
 
 	if b.Queue[chunk].Size() < b.Queue[lambdaId].Size() {
 		meta.Placement[chunk] = int(b.Queue[chunk].Id())
+	} else {
+		meta.Placement[chunk] = newMeta.Placement[chunk]
 	}
 
 	b.log.Debug("placement is %v", meta.Placement)

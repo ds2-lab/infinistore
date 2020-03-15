@@ -3,10 +3,11 @@ package migrator
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/cornelk/hashmap"
 	"net"
 	"time"
+
+	"github.com/cornelk/hashmap"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
 )
 
 // ErrServerClosed is returned by the Server after a call to Shutdown or Close.
@@ -15,15 +16,15 @@ var ListenTimeout = 30 * time.Second
 var all = &hashmap.HashMap{}
 
 type Server struct {
-	Addr    string // TCP address to listen on
-	Verbose bool
-	Debug   bool
+	Addr      string // TCP address to listen on
+	Verbose   bool
+	Debug     bool
 	LastError error
 
-	log       logger.ILogger
-	port      int
-	listener  *net.TCPListener
-	fconn     *forwardConnection
+	log      logger.ILogger
+	port     int
+	listener *net.TCPListener
+	fconn    *forwardConnection
 }
 
 func New(port int, debug bool) *Server {

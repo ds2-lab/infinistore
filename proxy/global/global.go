@@ -1,11 +1,11 @@
 package global
 
 import (
-	"github.com/cornelk/hashmap"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/cornelk/hashmap"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/wangaoone/LambdaObjectstore/proxy/types"
 )
 
 var (

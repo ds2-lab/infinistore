@@ -4,8 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
+	"github.com/wangaoone/LambdaObjectstore/proxy/types"
 )
 
 type Group struct {

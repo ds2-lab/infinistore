@@ -1,10 +1,11 @@
 package client
 
 import (
-	"fmt"
 	"errors"
-	"github.com/klauspost/reedsolomon"
+	"fmt"
 	"io"
+
+	"github.com/klauspost/reedsolomon"
 )
 
 var (
@@ -13,7 +14,7 @@ var (
 
 func NewEncoder(dataShards int, parityShards int, ecMaxGoroutine int) reedsolomon.Encoder {
 	if parityShards == 0 {
-		return &DummyEncoder{ DataShards: dataShards }
+		return &DummyEncoder{DataShards: dataShards}
 	}
 
 	enc, err := reedsolomon.New(dataShards, parityShards, reedsolomon.WithMaxGoroutines(ecMaxGoroutine))

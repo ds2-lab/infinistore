@@ -1,6 +1,6 @@
 package server
 
-import(
+import (
 	"fmt"
 	"sync"
 )
@@ -8,24 +8,24 @@ import(
 var (
 	metaPool = sync.Pool{
 		New: func() interface{} {
-				return &Meta{}
+			return &Meta{}
 		},
 	}
 	emptyPlacement = make(Placement, 100)
 )
 
 type Meta struct {
-	Key         string
-	NumChunks   int
+	Key       string
+	NumChunks int
 	Placement
-	ChunkSize   int64
-	Reset       bool
-	Deleted     bool
+	ChunkSize int64
+	Reset     bool
+	Deleted   bool
 
-	slice       Slice
-	placerMeta  *PlacerMeta
-	lastChunk   int
-	mu          sync.Mutex
+	slice      Slice
+	placerMeta *PlacerMeta
+	lastChunk  int
+	mu         sync.Mutex
 }
 
 func NewMeta(key string, numChunks int, chunkSize int64) *Meta {

@@ -28,8 +28,8 @@ func GetPrivateIp() (string, error) {
 	return "", ErrPrivateIPNotFound
 }
 
-func IsPrivateIp (ip net.IP) bool {
-	if ip.IsLoopback () || ip.IsMulticast () {
+func IsPrivateIp(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsMulticast() {
 		return false
 	}
 	if ip4 := ip.To4(); ip4 != nil {

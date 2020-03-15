@@ -9,15 +9,13 @@ import (
 
 	"github.com/google/uuid"
 
-	//	"github.com/google/uuid"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
+	"github.com/wangaoone/LambdaObjectstore/proxy/types"
 )
 
 type Proxy struct {
@@ -44,7 +42,6 @@ func New(replica bool) *Proxy {
 		balancer:  NewBalancer(NewMataStore(), group),
 		ready:     make(chan struct{}),
 	}
-
 	for i := range p.group.All {
 		name := LambdaPrefix
 		if replica {
@@ -69,6 +66,7 @@ func New(replica bool) *Proxy {
 		// Begin handle requests
 		go node.HandleRequests()
 	}
+	p.balancer.Init()
 
 	return p
 }
@@ -139,6 +137,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
 
 	p.log.Debug("before balance, lambdaId is %v", lambdaId)
+
 	meta := p.balancer.GetOrInsert(key, prepared)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:

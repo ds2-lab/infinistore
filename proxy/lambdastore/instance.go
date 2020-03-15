@@ -4,19 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
-	prototol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	prototol "github.com/wangaoone/LambdaObjectstore/common/types"
+	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/proxy/types"
 )
 
 const (
@@ -409,7 +409,7 @@ func (ins *Instance) handleRequest(conn *Connection, req types.Command, validate
 
 		cmd := strings.ToLower(req.Cmd)
 		if req.EnableCollector {
-			err := collector.Collect(collector.LogValidate, cmd, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration));
+			err := collector.Collect(collector.LogValidate, cmd, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
 			if err != nil {
 				ins.log.Warn("Fail to record validate duration: %v", err)
 			}

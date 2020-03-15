@@ -2,8 +2,9 @@ package client
 
 import (
 	"fmt"
-	"github.com/ScottMansfield/nanolog"
 	"os"
+
+	"github.com/ScottMansfield/nanolog"
 )
 
 var (
@@ -11,7 +12,7 @@ var (
 	LogRec    nanolog.Handle
 	LogDec    nanolog.Handle
 	LogClient nanolog.Handle
-	nlogger    func(nanolog.Handle, ...interface{}) error
+	nlogger   func(nanolog.Handle, ...interface{}) error
 )
 
 func init() {

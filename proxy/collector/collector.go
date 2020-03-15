@@ -3,12 +3,13 @@ package collector
 import (
 	"errors"
 	"fmt"
-	"github.com/ScottMansfield/nanolog"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/ScottMansfield/nanolog"
+
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
 )
 
 var (
@@ -16,12 +17,12 @@ var (
 	LogServer2Client nanolog.Handle
 	//LogServer        nanolog.Handle
 	//LogServerBufio   nanolog.Handle
-	LogProxy    nanolog.Handle = 10001
-	LogData     nanolog.Handle = 10002
-	LogStart    nanolog.Handle = 10003
-	LogLambda   nanolog.Handle = 10004
-	LogValidate nanolog.Handle = 10005
-	ErrorNoEntry     = errors.New("No collector log entry found.")
+	LogProxy     nanolog.Handle = 10001
+	LogData      nanolog.Handle = 10002
+	LogStart     nanolog.Handle = 10003
+	LogLambda    nanolog.Handle = 10004
+	LogValidate  nanolog.Handle = 10005
+	ErrorNoEntry                = errors.New("No collector log entry found.")
 
 	logMu   sync.Mutex
 	ticker  *time.Ticker

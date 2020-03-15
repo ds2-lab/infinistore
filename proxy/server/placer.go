@@ -2,11 +2,12 @@ package server
 
 import (
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/wangaoone/LambdaObjectstore/proxy/global"
 )
 
 const (
@@ -18,7 +19,7 @@ type PlacerMeta struct {
 	pos        [2]int // Positions on both primary and secondary array.
 	visited    bool
 	visitedAt  time.Time
-	confirmed  []bool // same length with placement True: set complete; False: not sure
+	confirmed    []bool // same length with placement True: set complete; False: not sure
 	numConfirmed int
 	swapMap    Placement // For decision from LRU // evict object // availability slot
 	evicts     *Meta // meta has already evicted
