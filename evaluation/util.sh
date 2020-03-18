@@ -15,7 +15,7 @@ function update_lambda_timeout() {
 #            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
 #            aws lambda update-function-configuration --function-name $prefix$i --memory-size $mem
         aws lambda update-function-configuration --function-name $NAME$i --timeout $TIME
-#            aws lambda update-function-configuration --function-name $prefix$name$i --handler redeo_lambda
+#            aws lambda update-function-configuration --function-name $prefix$name$i --handler lambda
 #            aws lambda put-function-concurrency --function-name $name$i --reserved-concurrent-executions $concurrency
     done
 }
@@ -30,7 +30,7 @@ function update_lambda_mem() {
 #            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
             aws lambda update-function-configuration --function-name $NAME$i --memory-size $MEM
 #        aws lambda update-function-configuration --function-name $NAME$i --timeout $TIME
-#            aws lambda update-function-configuration --function-name $prefix$name$i --handler redeo_lambda
+#            aws lambda update-function-configuration --function-name $prefix$name$i --handler lambda
 #            aws lambda put-function-concurrency --function-name $name$i --reserved-concurrent-executions $concurrency
     done
 }
@@ -39,7 +39,7 @@ function update_lambda_mem() {
 function start_proxy() {
     echo "running proxy server"
     PREFIX=$1
-    GOMAXPROCS=36 go run $PWD/../src/lambdaproxy.go -isPrint=true -prefix=$PREFIX
+    GOMAXPROCS=36 go run $PWD/../proxy/proxy.go -debug=true -prefix=$PREFIX
 }
 
 function bench() {
@@ -63,5 +63,15 @@ function playback() {
     CLUSTER=$4
     FILE=$5
     COMPACT=$6
-    go run $REDBENCH/simulator/playback/sim.go -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    $REDBENCH/simulator/playback/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+}
+
+function dryrun() {
+    D=$1
+    P=$2
+    SCALE=$3
+    CLUSTER=$4
+    FILE=$5
+    COMPACT=$6
+    $REDBENCH/simulator/playback/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
 }
