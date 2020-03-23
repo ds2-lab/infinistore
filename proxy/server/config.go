@@ -14,6 +14,7 @@ const LambdaPrefix = "Proxy2Node"
 const InstanceWarmTimout = 1 * time.Minute
 const InstanceCapacity = 1536 * 1000000 // MB
 const InstanceOverhead = 100 * 1000000  // MB
+const Threshold = 0.8
 
 func init() {
 	lambdastore.WarmTimout = InstanceWarmTimout

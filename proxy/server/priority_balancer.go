@@ -6,47 +6,13 @@ import (
 
 	"github.com/wangaoone/LambdaObjectstore/common/logger"
 	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
 )
 
-type PriorityQueue []*lambdastore.Instance
-
-func (pq PriorityQueue) Len() int {
-	return len(pq)
-}
-
-func (pq PriorityQueue) Less(i, j int) bool {
-	// We want Pop to give us the highest, not lowest, priority so we use greater than here.
-	return pq[i].Size() < pq[j].Size()
-}
-
-func (pq PriorityQueue) Swap(i, j int) {
-	pq[i], pq[j] = pq[j], pq[i]
-	pq[i].Block = i
-	pq[j].Block = j
-}
-
-func (pq *PriorityQueue) Push(x interface{}) {
-	n := len(*pq)
-	lambda := x.(*lambdastore.Instance)
-	lambda.Block = n
-	*pq = append(*pq, lambda)
-}
-
-func (pq *PriorityQueue) Pop() interface{} {
-	old := *pq
-	n := len(old)
-	lambda := old[n-1]
-	old[n-1] = nil // avoid memory leak
-	lambda.Block = -1
-	*pq = old[0 : n-1]
-	return lambda
-}
-
 type Balancer struct {
-	log    logger.ILogger
-	Placer *Placer
-	Queue  PriorityQueue
+	log          logger.ILogger
+	balanceStore *MetaStore
+	Queue        PriorityQueue
+	Placer       *Placer
 }
 
 func NewBalancer(store *MetaStore, group *Group) *Balancer {
@@ -56,7 +22,8 @@ func NewBalancer(store *MetaStore, group *Group) *Balancer {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		Placer: NewPlacer(store, group),
+		balanceStore: store,
+		Placer:       NewPlacer(NewMataStore(), group),
 	}
 	return balancer
 }
@@ -67,47 +34,83 @@ func (b *Balancer) Init() {
 		b.Queue[i] = b.Placer.group.Instance(i)
 		b.Queue[i].Block = i
 	}
+	b.log.Debug("initial queue:")
+	b.dump()
 }
 
-func (b *Balancer) GetOrInsert(key string, newMeta *Meta) *Meta {
+func (b *Balancer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostProcess) {
 	chunk := newMeta.lastChunk
-	lambdaId := newMeta.Placement[chunk]
+	//lambdaId := newMeta.Placement[chunk]
+	chunkKey := fmt.Sprintf("%d@%s", chunk, key)
 
-	meta, got, _ := b.Placer.store.GetOrInsert(key, newMeta)
-	b.log.Debug("got status is %v", got)
+	meta, got, _ := b.balanceStore.GetOrInsert(chunkKey, newMeta)
 	if got {
 		newMeta.close()
 	}
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
-	b.Placer.mu.Lock()
-	defer b.Placer.mu.Unlock()
-	//b.log.Debug("queue is %v", b.Queue)
-	b.log.Debug("meta placement is %v", meta.Placement)
+	//if b.Queue[chunk].Size() < b.Queue[lambdaId].Size() {
+	//	b.log.Debug("find better place, better is %v, before is %v",
+	//		b.Queue[chunk].Deployment.Name(), b.Queue[lambdaId].Deployment.Name())
+	//
+	//	meta.Placement[chunk] = int(b.Queue[chunk].Id())
+	//} else {
+	//	b.log.Debug("keep original placement")
+	//	meta.Placement[chunk] = newMeta.Placement[chunk]
+	//}
 
-	b.log.Debug("queue [%v] size is %v", chunk, b.Queue[chunk].Size())
-	b.log.Debug("placement before %v", newMeta.Placement)
+	if !meta.Balanced {
+		meta.Balanced = true
+		// get first lambda instance in pq
+		reDirect := b.Queue[0]
+		meta.Placement[chunk] = int(reDirect.Id())
+		b.Placer.group.Instance(int(reDirect.Id())).IncreaseSize(meta.ChunkSize)
 
-	if b.Queue[chunk].Size() < b.Queue[lambdaId].Size() {
-		meta.Placement[chunk] = int(b.Queue[chunk].Id())
+		// fix the pq order
+		b.Adapt(meta.Placement[chunk])
+
+		return meta, got, nil
 	} else {
-		meta.Placement[chunk] = newMeta.Placement[chunk]
+		b.log.Debug("object already existed")
+		return meta, got, nil
 	}
-
-	b.log.Debug("placement is %v", meta.Placement)
-	return meta
 }
 
 func (b *Balancer) Adapt(lambdaId int) {
 	heap.Fix(&b.Queue, b.Placer.group.Instance(lambdaId).Block)
-	// b.dump()
+	b.dump()
 }
 
 func (b *Balancer) dump() {
-	msg := "[%d:%d]%s"
+	msg := "[%v:%d]%s"
 	for _, lambda := range b.Queue {
-		msg = fmt.Sprintf(msg, lambda.Id, lambda.Size(), ",[%d:%d]%s")
+		msg = fmt.Sprintf(msg, lambda.Deployment.Name(), lambda.Size(), ",[%v:%d]%s")
 	}
 	b.log.Debug(msg, 0, 0, "\n")
 }
+
+func (b *Balancer) Get(key string, chunk int) (*Meta, bool) {
+	chunkKey := fmt.Sprintf("%d@%s", chunk, key)
+	b.log.Debug("chunk key is %v", chunkKey)
+	meta, ok := b.balanceStore.Get(chunkKey)
+	if !ok {
+		b.log.Debug("get error is %v", ok)
+		return nil, ok
+	}
+	meta.mu.Lock()
+	defer meta.mu.Unlock()
+
+	b.log.Debug("meta is %v, %v", meta.Placement, ok)
+
+	return meta, ok
+}
+
+//func (b *Balancer) isFull(chunk int) bool {
+//	isFull := True
+//	for i := 0; i < b.Placer.group.Len(); i++ {
+//		if b.Placer.group.Instance(i).Size() < InstanceCapacity*Threshold {
+//
+//		}
+//	}
+//}

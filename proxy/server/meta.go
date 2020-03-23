@@ -22,8 +22,10 @@ type Meta struct {
 	Reset     bool
 	Deleted   bool
 
-	slice      Slice
-	placerMeta *PlacerMeta
+	Balanced int
+	slice    Slice
+	//placerMeta *PlacerMeta
+	placerMeta *LruPlacerMeta
 	lastChunk  int
 	mu         sync.Mutex
 }
@@ -35,6 +37,7 @@ func NewMeta(key string, numChunks int, chunkSize int64) *Meta {
 	meta.Placement = initPlacement(meta.Placement, numChunks)
 	meta.ChunkSize = chunkSize
 	meta.Deleted = false
+	meta.Balanced = 0
 
 	if meta.slice.initialized {
 		meta.slice = Slice{}

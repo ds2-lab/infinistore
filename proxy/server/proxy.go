@@ -19,10 +19,10 @@ import (
 )
 
 type Proxy struct {
-	log       logger.ILogger
-	group     *Group
-	metaStore *Placer
-	balancer  *Balancer
+	log    logger.ILogger
+	group  *Group
+	placer *LruPlacer
+	//tmpPlacer *Placer
 
 	initialized int32
 	ready       chan struct{}
@@ -37,10 +37,10 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group:     group,
-		metaStore: NewPlacer(NewMataStore(), group),
-		balancer:  NewBalancer(NewMataStore(), group),
-		ready:     make(chan struct{}),
+		group:  group,
+		placer: NewLruPlacer(NewMataStore(), group),
+		//tmpPlacer: NewPlacer(NewMataStore(), group),
+		ready: make(chan struct{}),
 	}
 	for i := range p.group.All {
 		name := LambdaPrefix
@@ -66,7 +66,7 @@ func New(replica bool) *Proxy {
 		// Begin handle requests
 		go node.HandleRequests()
 	}
-	p.balancer.Init()
+	p.placer.Init()
 
 	return p
 }
@@ -132,13 +132,13 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
-	prepared := p.metaStore.NewMeta(
+	prepared := p.placer.NewMeta(
 		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
 
 	p.log.Debug("before balance, lambdaId is %v", lambdaId)
-
-	meta := p.balancer.GetOrInsert(key, prepared)
+	// redirect to do load balance
+	meta, _, _ := p.placer.GetOrInsert(key, prepared)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -155,9 +155,6 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 	p.log.Debug("After balance, lambdaId is %v", lambdaDest)
-
-	// fix the order
-	p.balancer.Adapt(lambdaDest)
 
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
@@ -190,9 +187,18 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"get", int(dataChunks), int(parityChunks), 0})
 
 	// key is "key"+"chunkId"
-	meta, ok := p.metaStore.Get(key, int(dChunkId))
-	if !ok || meta.Deleted {
-		// Object may be deleted.
+	//meta, ok := p.metaStore.Get(key, int(dChunkId))
+	//if !ok || meta.Deleted {
+	//	// Object may be deleted.
+	//	p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
+	//	w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
+	//	w.Flush()
+	//	return
+	//}
+
+	meta, ok := p.placer.Get(key, int(dChunkId))
+	p.log.Debug("ok ? %v", ok)
+	if !ok {
 		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
 		w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
 		w.Flush()

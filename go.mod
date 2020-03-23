@@ -10,6 +10,7 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/cornelk/hashmap v1.0.1
 	github.com/google/uuid v1.1.1
+	github.com/hashicorp/golang-lru v0.5.4
 	github.com/klauspost/reedsolomon v1.9.3
 	github.com/mason-leap-lab/infinicache v0.0.0-20200315185147-98eb641c42d5
 	github.com/mason-leap-lab/redeo v0.0.0-20200204234106-1e6f10c82f05

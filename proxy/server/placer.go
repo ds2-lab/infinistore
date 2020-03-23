@@ -16,20 +16,20 @@ const (
 
 type PlacerMeta struct {
 	// Object management properties
-	pos        [2]int // Positions on both primary and secondary array.
-	visited    bool
-	visitedAt  time.Time
+	pos          [2]int // Positions on both primary and secondary array.
+	visited      bool
+	visitedAt    time.Time
 	confirmed    []bool // same length with placement True: set complete; False: not sure
 	numConfirmed int
-	swapMap    Placement // For decision from LRU // evict object // availability slot
-	evicts     *Meta // meta has already evicted
-	suggestMap Placement // For decision from load balancer
-	once       *sync.Once
-	action     MetaDoPostProcess // proxy call back function
+	swapMap      Placement // For decision from LRU // evict object // availability slot
+	evicts       *Meta     // meta has already evicted
+	suggestMap   Placement // For decision from load balancer
+	once         *sync.Once
+	action       MetaDoPostProcess // proxy call back function
 }
 
 func newPlacerMeta(numChunks int) *PlacerMeta {
-	return &PlacerMeta {
+	return &PlacerMeta{
 		confirmed: make([]bool, numChunks),
 	}
 }
@@ -63,15 +63,15 @@ func (pm *PlacerMeta) allConfirmed() bool {
 // eviction of another object (older). In this case, we evict the older in whole based on Clock LRU algorithm, and set the
 // original position of the newer to nil, which a compact operation is needed later. We use a secondary array for online compact.
 type Placer struct {
-	log       logger.ILogger
-	store     *MetaStore
-	group     *Group
-	objects   [2][]*Meta // We use a secondary array for online compact, the first element is reserved.
-	cursor    int        // Cursor of primary array that indicate where the LRU checks.
-	cursorBound int      // The largest index the cursor can reach in current iteration.
-	primary   int
-	secondary int
-	mu        sync.RWMutex
+	log         logger.ILogger
+	store       *MetaStore
+	group       *Group
+	objects     [2][]*Meta // We use a secondary array for online compact, the first element is reserved.
+	cursor      int        // Cursor of primary array that indicate where the LRU checks.
+	cursorBound int        // The largest index the cursor can reach in current iteration.
+	primary     int
+	secondary   int
+	mu          sync.RWMutex
 }
 
 func NewPlacer(store *MetaStore, group *Group) *Placer {
@@ -94,6 +94,7 @@ func (p *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, 
 	p.group.InitMeta(meta, sliceSize)
 	meta.Placement[chunkId] = lambdaId
 	meta.lastChunk = chunkId
+	//meta.Balanced = false
 	return meta
 }
 
@@ -154,7 +155,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 
 	assigned := meta.slice.GetIndex(lambdaId)
 	instance := p.group.Instance(assigned)
-	if instance.Meta.Size() + uint64(meta.ChunkSize) < instance.Meta.Capacity {
+	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunk] = assigned
 		meta.placerMeta.confirm(chunk)
 		// If the object has not seen.
@@ -165,7 +166,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 		// This allow the client to reset the chunk without affecting the placement.
 		size := instance.Meta.IncreaseSize(meta.ChunkSize)
 		p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-								assigned, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
+			assigned, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
 		return meta, got, nil
 	}
 
@@ -178,7 +179,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 	}
 	// p.log.Debug("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement)
 
-	for i, tbe := range meta.placerMeta.swapMap {	// To be evicted
+	for i, tbe := range meta.placerMeta.swapMap { // To be evicted
 		instance := p.group.Instance(tbe)
 		if !meta.placerMeta.confirmed[i] {
 			// Confirmed chunk will not move
@@ -186,13 +187,13 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 			// The size can be replaced safely, too.
 			size := instance.Meta.IncreaseSize(meta.ChunkSize - meta.placerMeta.evicts.ChunkSize)
 			p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, evict:%d@%s, Δ:%d).",
-									tbe, size, instance.Meta.Capacity, i, key, i, meta.placerMeta.evicts.Key,
-									meta.ChunkSize - meta.placerMeta.evicts.ChunkSize)
+				tbe, size, instance.Meta.Capacity, i, key, i, meta.placerMeta.evicts.Key,
+				meta.ChunkSize-meta.placerMeta.evicts.ChunkSize)
 		} else {
 			size := instance.Meta.DecreaseSize(meta.placerMeta.evicts.ChunkSize)
 			p.log.Debug("Lambda %d size updated: %d of %d (evict:%d@%s, Δ:%d).",
-									tbe, size, instance.Meta.Capacity, i, meta.placerMeta.evicts.Key,
-									-meta.placerMeta.evicts.ChunkSize)
+				tbe, size, instance.Meta.Capacity, i, meta.placerMeta.evicts.Key,
+				-meta.placerMeta.evicts.ChunkSize)
 		}
 	}
 
