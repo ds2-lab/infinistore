@@ -17,6 +17,11 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 )
 
+const (
+	AWSRegion                      = "us-east-1"
+	S3BUCKET                       = "mason-leap-lab.infinicache"
+)
+
 var (
 	AWSRegion      string
 	S3Bucket       string

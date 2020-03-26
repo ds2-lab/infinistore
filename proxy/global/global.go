@@ -20,17 +20,20 @@ var (
 	ServerIp         string
 	Prefix           string
 	Flags            uint64
+	AWSRegion        string
 )
 
 func init() {
 	Log = logger.NilLogger
 
-	ip, err := GetPrivateIp()
-	if err != nil {
-		panic(err)
+	if ServerIp == "" {
+		ip, err := GetPrivateIp()
+		if err != nil {
+			panic(err)
+		}
+		ServerIp = ip
 	}
 
-	ServerIp = ip
 	Flags = protocol.FLAG_WARMUP_FIXED_INTERVAL | protocol.FLAG_REPLICATE_ON_WARMUP
 }
 
