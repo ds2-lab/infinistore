@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/golang-lru"
@@ -55,17 +56,23 @@ type LruPlacerMeta struct {
 	visited   bool
 	visitedAt int64
 	//confirmed    []bool
-	numConfirmed int
+	//numConfirmed int
 
-	evicts *Meta // meta has already evicted
+	//evicts *Meta // meta has already evicted
+	evicts []*Meta // meta has already evicted
 	once   *sync.Once
 	action MetaDoPostProcess // proxy call back function
+
+	confirmed bool
 }
 
 func newLruPlacerMeta(numChunks int) *LruPlacerMeta {
 	return &LruPlacerMeta{
-		//confirmed: make([]bool, numChunks),
+		visited:   false,
+		visitedAt: 0,
+		confirmed: false,
 	}
+
 }
 
 func (pm *LruPlacerMeta) postProcess(action MetaDoPostProcess) {
@@ -106,13 +113,17 @@ func NewLruPlacer(store *MetaStore, group *Group) *LruPlacer {
 }
 
 func (l *LruPlacer) Init() {
-	l.Queue = make(PriorityQueue, l.group.size)
+	l.Queue = make(PriorityQueue, l.group.size, LambdaMaxDeployments)
 	for i := 0; i < l.group.size; i++ {
 		l.Queue[i] = l.group.Instance(i)
 		l.Queue[i].Block = i
 	}
 	l.log.Debug("initial queue:")
 	l.dump()
+}
+
+func (l *LruPlacer) Append(ins *lambdastore.Instance) {
+	l.Queue = append(l.Queue, ins)
 }
 
 func (l *LruPlacer) AvgSize() int {
@@ -125,17 +136,17 @@ func (l *LruPlacer) AvgSize() int {
 
 func (l *LruPlacer) reBalance(meta *Meta, chunk int) *lambdastore.Instance {
 	// counter to control whether get balanced
-	if meta.Balanced == meta.NumChunks {
+	if int(atomic.LoadInt32(&meta.Balanced)) == meta.NumChunks {
 		l.log.Debug("already balanced (existed already)")
 		return l.group.Instance(meta.Placement[chunk])
 	} else {
+		l.log.Debug("in balancer")
 		// find best loc in PQ
 		bestLoc := l.Queue[0]
 		//meta.Placement[chunk] = int(bestLoc.Id())
 		//l.group.Instance(int(bestLoc.Id())).Meta.IncreaseSize(meta.ChunkSize)
-		meta.Balanced += 1
+		atomic.AddInt32(&meta.Balanced, 1)
 		// fix the order in PQ
-		l.Adapt(meta.Placement[chunk])
 		return bestLoc
 	}
 }
@@ -154,15 +165,21 @@ func (l *LruPlacer) dump() {
 }
 
 func (l *LruPlacer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, lambdaId int, chunkSize int64) *Meta {
+	l.log.Debug("key and chunkId is %v,%v", key, chunkId)
 	meta := NewMeta(key, numChunks, chunkSize)
 	l.group.InitMeta(meta, sliceSize)
 	meta.Placement[chunkId] = lambdaId
 	meta.lastChunk = chunkId
-	l.TouchObject(meta)
+	//l.TouchObject(meta)
 	return meta
 }
 
 func (l *LruPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostProcess) {
+	if l.AvgSize() > InstanceCapacity*Threshold {
+		//TODO:  lambda instances scale out
+
+	}
+
 	chunk := newMeta.lastChunk
 
 	// lambdaId from client
@@ -174,7 +191,7 @@ func (l *LruPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 	}
 
 	meta.mu.Lock()
-	defer meta.mu.Unlock()
+	//defer meta.mu.Unlock()
 
 	if meta.Deleted {
 		meta.placerMeta = nil
@@ -185,29 +202,49 @@ func (l *LruPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 		meta.placerMeta = newLruPlacerMeta(len(meta.Placement))
 	}
 
-	//if l.AvgSize() < InstanceCapacity*Threshold {
+	// Check availability
+	l.mu.Lock()
+	//defer l.mu.Unlock()
 
 	// get re-balanced assigned lambda instance
 	instance := l.reBalance(meta, chunk)
+	l.log.Debug("selected instance is %v", instance.Name())
 
+	// load balancer, not trigger evict
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunk] = int(instance.Id())
 		l.cache.Add(meta, nil)
-		size := instance.Meta.IncreaseSize(meta.ChunkSize)
-		l.log.Debug("return at balancer, Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-			instance, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
+		instance.Meta.IncreaseSize(meta.ChunkSize)
+		l.Adapt(meta.Placement[chunk])
+
+		//l.log.Debug("return at balancer, Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
+		//instance, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
+
+		l.mu.Unlock()
+		meta.mu.Unlock()
 		return meta, got, nil
 	}
 
-	//}
+	l.mu.Unlock()
+	meta.mu.Unlock()
 
+	l.log.Debug("need to evict")
 	// need to evict oldest object
-	//evictList := l.NextAvailable(meta)
-	//
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// find next available place & update instance size
+	l.NextAvailable(meta)
+
+	// adapt priority queue
+	l.Adapt(meta.Placement[chunk])
+	l.log.Debug("finish evict obj")
 	//instance := l.reBalance(meta, chunk)
 	//meta.Placement[chunk] = int(instance.Id())
-	//return meta, got, meta.placerMeta.postProcess
-	return meta, got, nil
+
+	meta.placerMeta.once = &sync.Once{}
+	return meta, got, meta.placerMeta.postProcess
 }
 
 func (l *LruPlacer) TouchObject(meta *Meta) {
@@ -215,30 +252,60 @@ func (l *LruPlacer) TouchObject(meta *Meta) {
 	meta.placerMeta.visitedAt = time.Now().Unix()
 }
 
-func (l *LruPlacer) NextAvailable(meta *Meta) []*Meta {
-	enough := false
-	evictList := make([]*Meta, 1, 100)
+func (l *LruPlacer) NextAvailable(meta *Meta) {
+	//if atomic.LoadInt32(&meta.placerMeta.confirmed) == 1 {
+	//	l.log.Debug("other goroutine already evicted")
+	//	// return existed meta value to proxy
+	//	// TODO
+	//	return
+	//}
+	//atomic.AddInt32(&meta.placerMeta.confirmed, 1)
 
-	for !enough {
+	l.log.Debug("in NextAvailable %v", meta.placerMeta.confirmed)
+	// confirm == true, other goroutine already update the placement
+	if meta.placerMeta.confirmed == true {
+		l.log.Debug("already updated %v", meta.Placement)
+		return
+	}
 
+	evictList := make([]*Meta, 0, 100)
+
+	for {
 		// get oldest meta
 		evict, _, _ := l.cache.RemoveOldest()
+		l.log.Debug("evict object is %v", evict.(*Meta).Key)
 		evictList = append(evictList, evict.(*Meta))
-		evictSize := evict.(*Meta).ChunkSize
 
-		for i := 0; i < len(evict.(*Meta).Placement); i++ {
-			delta := meta.ChunkSize - evictSize
-			if l.group.Instance(evict.(*Meta).Placement[i]).IncreaseSize(delta) > l.group.Instance(evict.(*Meta).Placement[i]).Capacity {
-				//
-			} else {
-				meta.placerMeta.numConfirmed += 1
-			}
+		if meta.ChunkSize <= evict.(*Meta).ChunkSize {
+			// meta size smaller than evict size, enough
+			l.log.Debug("meta smaller or equal than evict")
+			break
 		}
-		if meta.placerMeta.numConfirmed == meta.NumChunks {
-			enough = true
-		}
+		//for i := 0; i < len(evict.(*Meta).Placement); i++ {
+		//	delta := meta.ChunkSize - evictSize
+		//	if l.group.Instance(evict.(*Meta).Placement[i]).IncreaseSize(delta) < InstanceCapacity*Threshold {
+		//		meta.placerMeta.numConfirmed += 1
+		//	} else {
+		//
+		//	}
+		//}
+		//if meta.placerMeta.numConfirmed == meta.NumChunks {
+		//	enough = true
+		//}
 	}
-	return evictList
+	l.log.Debug("after infinite loop")
+	//l.log.Debug("evict list is %v", l.dumpList(evictList))
+
+	// copy last evict obj placement to meta
+	meta.Placement = evictList[len(evictList)-1].Placement
+	l.log.Debug("meta placement updated %v", meta.Placement)
+	// update instance size
+	l.cache.Add(meta, nil)
+	l.updateInstanceSize(evictList, meta)
+
+	meta.placerMeta.confirmed = true
+
+	meta.placerMeta.evicts = evictList
 }
 
 func (l *LruPlacer) Get(key string, chunk int) (*Meta, bool) {
@@ -263,4 +330,34 @@ func (l *LruPlacer) Get(key string, chunk int) (*Meta, bool) {
 	}
 	l.TouchObject(meta)
 	return meta, ok
+}
+
+func (l *LruPlacer) dumpList(list []*Meta) string {
+	res := ""
+	for _, i2 := range list {
+		res = fmt.Sprintf("%s,%s", res, i2.Key)
+	}
+	return res
+}
+
+func (l *LruPlacer) updateInstanceSize(evictList []*Meta, m *Meta) {
+	last := evictList[len(evictList)-1]
+	l.log.Debug("last in evict list is %v", last.Key)
+	for i := 0; i < len(last.Placement); i++ {
+		l.group.Instance(last.Placement[i]).Meta.IncreaseSize(m.ChunkSize - last.ChunkSize)
+	}
+	l.log.Debug("len of evict list is", len(evictList))
+	if len(evictList) > 1 {
+		l.log.Debug("evict list length larger than 1")
+		for j := 0; j < len(evictList)-1; j++ {
+			e := evictList[j]
+			//delta := m.ChunkSize - e.ChunkSize
+			for i := 0; i < len(e.Placement); i++ {
+				l.group.Instance(e.Placement[i]).Meta.DecreaseSize(e.ChunkSize)
+			}
+		}
+		return
+	}
+
+	return
 }

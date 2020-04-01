@@ -22,7 +22,7 @@ type Meta struct {
 	Reset     bool
 	Deleted   bool
 
-	Balanced int
+	Balanced int32
 	slice    Slice
 	//placerMeta *PlacerMeta
 	placerMeta *LruPlacerMeta

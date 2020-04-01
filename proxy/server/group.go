@@ -23,7 +23,7 @@ type GroupInstance struct {
 
 func NewGroup(num int) *Group {
 	return &Group{
-		All:  make([]*GroupInstance, num),
+		All:  make([]*GroupInstance, num, LambdaMaxDeployments),
 		size: num,
 	}
 }
@@ -48,6 +48,15 @@ func (g *Group) Set(ins *GroupInstance) {
 		ins.LambdaDeployment = lambdastore.NewInstanceFromDeployment(ins.LambdaDeployment.(*lambdastore.Deployment))
 	}
 	g.All[ins.idx] = ins
+}
+
+func (g *Group) Append(ins *GroupInstance) {
+	switch ins.LambdaDeployment.(type) {
+	case *lambdastore.Deployment:
+		ins.LambdaDeployment = lambdastore.NewInstanceFromDeployment(ins.LambdaDeployment.(*lambdastore.Deployment))
+	}
+	g.All = append(g.All, ins)
+	g.size += 1
 }
 
 func (g *Group) Validate(ins *GroupInstance) *GroupInstance {

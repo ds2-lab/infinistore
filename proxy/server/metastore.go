@@ -6,7 +6,8 @@ import (
 
 type MetaPostProcess func(MetaDoPostProcess)
 
-type MetaDoPostProcess func(*Meta)
+//type MetaDoPostProcess func(*Meta)
+type MetaDoPostProcess func([]*Meta)
 
 type MetaStore struct {
 	metaMap *hashmap.HashMap

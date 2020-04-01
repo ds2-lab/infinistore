@@ -26,6 +26,7 @@ type Scheduler struct {
 	actives *hashmap.HashMap
 }
 
+// numCluster = small number, numDeployment = large number
 func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 	s := &Scheduler{
 		pool:    make(chan *lambdastore.Deployment, numDeployment+1), // Allocate extra 1 buffer to avoid blocking
@@ -41,10 +42,15 @@ func newScheduler() *Scheduler {
 	return NewScheduler(NumLambdaClusters, LambdaMaxDeployments)
 }
 
-func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {
+func (s *Scheduler) GetForGroup(g *Group, idx int, scale string) *lambdastore.Instance {
 	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.pool))
 	s.actives.Set(ins.Id(), ins)
-	g.Set(ins)
+	switch scale {
+	case "out":
+		g.Append(ins)
+	default:
+		g.Set(ins)
+	}
 	return ins.LambdaDeployment.(*lambdastore.Instance)
 }
 
@@ -148,6 +154,7 @@ func init() {
 
 	lambdastore.Registry = scheduler
 	global.Migrator = scheduler
+
 }
 
 func CleanUpScheduler() {

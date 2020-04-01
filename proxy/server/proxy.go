@@ -19,10 +19,10 @@ import (
 )
 
 type Proxy struct {
-	log    logger.ILogger
-	group  *Group
-	placer *LruPlacer
-	//tmpPlacer *Placer
+	log   logger.ILogger
+	group *Group
+	//placer *LruPlacer
+	scaler *Scaler
 
 	initialized int32
 	ready       chan struct{}
@@ -37,10 +37,10 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group:  group,
-		placer: NewLruPlacer(NewMataStore(), group),
-		//tmpPlacer: NewPlacer(NewMataStore(), group),
-		ready: make(chan struct{}),
+		group: group,
+		//placer: NewLruPlacer(NewMataStore(), group),
+		scaler: NewScaler(NewLruPlacer(NewMataStore(), group)),
+		ready:  make(chan struct{}),
 	}
 	for i := range p.group.All {
 		name := LambdaPrefix
@@ -50,7 +50,7 @@ func New(replica bool) *Proxy {
 		} else {
 			p.log.Info("[Registering lambda store %s%d]", name, i)
 		}
-		node := scheduler.GetForGroup(p.group, i)
+		node := scheduler.GetForGroup(p.group, i, "")
 		node.Meta.Capacity = InstanceCapacity
 		node.Meta.IncreaseSize(InstanceOverhead)
 
@@ -66,7 +66,16 @@ func New(replica bool) *Proxy {
 		// Begin handle requests
 		go node.HandleRequests()
 	}
-	p.placer.Init()
+
+	ActiveInstance = p.group.Len()
+	p.log.Debug("active number of instance is %v", ActiveInstance)
+
+	// init placer
+	p.scaler.placer.Init()
+
+	// start auto scaler
+	p.log.Debug("AutoScaler daemon start...")
+	go p.scaler.Daemon()
 
 	return p
 }
@@ -132,13 +141,12 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
-	prepared := p.placer.NewMeta(
+	prepared := p.scaler.placer.NewMeta(
 		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
-
-	p.log.Debug("before balance, lambdaId is %v", lambdaId)
+	p.log.Debug("key is %v, lambdaId is", prepared.Key, lambdaId)
 	// redirect to do load balance
-	meta, _, _ := p.placer.GetOrInsert(key, prepared)
+	meta, _, postProcess := p.scaler.placer.GetOrInsert(key, prepared)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -149,12 +157,11 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	//	w.Flush()
 	//	return
 	//}
-	//if postProcess != nil {
-	//	postProcess(p.dropEvicted)
-	//}
+	if postProcess != nil {
+		postProcess(p.dropEvicted)
+	}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
-	p.log.Debug("After balance, lambdaId is %v", lambdaDest)
 
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
@@ -196,7 +203,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	//	return
 	//}
 
-	meta, ok := p.placer.Get(key, int(dChunkId))
+	meta, ok := p.scaler.placer.Get(key, int(dChunkId))
 	p.log.Debug("ok ? %v", ok)
 	if !ok {
 		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
@@ -267,14 +274,17 @@ func (p *Proxy) CollectData() {
 	}
 }
 
-func (p *Proxy) dropEvicted(meta *Meta) {
-	reqId := uuid.New().String()
-	for i, lambdaId := range meta.Placement {
-		instance := p.group.Instance(lambdaId)
-		instance.C() <- &types.Request{
-			Id:  types.Id{0, reqId, strconv.Itoa(i)},
-			Cmd: "del",
-			Key: meta.ChunkKey(i),
+func (p *Proxy) dropEvicted(meta []*Meta) {
+	for m := 0; m < len(meta); m++ {
+		p.log.Debug("evict obj is %v", meta[m].Key)
+		reqId := uuid.New().String()
+		for i, lambdaId := range meta[m].Placement {
+			instance := p.group.Instance(lambdaId)
+			instance.C() <- &types.Request{
+				Id:  types.Id{0, reqId, strconv.Itoa(i)},
+				Cmd: "del",
+				Key: meta[m].ChunkKey(i),
+			}
 		}
 	}
 }
