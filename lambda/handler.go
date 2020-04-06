@@ -783,7 +783,8 @@ func main() {
 		flag.Uint64Var(&input.Meta.SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
 		flag.StringVar(&input.Meta.Tip, "tip", "", "Tips in http query format")
 
-		numToInsert := flag.Int("insert", 0, "Number of random items to be inserted on launch")
+		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
+		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 
 		flag.Parse()
 
@@ -828,7 +829,7 @@ func main() {
 			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 			session.Timeout.Busy()
 			for i := 0; i < *numToInsert; i++ {
-				val := make([]byte, 100000)
+				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
 				if err := store.Set(fmt.Sprintf("obj-%d", int(input.Meta.DiffRank) + i), "0", val); err != nil {
 					log.Error("Error on set obj-%d: %v", i, err)
