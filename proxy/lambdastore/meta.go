@@ -36,8 +36,6 @@ type Meta struct {
 	// Total size of snapshot for transmission.
 	SnapshotSize    uint64
 
-	// TODO: implement clock LRU
-
 	// Capacity of the instance.
 	Capacity        uint64
 

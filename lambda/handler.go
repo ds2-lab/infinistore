@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
@@ -12,7 +13,9 @@ import (
 
 	//	"github.com/wangaoone/s3gof3r"
 	"io"
+	"math/rand"
 	"net"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -36,6 +39,7 @@ var (
 
 	// Data storage
 	store   types.Storage = storage.New()
+	lineage types.Lineage
 	storeId uint64
 
 	// Proxy that links stores as a system
@@ -44,7 +48,7 @@ var (
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
 	mu  sync.RWMutex
-	log = &logger.ColorLogger{Level: logger.LOG_LEVEL_WARN}
+	log = &logger.ColorLogger{ Level: logger.LOG_LEVEL_INFO, Color: false }
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
 	pongLimiter = make(chan struct{}, 1)
@@ -59,19 +63,28 @@ func init() {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
 
+	storage.AWSRegion = AWS_REGION
+	store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+	lineage = store.(*storage.Storage)
+
 	collector.AWSRegion = AWS_REGION
-	collector.S3Bucket = S3S3_COLLECTOR_BUCKET
+	collector.S3Bucket = S3_COLLECTOR_BUCKET
+
+	migrator.AWSRegion = AWS_REGION
 }
 
 func getAwsReqId(ctx context.Context) string {
 	lc, ok := lambdacontext.FromContext(ctx)
-	if ok == false {
+	if !ok {
 		log.Debug("get lambda context failed %v", ok)
+	}
+	if lc == nil && DRY_RUN {
+		return "dryrun"
 	}
 	return lc.AwsRequestID
 }
 
-func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
+func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Meta, error) {
 	// gorouting start from 3
 
 	// Reset if necessary.
@@ -94,12 +107,13 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
+	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
 
 	// migration triggered lambda
 	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
-		return nil
+		return protocol.Meta{}, nil
 	}
 
 	// Check connection
@@ -109,7 +123,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	// Connect proxy and serve
 	if session.Connection == nil {
 		if err := connect(&input, session); err != nil {
-			return err
+			return protocol.Meta{}, err
 		}
 		// Cross session gorouting
 		go serve(session.Connection)
@@ -122,20 +136,47 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
-	// append PONG back to proxy on being triggered
-	pongHandler(session.Connection)
+
+	// Check consistency
+	var recoverErr chan error
+	if !input.IsPersistentEnabled() || lineage.IsConsistent(&input.Meta) {
+		// POND represents the node is ready to serve, no fast recovery required.
+		pongHandler(ctx, session.Connection, false)
+	} else {
+		var fast bool
+		session.Timeout.Busy()
+		fast, recoverErr = lineage.Recover(&input.Meta)
+		// POND represents the node is ready to serve, request fast recovery.
+		pongHandler(ctx, session.Connection, fast)
+	}
+
+	// Start tracking
+	if input.IsPersistentEnabled() {
+		lineage.TrackLineage()
+	}
 
 	// Start data collector
 	go collector.Collect(session)
 
+	// Wait until recovered to avoid timeout on recovery.
+	if recoverErr != nil {
+		for err := range recoverErr {
+			log.Warn("Error on recovering: %v", err)
+		}
+		session.Timeout.DoneBusy()
+	}
+
 	// Adaptive timeout control
-	wait(session, lifetime)
+	meta := wait(session, lifetime)
 	log.Debug("All routing cleared(%d) at %v", runtime.NumGoroutine(), session.Timeout.Since())
-	return nil
+	return *meta, nil
 }
 
 func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
 	if len(input.Proxy) == 0 {
+		if DRY_RUN {
+			return nil
+		}
 		return errors.New("No proxy specified.")
 	}
 
@@ -158,6 +199,10 @@ func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
 }
 
 func serve(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+
 	// Cross session gorouting
 	err := srv.ServeForeignClient(conn)
 	if err != nil && err != io.EOF {
@@ -195,15 +240,18 @@ func serve(conn net.Conn) {
 	}
 }
 
-func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
-	defer session.Clear.Wait()
+func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.Meta {
+	defer session.CleanUp.Wait()
 
 	select {
 	case <-session.WaitDone():
-		return
+		return nil
 	case <-session.Timeout.C():
 		// There's no turning back.
 		session.Timeout.Halt()
+
+		// Commit and wait, error will be logged.
+		lineage.Commit()
 
 		if lifetime.IsTimeUp() && store.Len() > 0 {
 			// Time to migrate
@@ -217,7 +265,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 			for err := session.Migrator.Initiate(initiator); err != nil; {
 				log.Warn("Fail to initiaiate migration: %v", err)
 				if err == types.ErrProxyClosing {
-					return
+					return nil
 				}
 
 				log.Warn("Retry migration")
@@ -226,11 +274,15 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 			log.Debug("Migration initiated.")
 		} else {
 			byeHandler(session.Connection)
+			// Finalize, this is quick usually.
+			meta := lineage.StopTracker()
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
-			return
+			return meta
 		}
 	}
+
+	return nil
 }
 
 func issuePong() {
@@ -244,12 +296,22 @@ func issuePong() {
 	}
 }
 
-func pongHandler(conn net.Conn) error {
+func pongHandler(ctx context.Context, conn net.Conn, recover bool) error {
+	if conn == nil && DRY_RUN {
+		log.Debug("Issue pong, request fast recovery: %v", recover)
+		ready := ctx.Value("ready")
+		close(ready.(chan struct{}))
+		return nil
+	}
 	writer := resp.NewResponseWriter(conn)
-	return pong(writer)
+	return pongImpl(writer, recover)
 }
 
 func pong(w resp.ResponseWriter) error {
+	return pongImpl(w, false)
+}
+
+func pongImpl(w resp.ResponseWriter, recover bool) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -260,8 +322,13 @@ func pong(w resp.ResponseWriter) error {
 		return nil
 	}
 
+	info := int64(storeId)
+	if recover {
+		info = -info
+	}
+
 	w.AppendBulkString("pong")
-	w.AppendInt(int64(storeId))
+	w.AppendInt(info)
 	if err := w.Flush(); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err
@@ -327,6 +394,10 @@ func initMigrateHandler(conn net.Conn) error {
 }
 
 func byeHandler(conn net.Conn) error {
+	if conn == nil && DRY_RUN {
+		log.Info("Bye")
+		return nil
+	}
 	writer := resp.NewResponseWriter(conn)
 	// init backup cmd
 	writer.AppendBulkString("bye")
@@ -688,6 +759,88 @@ func main() {
 			return
 		}
 	})
+
+	if DRY_RUN {
+		var printInfo bool
+		flag.BoolVar(&printInfo, "h", false, "Help info?")
+
+		flag.BoolVar(&DRY_RUN, "dryrun", false, "Dryrun on local.")
+
+		var input protocol.InputEvent
+		flag.StringVar(&input.Cmd, "cmd", "warmup", "Command to trigger")
+		flag.Uint64Var(&input.Id, "id", 1, "Node id")
+		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")
+		flag.IntVar(&input.Timeout, "timeout", 900, "Execution timeout")
+		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
+		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
+		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior")
+		flag.Uint64Var(&input.Meta.Term, "term", 0, "Lineage.Term")
+		flag.Uint64Var(&input.Meta.Updates, "updates", 0, "Lineage.Updates")
+		flag.Float64Var(&input.Meta.DiffRank, "diffrank", 0, "Difference rank")
+		flag.StringVar(&input.Meta.Hash, "hash", "", "Lineage.Hash")
+		flag.Uint64Var(&input.Meta.SnapshotTerm, "snapshot", 0, "Snapshot.Term")
+		flag.Uint64Var(&input.Meta.SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
+		flag.Uint64Var(&input.Meta.SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
+		flag.StringVar(&input.Meta.Tip, "tip", "", "Tips in http query format")
+
+		numToInsert := flag.Int("insert", 0, "Number of random items to be inserted on launch")
+
+		flag.Parse()
+
+		if printInfo {
+			fmt.Fprintf(os.Stderr, "Usage: ./lambda -dryrun [options]\n")
+			fmt.Fprintf(os.Stderr, "Available options:\n")
+			flag.PrintDefaults()
+			os.Exit(0)
+		}
+
+		if DRY_RUN {
+			d := time.Now().Add(time.Duration(input.Timeout) * time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(), d)
+
+			// Even though ctx will be expired, it is good practice to call its
+			// cancellation function in any case. Failure to do so may keep the
+			// context and its parent alive longer than necessary.
+			defer cancel()
+
+			start := time.Now()
+			log.Color = true
+			log.Verbose = true
+			store.(*storage.Storage).SetLogLevel(input.Log)
+
+			ready := make(chan struct{})
+			ctx = context.WithValue(ctx, "ready", ready)
+			go func() {
+				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
+				log.Info("Start dummy node: %s", lambdacontext.FunctionName)
+				output, err := HandleRequest(ctx, input)
+				if err != nil {
+					log.Error("Error: %v", err)
+				} else {
+					log.Info("Output: %v", output)
+				}
+				cancel()
+			}()
+
+			// Set data
+			<-ready
+			session := lambdaLife.GetOrCreateSession()
+			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
+			session.Timeout.Busy()
+			for i := 0; i < *numToInsert; i++ {
+				val := make([]byte, 100000)
+				rand.Read(val)
+				if err := store.Set(fmt.Sprintf("obj-%d", int(input.Meta.DiffRank) + i), "0", val); err != nil {
+					log.Error("Error on set obj-%d: %v", i, err)
+				}
+			}
+			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
+
+			<-ctx.Done()
+			log.Trace("Bill duration for dryrun: %v", time.Since(start))
+			return
+		}	// else: continue to try lambda.Start
+	}
 
 	// log.Debug("Routings on launching: %d", runtime.NumGoroutine())
 	lambda.Start(HandleRequest)

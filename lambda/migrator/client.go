@@ -19,11 +19,9 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
-const (
-	AWSRegion                      = "us-east-1"
-)
-
 var (
+	AWSRegion            string
+
 	log = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_INFO,
 	}

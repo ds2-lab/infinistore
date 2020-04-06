@@ -18,7 +18,7 @@ type Session struct {
 	Id        string
 	Input     *protocol.InputEvent
 	Requests  int
-	Clear     sync.WaitGroup
+	CleanUp   sync.WaitGroup
 	Migrator  *migrator.Client
 	Timeout   *Timeout
 	Connection net.Conn

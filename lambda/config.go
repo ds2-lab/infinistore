@@ -11,8 +11,10 @@ const (
 
 var (
 	AWS_REGION string
-	S3_COLLECTOR_BUCKET string      = "infinicache.collector"
-	S3_BACKUP_BUCKET string         = "infinicache.backup"
+	S3_COLLECTOR_BUCKET string      = "tianium.default"
+	S3_BACKUP_BUCKET string         = "tianium.infinicache"
+
+	DRY_RUN            = true
 )
 
 func init() {

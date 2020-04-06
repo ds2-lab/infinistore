@@ -1,56 +1,130 @@
 package storage
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	awsSession "github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo/resp"
+	"io"
+	"net/url"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
+const (
+	CHUNK_KEY = "%schunks/%s"
+	LINEAGE_KEY = "%s%s/lineage-%d"
+	SNAPSHOT_KEY = "%s%s/snapshot-%d.gz"
+)
+
+var (
+	AWSRegion      string
+	Backups        = 10
+
+	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
+)
+
+// Storage with lineage
 type Storage struct {
-	meta types.Meta
-	snapshot types.Meta
-	repo map[string]*types.Chunk
-	// TODO: implement an unbounded channel if neccessary
-	backpack Backpack
-	s3bucket string
-	chanLog chan *types.MetaLog
-	done chan struct{}
+	// IMOC repository, operations are supposed to be serialized.
+	// NOTE: If serialization of operations can not be guarenteed, reconsider the implementation
+	//       of "repo" and "mu"
+	repo       map[string]*types.Chunk
+	log        logger.ILogger
+
+	// Lineage
+	lineage    *types.LineageTerm
+	recovered  *types.LineageTerm
+	snapshot   *types.LineageTerm
+	diffrank   LineageDifferenceRank
+	getSafe		 chan struct{}
+	setSafe    chan struct{}
+	chanOps    chan *types.LineageOp    // NOTE: implement an unbounded channel if neccessary.
+	signalTracker chan bool
+	committed  chan struct{}
+	mu         sync.RWMutex             // Mutex for lienage commit.
+	notifier   map[string]chan *types.Chunk
+
+	// Persistent backpack
+	s3bucket   string
+	s3prefix   string
+	uploader   *s3manager.Uploader
 }
 
 func New() *Storage {
+	// Get is safe by default
+	getSafe := make(chan struct{})
+	close(getSafe)
 	return &Storage{
 		repo: make(map[string]*types.Chunk),
-		meta: types.Meta{
-			MetaLogs: make([]*types.MetaLog, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
+		getSafe: getSafe,
+		setSafe: make(chan struct{}),
+		lineage: &types.LineageTerm{
+			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
 		},
+		diffrank: NewSimpleDifferenceRank(Backups),
+		log: &logger.ColorLogger{ Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Storage:" },
+	}
+}
+
+func (s *Storage) SetLogLevel(lvl int) {
+	if colorLogger, ok := s.log.(*logger.ColorLogger); ok {
+		colorLogger.Level = lvl
+		colorLogger.Verbose = lvl == logger.LOG_LEVEL_ALL
 	}
 }
 
 // Storage Implementation
-
 func (s *Storage) Get(key string) (string, []byte, error) {
-	chunk, ok := s.repo[key]
-	if !ok || chunk.Body == nil {
-		return "", nil, types.ErrNotFound
-	}
+	<-s.getSafe
 
-	return chunk.Id, chunk.Access(), nil
-}
-
-func (s *Storage) Del(key string, chunkId string) error {
 	chunk, ok := s.repo[key]
 	if !ok {
-		return types.ErrNotFound
-	}
-	chunk.Access()
+		// No entry
+		return "", nil, types.ErrNotFound
+	} else if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
+		// Not recovering
+		if chunk.Body == nil {
+			return "", nil, types.ErrNotFound
+		} else {
+			return chunk.Id, chunk.Access(), nil
+		}
+	} else {
+		// Recovering, acquire lock
+		for !atomic.CompareAndSwapUint32(&chunk.Recovering, types.CHUNK_RECOVERING, types.CHUNK_LOCK) {
+			// Failed, check current status
+			if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
+				// Deleted item is not worth recovering.
+				return chunk.Id, chunk.Access(), nil
+			}
+			// Someone got lock, yield
+			runtime.Gosched()
+		}
+		// Lock acquired, register notifier
+		chanReady := make(chan *types.Chunk)
+		s.notifier[chunk.Key] = chanReady
+		// Release Lock
+		atomic.StoreUint32(&chunk.Recovering, types.CHUNK_RECOVERING)
 
-	chunk.Body = nil
-	return nil
+		// Wait for recovering, use chunk returned.
+		chunk = <-chanReady
+		return chunk.Id, chunk.Access(), nil
+	}
 }
 
 func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, error) {
@@ -63,16 +137,24 @@ func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, error) {
 }
 
 func (s *Storage) Set(key string, chunkId string, val []byte) error {
+	<-s.setSafe
+
+	// Lock lineage
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	chunk := types.NewChunk(chunkId, val)
 	chunk.Key = key
+	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
 	s.repo[key] = chunk
-	if s.chanLog != nil {
-		s.chanLog <- &types.MetaLog{
+	if s.chanOps != nil {
+		s.chanOps <- &types.LineageOp{
 			Op: types.OP_SET,
 			Key: key,
 			Id: chunkId,
-			Size: len(val),
-			Ret: make(chan error, 1),
+			Size: chunk.Size,
+			Accessed: chunk.Accessed,
+			// Ret: make(chan error, 1),
 		}
 	}
 	return nil
@@ -87,11 +169,44 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 	return s.Set(key, chunkId, val)
 }
 
+func (s *Storage) Del(key string, chunkId string) error {
+	<-s.setSafe
+
+	chunk, ok := s.repo[key]
+	if !ok {
+		return types.ErrNotFound
+	}
+
+	// Lock lineage
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Access()
+	chunk.Body = nil
+
+	if s.chanOps != nil {
+		s.chanOps <- &types.LineageOp{
+			Op: types.OP_DEL,
+			Key: key,
+			Id: chunkId,
+			Size: chunk.Size,
+			Accessed: chunk.Accessed,
+			// Ret: make(chan error, 1),
+		}
+	}
+	return nil
+}
+
 func (s *Storage) Len() int {
+	<-s.getSafe
+
 	return len(s.repo)
 }
 
 func (s *Storage) Keys() <-chan string {
+	<-s.getSafe
+
 	// Gather and send key list. We expected num of keys to be small
 	all := make([]*types.Chunk, 0, len(s.repo))
 	for _, chunk := range s.repo {
@@ -115,99 +230,700 @@ func (s *Storage) Keys() <-chan string {
 
 // Consensus Implementation
 
-func (s *Storage) SetS3Backpack(bucket string) Backpack {
+func (s *Storage) ConfigS3Lineage(bucket string, prefix string) {
 	s.s3bucket = bucket
-	s.backpack = s
-	return s
+	s.s3prefix = prefix
 }
 
 func (s *Storage) IsConsistent(meta *protocol.Meta) bool {
-	return s.meta.Term == meta.Term && s.meta.Hash == meta.Hash
+	return s.lineage.Term == meta.Term && s.lineage.Hash == meta.Hash
 }
 
-func (s *Storage) StartLogging(meta *protocol.Meta) {
-	if s.chanLog == nil {
-		s.done = make(chan struct{})
-		s.meta.MataLogs = s.meta.MetaLogs[:0] // reset metalogs
-		s.chanLog = make(chan *types.MetaLog, 10)
-		go s.StartLogging(meta)
+func (s *Storage) TrackLineage() {
+	if s.chanOps == nil {
+		s.lineage.Ops = s.lineage.Ops[:0] // reset metalogs
+		s.chanOps = make(chan *types.LineageOp, 10)
+		s.signalTracker = make(chan bool, 1)
+		s.committed = make(chan struct{})
+		close(s.setSafe)
+		go s.TrackLineage()
 		return
 	}
+
+	s.log.Debug("Tracking lineage...")
 
 	// Initialize s3 api
 	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
 		SharedConfigState: awsSession.SharedConfigEnable,
 		Config:            aws.Config{Region: aws.String(AWSRegion)},
 	}))
-	uploader := s3manager.NewUploader(sess)
+	s.uploader = s3manager.NewUploader(sess)
+	attemps := 3
 
+	var trackDuration time.Duration
 	for {
 		select {
-		case metaLog := <-s.chanLog:
-			if metaLog == nil {
+		case op := <-s.chanOps:
+			if op == nil {
 				// closed
-				s.chanLog = nil
-				close(s.done())
+				s.chanOps = nil
+				s.log.Trace("It took %v to track and persist chunks.", trackDuration)
 				return
 			}
 
+			s.log.Debug("Tracking incoming op: %v", op)
+			trackStart := time.Now()
+
 			// Upload to s3
-			_, body, err := s.GetStream(metaLog.Key)
-			if err != nil {
-				metaLog.Ret <- err
-				continue
+			var failure error
+			for i := 0; i < attemps; i++ {
+				if i > 0 {
+					s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
+				}
+
+				upParams := &s3manager.UploadInput{
+					Bucket: aws.String(s.s3bucket),
+					Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.Key)),
+					Body:   bytes.NewReader(s.repo[op.Key].Body),
+				}
+				// Perform an upload.
+				_, failure = s.uploader.Upload(upParams)
+				if failure != nil {
+					s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
+				} else {
+					// success
+					failure = nil
+					break
+				}
 			}
 
-			upParams := &s3manager.UploadInput{
-				Bucket: &s.bucket,
-				Key:    &metaLog.Key,
-				Body:   body,
-			}
-			// Perform an upload.
-			result, err := uploader.Upload(upParams)
-			body.Close()
-			if err != nil {
-				metaLog.Ret <- err
+			// Success?
+			if failure != nil {
+				s.log.Error("Failed to upload %s: %v", op.Key, failure)
+				// op.Ret <- failure
 			} else {
-				close(metaLog.Ret)
+				// Record after upload success, so if upload failed, the lineage will not have the operation.
+				s.lineage.Ops = append(s.lineage.Ops, *op)
+
+				// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
+				select {
+				case <-s.getSafe:
+					s.diffrank.AddOp(op)
+				default:
+					// Skip
+				}
+				// close(op.Ret)
+			}
+			trackDuration += time.Since(trackStart)
+		// The tracker will only be signaled after tracked all existing operations.
+		case full := <-s.signalTracker:
+			if len(s.chanOps) > 0 {
+				// We wait for chanOps get drained.
+				s.signalTracker <- full
+			} else {
+				s.doCommit(full)
 			}
 		}
 	}
 }
 
-func (s *Storage) Commit(full bool) *protocol.Meta {
-	if s.chanLog == nil {
-		return
+func (s *Storage) Commit() error {
+	if s.signalTracker == nil {
+		return ERR_TRACKER_NOT_STARTED
 	}
 
-	close(s.chanLog)
-	// wait for all done.
-	<-s.done
+	s.log.Debug("Commiting lineage.")
 
-	if len(s.meta.MetaLogs) > 0 {
-		// TODO implement metaLog
-		// s.metaLog(&s.meta)
-
-		if full {
-			// TODO implement metaSnapshot
-			// s.metaSnapshot()
-		}
+	// Are we goint to do the snapshot?
+	var snapshotTerm uint64
+	if s.snapshot != nil {
+		snapshotTerm = s.snapshot.Term
 	}
+	// For incompleted lineage recovery (s.recovered != nil), do not snapshot.
+	// On local laptop,
+	// it takes 1509 bytes and 3ms to snapshot 500 chunks and 125 bytes to persist one term, both gzipped,
+	// and it takes roughly same time to download a snapshot or up to 10 lineage terms.
+	// So snapshot every 5 - 10 terms will be appropriate.
+	// Hard-coded to 5, noted s.lineage.Term is one term smaller before commit
+	full := s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
 
-	return &protocol.Meta {
-		Term: s.meta.Term,
-		Updates: s.meta.Updates
-		Hash: s.meta.Hash
-		SnapShotTerm: s.snapshot.Term
-		SnapshotUpdates: s.snapshot.Updates
-		SnapshotSize: s.snapshot.Size
-	}
-}
+	// Signal and wait for committed.
+	s.signalTracker <- full
+	<-s.committed
 
-func (s *Storage) Recover(meta *protocol.Meta) error {
 	return nil
 }
 
-func (s *Storage) metaLog(meta *protocol.Meta) error {
+func (s *Storage) StopTracker() *protocol.Meta {
+	if s.signalTracker != nil {
+		// Signal for double check and wait for confirmation.
+		s.signalTracker <- false
+		<-s.committed
 
+		// Clean up
+		close(s.chanOps)
+		s.chanOps = nil
+		s.signalTracker = nil
+		s.committed = nil
+		s.uploader = nil
+	}
+
+	meta := &protocol.Meta {
+		Term: s.lineage.Term,
+		Updates: s.lineage.Updates,
+		DiffRank: s.diffrank.Rank(),
+		Hash: s.lineage.Hash,
+	}
+	if s.snapshot != nil {
+		meta.SnapshotTerm = s.snapshot.Term
+		meta.SnapshotUpdates = s.snapshot.Updates
+		meta.SnapshotSize = s.snapshot.Size
+	}
+	return meta
+}
+
+// Recover based on the term of specified meta.
+// We support partial recovery. Errors during recovery will be sent to returned channel.
+// The recovery ends if returned channel is closed.
+// If the first return value is false, no fast recovery is needed.
+func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
+	if s.IsConsistent(meta) {
+		return false, nil
+	}
+
+	tips, err := url.ParseQuery(meta.Tip)
+	if err != nil {
+		s.log.Warn("Invalid tips(%s) in protocol meta: %v", meta.Tip, err)
+	}
+
+	// Copy lineage data for recovery, update term to the recent record, and we are ready for write operatoins.
+	old := &types.LineageTerm{
+		Term: s.lineage.Term,
+		Updates: s.lineage.Updates,
+	}
+	s.lineage.Term = meta.Term
+	s.lineage.Updates = meta.Updates
+	s.lineage.Hash = meta.Hash
+
+	// Flag get as unsafe
+	s.getSafe = make(chan struct{})
+	chanErr := make(chan error, 1)
+	go s.doRecover(old, meta, tips, chanErr)
+
+	// Fast recovery if the node is not backup and significant enough.
+	return s.diffrank.IsSignificant(meta.DiffRank) && tips.Get(protocol.TIP_ID) == "", chanErr
+}
+
+func (s *Storage) doCommit(full bool) {
+	if len(s.lineage.Ops) > 0 {
+		snapshotted := false
+		var uploadedBytes uint64
+
+		start := time.Now()
+		term, err := s.doCommitTerm(s.lineage)
+		stop1 := time.Now()
+		if err != nil {
+			s.log.Warn("Failed to commit term %d: %v", term, err)
+		} else if full {
+			uploadedBytes += s.lineage.Size
+			err = s.doSnapshot(s.lineage)
+			if err != nil {
+				s.log.Warn("Failed to snapshot up to term %d: %v", term, err)
+			} else {
+				snapshotted = true
+				uploadedBytes += s.snapshot.Size
+			}
+		} else {
+			uploadedBytes += s.lineage.Size
+		}
+		end := time.Now()
+
+		// Can be other operations during persisting, signal tracker again.
+		// This time, ignore argument "full" if snapshotted.
+		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
+		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
+		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), uploadedBytes)
+		s.signalTracker <- full && !snapshotted
+	} else {
+		// No operation since last signal.This will be quick and we are ready to exit lambda.
+		// DO NOT close "committed", since there will be a double check on stoping the tracker.
+		s.log.Debug("No more term to commit, signal committed.")
+		s.committed <- struct{}{}
+	}
+}
+
+func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
+	// Lock local lineage
+	s.mu.Lock()
+
+	// Marshal ops first, so it can be reused largely in calculating hash and to be uploaded.
+	raw, err := binary.Marshal(lineage.Ops)
+	if err != nil {
+		s.mu.Unlock()
+		return lineage.Term + 1, err
+	}
+
+	// Construct the term.
+	term := &types.LineageTerm{
+		Term: lineage.Term + 1,
+		Updates: lineage.Updates, // Stores "Updates" of the last term, don't forget to fix this on recovery.
+		RawOps: raw,
+	}
+	hash := new(bytes.Buffer)
+	hashBinder := binary.NewEncoder(hash)
+	hashBinder.WriteUint64(term.Term)
+	hashBinder.WriteUint64(term.Updates)
+	hashBinder.Write(term.RawOps)
+	hashBinder.Write([]byte(lineage.Hash))
+	term.Hash = fmt.Sprintf("%x", sha256.Sum256(hash.Bytes()))
+
+	// Zip and marshal the term.
+	buf := new(bytes.Buffer)
+	zipWriter := gzip.NewWriter(buf)
+	if err := binary.MarshalTo(term, zipWriter); err != nil {
+		s.mu.Unlock()
+		return term.Term, err
+	}
+	if err := zipWriter.Close(); err != nil {
+		s.mu.Unlock()
+		return term.Term, err
+	}
+
+	// Update local lineage. Size must be updated before used for uploading.
+	lineage.Size = uint64(buf.Len())
+	lineage.Ops = lineage.Ops[:0]
+	lineage.Term = term.Term
+	lineage.Updates += lineage.Size   // Fix local "Updates"
+	lineage.Hash = term.Hash
+	lineage.DiffRank = s.diffrank.Rank() // Store for snapshot use.
+	// Unlock lineage, the storage can server next term while uploading
+	s.mu.Unlock()
+
+	// Upload
+	params := &s3manager.UploadInput{
+		Bucket: &s.s3bucket,
+		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, term.Term)),
+		Body:   buf,
+	}
+	_, err = s.uploader.Upload(params)
+	if err != nil {
+		// TODO: Pending and retry at a later time.
+		return term.Term, err
+	}
+
+	return term.Term, nil
+}
+
+func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
+	start := time.Now()
+	// Construct object list.
+	allOps := make([]types.LineageOp, 0, len(s.repo))
+	for _, chunk := range s.repo {
+		if chunk.Term <= lineage.Term {
+			allOps = append(allOps, types.LineageOp{
+				Op: chunk.Op(),
+				Key: chunk.Key,
+				Id: chunk.Id,
+				Size: chunk.Size,
+			})
+		}
+	}
+
+	// Construct the snapshot.
+	ss := &types.LineageTerm{
+		Term: lineage.Term,
+		Updates: lineage.Updates,
+		Ops: allOps,
+		Hash: lineage.Hash,
+		DiffRank: lineage.DiffRank,
+	}
+
+	// Zip and marshal the snapshot.
+	buf := new(bytes.Buffer)
+	zipWriter := gzip.NewWriter(buf)
+	if err := binary.MarshalTo(ss, zipWriter); err != nil {
+		return err
+	}
+	if err := zipWriter.Close(); err != nil {
+		return err
+	}
+	// Release "Ops" and update size. Size must be updated before used for uploading.
+	ss.Ops = nil
+	ss.Size = uint64(buf.Len())
+
+	s.log.Trace("It took %v to snapshot %d chunks.", time.Since(start), len(allOps))
+
+	// Persists.
+	params := &s3manager.UploadInput{
+		Bucket: &s.s3bucket,
+		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
+		Body:   buf,
+	}
+	if _, err := s.uploader.Upload(params); err != nil {
+		// TODO: Add retrial
+		return err
+	}
+	s.log.Debug("buflen: %v", buf.Len())
+
+	// Update local snapshot.
+	s.snapshot = ss
+
+	return nil
+}
+
+func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tips url.Values, chanErr chan error) {
+	// Initialize s3 api
+	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
+		SharedConfigState: awsSession.SharedConfigEnable,
+		Config:            aws.Config{Region: aws.String(AWSRegion)},
+	}))
+	downloader := s3manager.NewDownloader(sess)
+
+	// Recover lineage
+	start := time.Now()
+	receivedBytes, terms, numOps, err := s.doRecoverLineage(lineage, meta, downloader)
+	if err != nil {
+		chanErr <- err
+		if lineage == nil {
+			// Unable to continue, stop
+			close(s.getSafe)
+			close(chanErr)
+			return
+		}
+		// Continue to recover anything in lineage.
+	}
+	stop1 := time.Now()
+
+	if len(terms) == 0 {
+		// No term recovered
+		s.recovered = lineage   // Flag for incomplete recovery
+		s.log.Error("No term is recovered.")
+
+		close(s.getSafe)
+		close(chanErr)
+		return
+	}
+
+	// Replay lineage
+	tbd := s.doReplayLineage(meta, tips, terms, numOps)
+	// Now get is safe
+	close(s.getSafe)
+
+	stop2 := time.Now()
+	if len(tbd) > 0 {
+		if n, err := s.doRecoverObjects(tbd, downloader); err != nil {
+			chanErr <- err
+			receivedBytes += n
+		} else {
+			receivedBytes += n
+		}
+	}
+	end := time.Now()
+
+	s.notifier = nil
+	s.log.Debug("End recovery")
+	s.log.Trace("action,lineage,objects,elapsed,bytes")
+	s.log.Trace("recover,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop2), end.Sub(start), receivedBytes)
+	close(chanErr)
+}
+
+func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader *s3manager.Downloader) (int, []*types.LineageTerm, int, error) {
+	// meta.Updates - meta.SnapshotUpdates + meta.SnapshotSize < meta.Updates - lineage.Updates
+	baseTerm := lineage.Term
+	snapshot := false
+	if meta.SnapshotUpdates - meta.SnapshotSize > lineage.Updates {
+		// Recover lineage from snapshot
+		baseTerm = meta.SnapshotTerm - 1
+		snapshot = true
+		s.log.Info("Recovering from snapshot of term %d to term %d", meta.SnapshotTerm, meta.Term)
+	} else {
+		s.log.Info("Recovering from term %d to term %d", lineage.Term, meta.Term)
+	}
+
+	// Setup receivers
+	inputs := make([]s3manager.BatchDownloadObject, meta.Term - baseTerm)
+	receivedFlags := make([]bool, len(inputs))
+	receivedTerms := make([]*types.LineageTerm, 0, len(inputs))
+	chanNotify := make(chan int, len(inputs))
+	chanError := make(chan error)
+	from := 0
+	received := 0
+	receivedBytes := 0
+	receivedOps := 0
+
+	// Setup input for snapshot downloading.
+	if snapshot {
+		inputs[0].Object = &s3.GetObjectInput {
+			Bucket: aws.String(s.s3bucket),
+			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + 1)), // meta.SnapshotTerm
+		}
+		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
+		inputs[0].After = s.getReadyNotifier(0, chanNotify)
+		// Skip 0
+		from++
+	}
+	// Setup inputs for terms downloading.
+	for from < len(inputs) {
+		inputs[from].Object = &s3.GetObjectInput {
+			Bucket: aws.String(s.s3bucket),
+			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + uint64(from) + 1)),
+		}
+		inputs[from].Writer = new(aws.WriteAtBuffer)
+		inputs[from].After = s.getReadyNotifier(from, chanNotify)
+		from++
+	}
+
+	// Start downloading.
+	go func() {
+		iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
+		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), iter); err != nil {
+			chanError <- err
+		}
+	}()
+
+	// Wait for snapshot and lineage terms.
+	for received < len(inputs) {
+		select {
+		case err := <-chanError:
+			return receivedBytes, receivedTerms, receivedOps, err
+		case idx := <-chanNotify:
+			receivedFlags[idx] = true
+			for received < len(inputs) && receivedFlags[received] {
+				raw := inputs[idx].Writer.(*aws.WriteAtBuffer).Bytes()
+				if len(raw) == 0 {
+					// Something wrong, reset receivedFlags and wait for error
+					receivedFlags[idx] = false
+					break
+				}
+				receivedBytes += len(raw)
+
+				// Unzip
+				zipReader, err := gzip.NewReader(bytes.NewReader(raw))
+				if err != nil {
+					return receivedBytes, receivedTerms, receivedOps, err
+				}
+
+				rawTerm := new(bytes.Buffer)
+				if _, err := io.Copy(rawTerm, zipReader); err != nil {
+					return receivedBytes, receivedTerms, receivedOps, err
+				}
+				if err := zipReader.Close(); err != nil {
+					return receivedBytes, receivedTerms, receivedOps, err
+				}
+
+				// Unmarshal
+				var term types.LineageTerm
+				if err := binary.Unmarshal(rawTerm.Bytes(), &term); err != nil {
+					return receivedBytes, receivedTerms, receivedOps, err
+				}
+
+				// Fix values
+				term.Size = uint64(len(raw))
+				if term.RawOps != nil {
+					// Lineage terms have field "rawOps"
+					term.Ops = make([]types.LineageOp, 1)
+					if err := binary.Unmarshal(term.RawOps, &term.Ops); err != nil {
+						return receivedBytes, receivedTerms, receivedOps, err
+					}
+					// Fix "Updates"
+					term.RawOps = nil   // Release
+					term.Updates += term.Size
+				}
+
+				// Collect terms
+				receivedTerms = append(receivedTerms, &term)
+
+				received++
+				receivedOps += len(term.Ops)
+			}
+		}
+	}
+	return receivedBytes, receivedTerms, receivedOps, nil
+}
+
+func (s *Storage) doReplayLineage(meta *protocol.Meta, tips url.Values, terms []*types.LineageTerm, numOps int) []*types.Chunk {
+	var fromSnapshot uint64
+	if terms[0].DiffRank > 0 {
+		// Recover start with a snapshot
+		fromSnapshot = terms[0].Term
+		numOps -= len(s.repo)      // Because snapshot includes what have been in repo, exclued them as estimation.
+	}
+	tbd := make([]*types.Chunk, 0, numOps)  // To be downloaded. Initial capacity is estimated by the # of ops.
+
+	s.mu.Lock()
+  defer s.mu.Unlock()
+
+	// Deal with the key that is currently serving.
+	if serving_key := tips.Get(protocol.TIP_SERVING_KEY); serving_key != "" {
+		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
+		if chunk, existed := s.repo[serving_key]; !existed {
+			chunk = &types.Chunk{
+				Key: serving_key,
+				Body: nil,
+				Recovering: 1,
+			}
+			// Occupy the repository, details will be filled later.
+			s.repo[serving_key] = chunk
+			// Add to head so it will be load first, no duplication is possible because it is inserted to repository.
+			tbd = append(tbd, chunk)
+		}
+	}
+	// Replay operations
+	if fromSnapshot > 0 {
+		// Diffrank is supposed to be a moving value, we should replay it as long as possible.
+		s.diffrank.Reset(terms[0].DiffRank)	// Reset diffrank if recover from the snapshot
+	}
+	for _, term := range terms {
+		for i := 0; i < len(term.Ops); i++ {
+			op := &term.Ops[i]
+
+			// Replay diffrank, skip ops in snapshot.
+			// Condition: !fromSnapshot || term.Term > meta.SnapshotTerm
+			if term.Term > fromSnapshot {   // Simplified.
+				s.diffrank.AddOp(op)
+			}
+
+			if chunk, existed := s.repo[op.Key]; existed {
+				if chunk.Term > s.lineage.Term {
+					// Skip new incoming write operations during recovery.
+					continue
+				}
+				if op.Op == types.OP_DEL {
+					chunk.Body = nil
+					chunk.Recovering = 0   // Reset in case it is the serving_key despite unlikely.
+				} else if chunk.Body == nil && chunk.Recovering == 0 {
+					// Deal with reset after deletion
+					// TODO: eliminate duplication
+					chunk.Recovering = 1
+					tbd = append(tbd, chunk)
+				}
+				// Updaet data anyway.
+				chunk.Id = op.Id
+				chunk.Size = op.Size
+				chunk.Term = term.Term
+				chunk.Accessed = op.Accessed
+			} else {
+				// TODO: Filter based on TIP_ID
+				chunk := &types.Chunk{
+					Key: op.Key,
+					Id: op.Id,
+					Body: nil,
+					Size: op.Size,
+					Term: term.Term,
+					Accessed: op.Accessed,
+				}
+				if op.Op != types.OP_DEL {
+					chunk.Recovering = 1
+					tbd = append(tbd, chunk)
+				}
+				s.repo[op.Key] = chunk
+			}
+		}
+
+		// Passing by, update local snapshot
+		if term.Term == meta.SnapshotTerm {
+			if s.snapshot == nil {
+				s.snapshot = &types.LineageTerm{}
+			}
+			s.snapshot.Term = term.Term
+			s.snapshot.Updates = term.Updates // Assert: fixed in doRecoverLineage
+			s.snapshot.Hash = term.Hash
+			if fromSnapshot > 0 {
+				s.snapshot.Size = term.Size     // Use real value
+			} else {
+				s.snapshot.Size = meta.SnapshotSize  // We didn't start from a snapshot, copy passed from the proxy.
+			}
+			s.snapshot.DiffRank = s.diffrank.Rank()
+		}
+	}
+
+	// Update local lineage.
+	lastTerm := terms[len(terms) - 1]
+	if lastTerm.Term < meta.Term {
+		// Incomplete recovery, store result to s.recovered.
+		s.recovered = lastTerm
+		s.log.Error("Incomplete recovery up to term %d.", lastTerm.Term)
+	} else {
+		// Complete. Term has been updated on calling "Recover".
+		s.recovered = nil
+		s.lineage.Updates = lastTerm.Updates
+		s.lineage.Hash = lastTerm.Hash
+		s.lineage.Size = lastTerm.Size
+	}
+	// Replay ops in current term
+	for i := 0; i < len(s.lineage.Ops); i++ {
+		s.diffrank.AddOp(&s.lineage.Ops[i])
+	}
+	// Initialize notifier if neccessary
+	if len(tbd) > 0 {
+		s.notifier = make(map[string]chan *types.Chunk)
+	}
+
+	return tbd
+}
+
+func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader *s3manager.Downloader) (int, error) {
+	// Setup receivers
+	inputs := make([]s3manager.BatchDownloadObject, len(tbd))
+	chanNotify := make(chan int, len(inputs))
+	chanError := make(chan error)
+	succeed := 0
+	received := 0
+	receivedBytes := 0
+
+	// Setup inputs for terms downloading.
+	for i := 0; i < len(inputs); i++ {
+		inputs[i].Object = &s3.GetObjectInput {
+			Bucket: aws.String(s.s3bucket),
+			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbd[i].Key)),
+		}
+		// tbd[i].Body = make([]byte, 0)
+		inputs[i].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(tbd[i].Body)
+		inputs[i].After = s.getReadyNotifier(i, chanNotify)
+	}
+
+	// Start downloading.
+	go func() {
+		iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
+		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), iter); err != nil {
+			s.log.Error("error on download objects: %v", err)
+			chanError <- err
+		}
+	}()
+
+	// Wait for objects, if all is not successful, wait for err.
+	for received < len(inputs) || succeed < len(inputs) {
+		select {
+		case err := <-chanError:
+			return receivedBytes, err
+		case idx := <-chanNotify:
+			received++
+			buffer := inputs[idx].Writer.(*aws.WriteAtBuffer)
+			if uint64(len(buffer.Bytes())) == tbd[idx].Size {
+				succeed++
+				tbd[idx].Body = buffer.Bytes()
+			}
+			receivedBytes += len(tbd[idx].Body)
+
+			// Reset "Recovering" status
+			// Acquire lock
+			for !atomic.CompareAndSwapUint32(&tbd[idx].Recovering, types.CHUNK_RECOVERING, types.CHUNK_LOCK) {
+				// Someone got lock, yield and retry.
+				runtime.Gosched()
+			}
+			// Lock acquired, notify.
+			if chanReady, existed := s.notifier[tbd[idx].Key]; existed {
+				chanReady <- tbd[idx]
+			}
+			atomic.StoreUint32(&tbd[idx].Recovering, types.CHUNK_OK)
+		}
+	}
+	return receivedBytes, nil
+}
+
+func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {
+	return func() error {
+		chanNotify <- i
+		return nil
+	}
 }

@@ -17,11 +17,6 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 )
 
-const (
-	AWSRegion                      = "us-east-1"
-	S3BUCKET                       = "mason-leap-lab.infinicache"
-)
-
 var (
 	AWSRegion      string
 	S3Bucket       string
@@ -56,8 +51,8 @@ func Send(entry *types.DataEntry) {
 }
 
 func Collect(session *lifetime.Session) {
-	session.Clear.Add(1)
-	defer session.Clear.Done()
+	session.CleanUp.Add(1)
+	defer session.CleanUp.Done()
 
 	for {
 		select {
@@ -74,7 +69,7 @@ func Save(l *lifetime.Lifetime) {
 	// Wait for data depository.
 	dataDeposited.Wait()
 
-	var data bytes.Buffer
+	data := new(bytes.Buffer)
 	for _, entry := range dataDepository {
 		data.WriteString(fmt.Sprintf("%d,%s,%s,%s,%d,%d,%d,%s,%s,%s\n",
 			entry.Op, entry.ReqId, entry.ChunkId, entry.Status,
