@@ -35,6 +35,7 @@ const (
 var (
 	AWSRegion      string
 	Backups        = 10
+	Concurrency    = 5
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -63,6 +64,7 @@ type Storage struct {
 	// Persistent backpack
 	s3bucket   string
 	s3prefix   string
+	awsSession *awsSession.Session
 	uploader   *s3manager.Uploader
 }
 
@@ -235,6 +237,16 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) {
 	s.s3prefix = prefix
 }
 
+func (s *Storage) GetAWSSession() *awsSession.Session {
+	if s.awsSession == nil {
+		s.awsSession = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
+			SharedConfigState: awsSession.SharedConfigEnable,
+			Config:            aws.Config{Region: aws.String(AWSRegion)},
+		}))
+	}
+	return s.awsSession
+}
+
 func (s *Storage) IsConsistent(meta *protocol.Meta) bool {
 	return s.lineage.Term == meta.Term && s.lineage.Hash == meta.Hash
 }
@@ -252,12 +264,8 @@ func (s *Storage) TrackLineage() {
 
 	s.log.Debug("Tracking lineage...")
 
-	// Initialize s3 api
-	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-		SharedConfigState: awsSession.SharedConfigEnable,
-		Config:            aws.Config{Region: aws.String(AWSRegion)},
-	}))
-	s.uploader = s3manager.NewUploader(sess)
+	// Initialize s3 uploader
+	s.uploader = s3manager.NewUploader(s.GetAWSSession())
 	attemps := 3
 
 	var trackDuration time.Duration
@@ -573,11 +581,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
 
 func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tips url.Values, chanErr chan error) {
 	// Initialize s3 api
-	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-		SharedConfigState: awsSession.SharedConfigEnable,
-		Config:            aws.Config{Region: aws.String(AWSRegion)},
-	}))
-	downloader := s3manager.NewDownloader(sess)
+	downloader := s.getS3Downloader(false)
 
 	// Recover lineage
 	start := time.Now()
@@ -627,7 +631,7 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tip
 	close(chanErr)
 }
 
-func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader *s3manager.Downloader) (int, []*types.LineageTerm, int, error) {
+func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader S3Downloader) (int, []*types.LineageTerm, int, error) {
 	// meta.Updates - meta.SnapshotUpdates + meta.SnapshotSize < meta.Updates - lineage.Updates
 	baseTerm := lineage.Term
 	snapshot := false
@@ -641,7 +645,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	}
 
 	// Setup receivers
-	inputs := make([]s3manager.BatchDownloadObject, meta.Term - baseTerm)
+	inputs := make([]S3BatchDownloadObject, meta.Term - baseTerm)
 	receivedFlags := make([]bool, len(inputs))
 	receivedTerms := make([]*types.LineageTerm, 0, len(inputs))
 	chanNotify := make(chan int, len(inputs))
@@ -659,6 +663,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 		}
 		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
 		inputs[0].After = s.getReadyNotifier(0, chanNotify)
+		inputs[0].Small = true
 		// Skip 0
 		from++
 	}
@@ -670,13 +675,14 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 		}
 		inputs[from].Writer = new(aws.WriteAtBuffer)
 		inputs[from].After = s.getReadyNotifier(from, chanNotify)
+		inputs[from].Small = true
 		from++
 	}
 
 	// Start downloading.
 	go func() {
-		iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
-		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), iter); err != nil {
+		// iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
+		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), inputs, true); err != nil {
 			chanError <- err
 		}
 	}()
@@ -689,10 +695,10 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 		case idx := <-chanNotify:
 			receivedFlags[idx] = true
 			for received < len(inputs) && receivedFlags[received] {
-				raw := inputs[idx].Writer.(*aws.WriteAtBuffer).Bytes()
+				raw := inputs[received].Writer.(*aws.WriteAtBuffer).Bytes()
 				if len(raw) == 0 {
 					// Something wrong, reset receivedFlags and wait for error
-					receivedFlags[idx] = false
+					receivedFlags[received] = false
 					break
 				}
 				receivedBytes += len(raw)
@@ -842,7 +848,7 @@ func (s *Storage) doReplayLineage(meta *protocol.Meta, tips url.Values, terms []
 	if lastTerm.Term < meta.Term {
 		// Incomplete recovery, store result to s.recovered.
 		s.recovered = lastTerm
-		s.log.Error("Incomplete recovery up to term %d.", lastTerm.Term)
+		s.log.Error("Incomplete recovery up to term %d: %v", lastTerm.Term, terms)
 	} else {
 		// Complete. Term has been updated on calling "Recover".
 		s.recovered = nil
@@ -862,9 +868,9 @@ func (s *Storage) doReplayLineage(meta *protocol.Meta, tips url.Values, terms []
 	return tbd
 }
 
-func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader *s3manager.Downloader) (int, error) {
+func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) (int, error) {
 	// Setup receivers
-	inputs := make([]s3manager.BatchDownloadObject, len(tbd))
+	inputs := make([]S3BatchDownloadObject, len(tbd))
 	chanNotify := make(chan int, len(inputs))
 	chanError := make(chan error)
 	succeed := 0
@@ -880,12 +886,15 @@ func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader *s3manager.Dow
 		// tbd[i].Body = make([]byte, 0)
 		inputs[i].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(tbd[i].Body)
 		inputs[i].After = s.getReadyNotifier(i, chanNotify)
+		if tbd[i].Size > downloader.GetDownloadPartSize() {
+			inputs[i].Small = false
+		}
 	}
 
 	// Start downloading.
 	go func() {
-		iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
-		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), iter); err != nil {
+		// iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
+		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), inputs); err != nil {
 			s.log.Error("error on download objects: %v", err)
 			chanError <- err
 		}
@@ -925,5 +934,110 @@ func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {
 	return func() error {
 		chanNotify <- i
 		return nil
+	}
+}
+
+// S3 Downloader Optimization
+// Because the minimum concurrent download unit for aws download api is 5M,
+// this optimization will effectively lower this limit for batch downloading
+type S3Downloader []*s3manager.Downloader
+
+type S3BatchDownloadObject struct {
+	Object *s3.GetObjectInput
+	Writer io.WriterAt
+	After func() error
+	Small bool
+}
+
+func (s *Storage) getS3Downloader(smallOnly bool) S3Downloader{
+	num := Concurrency
+	if !smallOnly {
+		num += 1	// Add 1 more downloader for large objects
+	}
+
+	downloader := make([]*s3manager.Downloader, num)
+	// Initialize downloaders for small object
+	for i := 0; i < Concurrency; i++ {
+		downloader[i] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+			d.Concurrency = 1
+		})
+	}
+	// Initialize the downloader for large object
+	if !smallOnly {
+		downloader[Concurrency] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+			d.Concurrency = Concurrency
+		})
+	}
+	return downloader
+}
+
+func (d S3Downloader) GetDownloadPartSize() uint64 {
+	if len(d) > Concurrency {
+		return uint64(d[Concurrency].PartSize)
+	} else {
+		return uint64(s3manager.DefaultDownloadPartSize)
+	}
+}
+
+func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownloadObject, opts ...interface{}) error {
+	smallOnly := len(opts) > 0 && opts[0].(bool)
+
+	var wg sync.WaitGroup
+	var errs []s3manager.Error
+	chanErr := make(chan s3manager.Error, 1)
+	chanSmall := make(chan *S3BatchDownloadObject, Concurrency)
+	var chanLarge chan *S3BatchDownloadObject
+	// Launch small object downloaders
+	for i := 0; i < Concurrency; i++ {
+		go d.Download(d[i], chanSmall, chanErr, &wg)
+	}
+	// Launch large object downloaders
+	if !smallOnly && len(d) > Concurrency {
+		chanLarge = make(chan *S3BatchDownloadObject, 1)
+		go d.Download(d[Concurrency], chanLarge, chanErr, &wg)
+	}
+	// Collect errors
+	go func() {
+		for err := range chanErr {
+			errs = append(errs, err)
+		}
+	}()
+
+	for i := 0; i < len(iter); i++ {
+		if iter[i].Small {
+			chanSmall <- &iter[i]
+		} else {
+			chanLarge <- &iter[i]
+		}
+	}
+	close(chanSmall)
+	if chanLarge != nil {
+		close(chanLarge)
+	}
+
+	wg.Wait()
+	close(chanErr)
+	if len(errs) > 0 {
+		return s3manager.NewBatchError("BatchedDownloadIncomplete", "some objects have failed to download.", errs)
+	}
+	return nil
+}
+
+func (d S3Downloader) Download(downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	for object := range ch {
+		if _, err := downloader.Download(object.Writer, object.Object); err != nil {
+			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+		}
+
+		if object.After == nil {
+			continue
+		}
+
+		if err := object.After(); err != nil {
+			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+		}
 	}
 }

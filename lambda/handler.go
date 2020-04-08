@@ -785,6 +785,7 @@ func main() {
 
 		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
+		concurrency := flag.Int("c", 5, "Concurrency of recovery")
 
 		flag.Parse()
 
@@ -808,6 +809,7 @@ func main() {
 			log.Color = true
 			log.Verbose = true
 			store.(*storage.Storage).SetLogLevel(input.Log)
+			storage.Concurrency = *concurrency
 
 			ready := make(chan struct{})
 			ctx = context.WithValue(ctx, "ready", ready)
