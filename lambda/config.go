@@ -12,7 +12,7 @@ const (
 var (
 	AWS_REGION string
 	S3_COLLECTOR_BUCKET string      = "tianium.default"
-	S3_BACKUP_BUCKET string         = "tianium.infinicache"
+	S3_BACKUP_BUCKET string         = "tianium.infinicache%s"
 
 	DRY_RUN            = true
 )

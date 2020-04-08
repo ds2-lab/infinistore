@@ -17,8 +17,10 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"net/url"
+	"math/rand"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +39,7 @@ var (
 	AWSRegion      string
 	Backups        = 10
 	Concurrency    = 5
+	Buckets        = 10
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -64,6 +67,7 @@ type Storage struct {
 
 	// Persistent backpack
 	s3bucket   string
+	s3bucketDefault string
 	s3prefix   string
 	awsSession *awsSession.Session
 	uploader   *s3manager.Uploader
@@ -149,6 +153,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) error {
 	chunk := types.NewChunk(chunkId, val)
 	chunk.Key = key
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Bucket = fmt.Sprintf(s.s3bucket, strconv.Itoa(rand.Int() % Buckets))
 	s.repo[key] = chunk
 	if s.chanOps != nil {
 		s.chanOps <- &types.LineageOp{
@@ -158,6 +163,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) error {
 			Size: chunk.Size,
 			Accessed: chunk.Accessed,
 			// Ret: make(chan error, 1),
+			Bucket: chunk.Bucket,
 		}
 	}
 	return nil
@@ -196,6 +202,7 @@ func (s *Storage) Del(key string, chunkId string) error {
 			Size: chunk.Size,
 			Accessed: chunk.Accessed,
 			// Ret: make(chan error, 1),
+			Bucket: chunk.Bucket,
 		}
 	}
 	return nil
@@ -235,6 +242,7 @@ func (s *Storage) Keys() <-chan string {
 
 func (s *Storage) ConfigS3Lineage(bucket string, prefix string) {
 	s.s3bucket = bucket
+	s.s3bucketDefault = fmt.Sprintf(bucket, "")
 	s.s3prefix = prefix
 }
 
@@ -254,10 +262,11 @@ func (s *Storage) IsConsistent(meta *protocol.Meta) bool {
 
 func (s *Storage) TrackLineage() {
 	if s.chanOps == nil {
-		s.lineage.Ops = s.lineage.Ops[:0] // reset metalogs
+		s.lineage.Ops = s.lineage.Ops[:0] // Reset metalogs
 		s.chanOps = make(chan *types.LineageOp, 10)
 		s.signalTracker = make(chan bool, 1)
 		s.committed = make(chan struct{})
+		rand.Seed(time.Now().UnixNano()) // Reseed random.
 		close(s.setSafe)
 		go s.TrackLineage()
 		return
@@ -291,7 +300,7 @@ func (s *Storage) TrackLineage() {
 				}
 
 				upParams := &s3manager.UploadInput{
-					Bucket: aws.String(s.s3bucket),
+					Bucket: aws.String(op.Bucket),
 					Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.Key)),
 					Body:   bytes.NewReader(s.repo[op.Key].Body),
 				}
@@ -510,7 +519,7 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
 
 	// Upload
 	params := &s3manager.UploadInput{
-		Bucket: &s.s3bucket,
+		Bucket: aws.String(s.s3bucketDefault),
 		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, term.Term)),
 		Body:   buf,
 	}
@@ -564,7 +573,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
 
 	// Persists.
 	params := &s3manager.UploadInput{
-		Bucket: &s.s3bucket,
+		Bucket: aws.String(s.s3bucket),
 		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
 		Body:   buf,
 	}
@@ -659,7 +668,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	// Setup input for snapshot downloading.
 	if snapshot {
 		inputs[0].Object = &s3.GetObjectInput {
-			Bucket: aws.String(s.s3bucket),
+			Bucket: aws.String(s.s3bucketDefault),
 			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + 1)), // meta.SnapshotTerm
 		}
 		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
@@ -671,7 +680,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	// Setup inputs for terms downloading.
 	for from < len(inputs) {
 		inputs[from].Object = &s3.GetObjectInput {
-			Bucket: aws.String(s.s3bucket),
+			Bucket: aws.String(s.s3bucketDefault),
 			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + uint64(from) + 1)),
 		}
 		inputs[from].Writer = new(aws.WriteAtBuffer)
@@ -811,6 +820,7 @@ func (s *Storage) doReplayLineage(meta *protocol.Meta, tips url.Values, terms []
 				chunk.Size = op.Size
 				chunk.Term = term.Term
 				chunk.Accessed = op.Accessed
+				chunk.Bucket = op.Bucket
 			} else {
 				// TODO: Filter based on TIP_ID
 				chunk := &types.Chunk{
@@ -820,6 +830,7 @@ func (s *Storage) doReplayLineage(meta *protocol.Meta, tips url.Values, terms []
 					Size: op.Size,
 					Term: term.Term,
 					Accessed: op.Accessed,
+					Bucket: op.Bucket,
 				}
 				if op.Op != types.OP_DEL {
 					chunk.Recovering = 1
@@ -882,8 +893,12 @@ func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) 
 
 	// Setup inputs for terms downloading.
 	for i := 0; i < len(inputs); i++ {
+		bucket := tbd[i].Bucket
+		if bucket == "" {
+			bucket = s.s3bucketDefault
+		}
 		inputs[i].Object = &s3.GetObjectInput {
-			Bucket: aws.String(s.s3bucket),
+			Bucket: aws.String(bucket),
 			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbd[i].Key)),
 		}
 		// tbd[i].Body = make([]byte, 0)

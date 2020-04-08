@@ -64,6 +64,7 @@ type LineageOp struct {
 	Size     uint64     // Size of the object
 	Accessed time.Time
 	// Ret      chan error
+	Bucket   string
 }
 
 // For storage
@@ -75,6 +76,7 @@ type Chunk struct {
 	Term     uint64     // Lineage term of last write operation.
 	Recovering uint32   // Recovering
 	Accessed time.Time
+	Bucket   string
 }
 
 func NewChunk(id string, body []byte) *Chunk {
