@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -682,7 +683,9 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	// Start downloading.
 	go func() {
 		// iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
-		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), inputs, true); err != nil {
+		ctx := aws.BackgroundContext()
+		ctx = context.WithValue(ctx, "log", s.log)
+		if err := downloader.DownloadWithIterator(ctx, inputs, true); err != nil {
 			chanError <- err
 		}
 	}()
@@ -886,15 +889,17 @@ func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) 
 		// tbd[i].Body = make([]byte, 0)
 		inputs[i].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(tbd[i].Body)
 		inputs[i].After = s.getReadyNotifier(i, chanNotify)
-		if tbd[i].Size > downloader.GetDownloadPartSize() {
-			inputs[i].Small = false
+		if tbd[i].Size <= downloader.GetDownloadPartSize() {
+			inputs[i].Small = true
 		}
 	}
 
 	// Start downloading.
 	go func() {
 		// iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
-		if err := downloader.DownloadWithIterator(aws.BackgroundContext(), inputs); err != nil {
+		ctx := aws.BackgroundContext()
+		ctx = context.WithValue(ctx, "log", s.log)
+		if err := downloader.DownloadWithIterator(ctx, inputs); err != nil {
 			s.log.Error("error on download objects: %v", err)
 			chanError <- err
 		}
@@ -989,12 +994,12 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 	var chanLarge chan *S3BatchDownloadObject
 	// Launch small object downloaders
 	for i := 0; i < Concurrency; i++ {
-		go d.Download(d[i], chanSmall, chanErr, &wg)
+		go d.Download(ctx, d[i], chanSmall, chanErr, &wg)
 	}
 	// Launch large object downloaders
 	if !smallOnly && len(d) > Concurrency {
 		chanLarge = make(chan *S3BatchDownloadObject, 1)
-		go d.Download(d[Concurrency], chanLarge, chanErr, &wg)
+		go d.Download(ctx, d[Concurrency], chanLarge, chanErr, &wg)
 	}
 	// Collect errors
 	go func() {
@@ -1023,7 +1028,7 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 	return nil
 }
 
-func (d S3Downloader) Download(downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
+func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
