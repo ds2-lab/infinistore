@@ -39,7 +39,7 @@ var (
 	AWSRegion      string
 	Backups        = 10
 	Concurrency    = 5
-	Buckets        = 10
+	Buckets        = 1
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -153,7 +153,9 @@ func (s *Storage) Set(key string, chunkId string, val []byte) error {
 	chunk := types.NewChunk(chunkId, val)
 	chunk.Key = key
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
-	chunk.Bucket = fmt.Sprintf(s.s3bucket, strconv.Itoa(rand.Int() % Buckets))
+	if Buckets > 1 {
+		chunk.Bucket = fmt.Sprintf(s.s3bucket, strconv.Itoa(rand.Int() % Buckets))
+	}
 	s.repo[key] = chunk
 	if s.chanOps != nil {
 		s.chanOps <- &types.LineageOp{
@@ -299,8 +301,12 @@ func (s *Storage) TrackLineage() {
 					s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
 				}
 
+				bucket := op.Bucket
+				if bucket == "" {
+					bucket = s.s3bucketDefault
+				}
 				upParams := &s3manager.UploadInput{
-					Bucket: aws.String(op.Bucket),
+					Bucket: aws.String(bucket),
 					Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.Key)),
 					Body:   bytes.NewReader(s.repo[op.Key].Body),
 				}
@@ -573,7 +579,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
 
 	// Persists.
 	params := &s3manager.UploadInput{
-		Bucket: aws.String(s.s3bucket),
+		Bucket: aws.String(s.s3bucketDefault),
 		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
 		Body:   buf,
 	}
