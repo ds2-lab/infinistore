@@ -15,6 +15,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -783,6 +784,7 @@ func main() {
 		flag.Uint64Var(&input.Meta.SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
 		flag.StringVar(&input.Meta.Tip, "tip", "", "Tips in http query format")
 
+		// More args
 		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 		concurrency := flag.Int("c", 5, "Concurrency of recovery")
@@ -795,6 +797,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Available options:\n")
 			flag.PrintDefaults()
 			os.Exit(0)
+		}
+
+		tips, err := url.ParseQuery(input.Meta.Tip)
+		if err != nil {
+			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Meta.Tip, err)
 		}
 
 		if DRY_RUN {
@@ -827,11 +834,18 @@ func main() {
 				cancel()
 			}()
 
-			// Set data
+			// Simulate data operation
 			<-ready
 			session := lambdaLife.GetOrCreateSession()
 			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 			session.Timeout.Busy()
+			if tips.Get(protocol.TIP_SERVING_KEY) != "" {
+				if _, _, err := store.Get(tips.Get(protocol.TIP_SERVING_KEY)); err != nil {
+					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), err)
+				} else {
+					log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
+				}
+			}
 			for i := 0; i < *numToInsert; i++ {
 				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
