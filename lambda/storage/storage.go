@@ -77,10 +77,12 @@ func New() *Storage {
 	// Get is safe by default
 	getSafe := make(chan struct{})
 	close(getSafe)
+	setSafe := make(chan struct{})
+	close(setSafe)
 	return &Storage{
 		repo: make(map[string]*types.Chunk),
 		getSafe: getSafe,
-		setSafe: make(chan struct{}),
+		setSafe: setSafe,
 		lineage: &types.LineageTerm{
 			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
 		},
@@ -246,6 +248,7 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) {
 	s.s3bucket = bucket
 	s.s3bucketDefault = fmt.Sprintf(bucket, "")
 	s.s3prefix = prefix
+	s.delaySet()
 }
 
 func (s *Storage) GetAWSSession() *awsSession.Session {
@@ -258,8 +261,11 @@ func (s *Storage) GetAWSSession() *awsSession.Session {
 	return s.awsSession
 }
 
-func (s *Storage) IsConsistent(meta *protocol.Meta) bool {
-	return s.lineage.Term == meta.Term && s.lineage.Hash == meta.Hash
+func (s *Storage) IsConsistent(meta *protocol.Meta) (bool, error) {
+	if s.lineage.Term > meta.Term {
+		return false, errors.New(fmt.Sprintf("Detected staled term from proxy, expected at least %d, have %d", s.lineage.Term, meta.Term))
+	}
+	return s.lineage.Term == meta.Term && s.lineage.Hash == meta.Hash, nil
 }
 
 func (s *Storage) TrackLineage() {
@@ -269,7 +275,7 @@ func (s *Storage) TrackLineage() {
 		s.signalTracker = make(chan bool, 1)
 		s.committed = make(chan struct{})
 		rand.Seed(time.Now().UnixNano()) // Reseed random.
-		close(s.setSafe)
+		s.resetSet()
 		go s.TrackLineage()
 		return
 	}
@@ -411,8 +417,8 @@ func (s *Storage) StopTracker() *protocol.Meta {
 // The recovery ends if returned channel is closed.
 // If the first return value is false, no fast recovery is needed.
 func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
-	if s.IsConsistent(meta) {
-		return false, nil
+	if ok, _ := s.IsConsistent(meta); !ok {
+		return ok, nil
 	}
 
 	tips, err := url.ParseQuery(meta.Tip)
@@ -430,7 +436,7 @@ func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
 	s.lineage.Hash = meta.Hash
 
 	// Flag get as unsafe
-	s.getSafe = make(chan struct{})
+	s.delayGet()
 	chanErr := make(chan error, 1)
 	go s.doRecover(old, meta, tips, chanErr)
 
@@ -606,8 +612,8 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tip
 		chanErr <- err
 		if lineage == nil {
 			// Unable to continue, stop
-			close(s.getSafe)
 			close(chanErr)
+			s.resetGet()
 			return
 		}
 		// Continue to recover anything in lineage.
@@ -619,15 +625,15 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tip
 		s.recovered = lineage   // Flag for incomplete recovery
 		s.log.Error("No term is recovered.")
 
-		close(s.getSafe)
 		close(chanErr)
+		s.resetGet()
 		return
 	}
 
 	// Replay lineage
 	tbd := s.doReplayLineage(meta, tips, terms, numOps)
 	// Now get is safe
-	close(s.getSafe)
+	s.resetGet()
 
 	stop2 := time.Now()
 	if len(tbd) > 0 {
@@ -960,6 +966,50 @@ func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {
 	return func() error {
 		chanNotify <- i
 		return nil
+	}
+}
+
+func (s *Storage) delaySet() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	select {
+	case <-s.setSafe:
+		s.setSafe = make(chan struct{})
+	default:
+	}
+}
+
+func (s *Storage) resetSet() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	select {
+	case <-s.setSafe:
+	default:
+		close(s.setSafe)
+	}
+}
+
+func (s *Storage) delayGet() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	select {
+	case <-s.getSafe:
+		s.getSafe = make(chan struct{})
+	default:
+	}
+}
+
+func (s *Storage) resetGet() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	select {
+	case <-s.getSafe:
+	default:
+		close(s.getSafe)
 	}
 }
 
