@@ -2,18 +2,17 @@ package lambdastore
 
 import (
 	"sync/atomic"
-	"time"
 )
 
-type ChunkMeta struct {
-	Key string
-	Size uint64
-	Hit bool
-	Accessed time.Time
-
-	prev *ChunkMeta
-	next *ChunkMeta
-}
+// type ChuckMeta {
+// 	Key string
+// 	Size uint64
+// 	Hit bool
+// 	Accessed time.Time
+//
+// 	prev *ChunkMeta
+// 	next *ChunkMeta
+// }
 
 // FULL = (Updates - SnapshotUpdates + SnapshotSize) / Bandwidth + (Term - SnapShotTerm + 1) * RTT
 // INCREMENTAL = (Updates - LastUpdates) / Bandwidth + (Seq - LastSeq) * RTT
@@ -25,11 +24,14 @@ type Meta struct {
 	// Total transmission size for restoring all confirmed logs.
 	Updates  uint64
 
+	// Rank for lambda to decide if a fast recovery is required.
+	DiffRank float64
+
 	// Hash of the last confirmed log.
 	Hash     string
 
 	// Sequence of snapshot.
-	SnapShotTerm    uint64
+	SnapshotTerm    uint64
 
 	// Total transmission size for restoring all confirmed logs from start to SnapShotSeq.
 	SnapshotUpdates uint64
@@ -37,17 +39,16 @@ type Meta struct {
 	// Total size of snapshot for transmission.
 	SnapshotSize    uint64
 
-	// TODO: implement clock LRU
+	// Flag shows that if meta is out of sync with the corresponding lambda.
+	Stale           bool
 
 	// Capacity of the instance.
 	Capacity        uint64
 
-	// Size of the instance.
-	size            uint64
-
-	chunks map[string]*ChunkMeta
-	head ChunkMeta
-	anchor *ChunkMeta
+	size            uint64             // Size of the instance.
+	// chunks map[string]*ChuckMeta
+	// head ChuckMeta
+	// anchor *ChuckMeta
 }
 
 func (m *Meta) Size() uint64 {

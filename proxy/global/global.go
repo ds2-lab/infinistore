@@ -5,6 +5,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"sync"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
@@ -18,15 +19,24 @@ var (
 	BaseMigratorPort = 6380
 	ServerIp         string
 	Prefix           string
+	Flags            uint64
+	AWSRegion        string
 )
 
 func init() {
 	Log = logger.NilLogger
 
-	ip, err := GetPrivateIp()
-	if err != nil {
-		panic(err)
+	if ServerIp == "" {
+		ip, err := GetPrivateIp()
+		if err != nil {
+			panic(err)
+		}
+		ServerIp = ip
 	}
 
-	ServerIp = ip
+	Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT
+}
+
+func IsWarmupWithFixedInterval() bool {
+	return Flags & protocol.FLAG_FIXED_INTERVAL_WARMUP > 0
 }

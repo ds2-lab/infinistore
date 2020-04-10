@@ -1,7 +1,7 @@
 #!/bin/sh
 
 PWD=`dirname $0`
-DATA="~/go/src/github.com/wangaoone/LambdaObjectstore/evaluation/data"
+DATA="~/go/src/github.com/mason-leap-lab/infinicache/evaluation/data"
 DOWNLOAD=$PWD/downloaded
 
 if [ "$1" == "" ] ; then

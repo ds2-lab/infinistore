@@ -13,26 +13,29 @@ import (
 )
 
 const (
-	BUCKET = "tianium.default"
-	ROLE   = "arn:aws:iam::022127035044:role/lambda-store"
+	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
+	ROLE = "arn:aws:iam::022127035044:role/lambda-store"
+	// AWS region, change it if necessary.
+	REGION = "us-east-1"
 )
 
 var (
 	code    = flag.Bool("code", false, "update function code")
 	config  = flag.Bool("config", false, "update function config")
 	create  = flag.Bool("create", false, "create function")
-	timeout = flag.Int64("timeout", 100, "function timeout")
-	prefix  = flag.String("prefix", "Proxy1Node", "function name prefix")
+	timeout = flag.Int64("timeout", 60, "function timeout")
+	prefix  = flag.String("prefix", "CacheNode", "function name prefix")
 	vpc     = flag.Bool("vpc", false, "vpc config")
 	key     = flag.String("key", "lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
 	batch   = flag.Int64("batch", 2, "batch Number, no need to modify")
-	mem     = flag.Int64("mem", 256, "the memory of lambda")
+	mem     = flag.Int64("mem", 1024, "the memory of lambda")
+	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-b53a6bff"),
-		aws.String("subnet-fcde0bc2"),
+		aws.String("subnet-0fd0db0832568af17"),
+		aws.String("subnet-043f6284f2bdcc8c5"),
 	}
 	securityGroup = []*string{
 		aws.String("sg-079f6cc4e658209c3"),
@@ -207,7 +210,7 @@ func main() {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
-	svc := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
+	svc := lambda.New(sess, &aws.Config{Region: aws.String(REGION)})
 	if *create {
 		for i := *from; i < *to; i++ {
 			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)

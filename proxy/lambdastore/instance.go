@@ -5,18 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
+	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	prototol "github.com/mason-leap-lab/infinicache/common/types"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
@@ -31,16 +33,25 @@ var (
 	TimeoutNever   = make(<-chan time.Time)
 	WarmTimout     = 1 * time.Minute
 	ConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
-	RequestTimeout = 10 * time.Second
+	RequestTimeout = 1 * time.Second
 	timeouts       = sync.Pool{
 		New: func() interface{} {
 			return time.NewTimer(0)
 		},
 	}
+	AwsSession     = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
+		SharedConfigState: awsSession.SharedConfigEnable,
+	}))
 )
 
 type InstanceRegistry interface {
 	Instance(uint64) (*Instance, bool)
+}
+
+type ValidateOption struct {
+	WarmUp      bool
+	Request     *types.Request
+	BackupID    int
 }
 
 type Instance struct {
@@ -48,7 +59,7 @@ type Instance struct {
 	Meta
 
 	cn            *Connection
-	chanReq       chan types.Command
+	chanCmd       chan types.Command
 	awake         int
 	awakeLock     sync.Mutex
 	chanValidated chan struct{}
@@ -71,7 +82,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 	return &Instance{
 		Deployment:    dp,
 		awake:         INSTANCE_SLEEP,
-		chanReq:       make(chan types.Command, 1),
+		chanCmd:       make(chan types.Command, 1),
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
 		coolTimer:     time.NewTimer(WarmTimout),
@@ -84,18 +95,27 @@ func NewInstance(name string, id uint64, replica bool) *Instance {
 }
 
 func (ins *Instance) C() chan types.Command {
-	return ins.chanReq
+	return ins.chanCmd
 }
 
 func (ins *Instance) WarmUp() {
-	ins.validate(true)
+	ins.validate(&ValidateOption{ WarmUp: true })
+	// Force reset
+	ins.resetCoolTimer()
 }
 
-func (ins *Instance) Validate() *Connection {
-	return ins.validate(false)
+func (ins *Instance) Validate(opts ...*ValidateOption) *Connection {
+	var opt *ValidateOption
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	if opt == nil {
+		opt = &ValidateOption{}
+	}
+	return ins.validate(opt)
 }
 
-func (ins *Instance) validate(warmUp bool) *Connection {
+func (ins *Instance) validate(opt *ValidateOption) *Connection {
 	ins.mu.Lock()
 
 	select {
@@ -107,10 +127,10 @@ func (ins *Instance) validate(warmUp bool) *Connection {
 
 		for {
 			ins.log.Debug("Validating...")
-			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(warmUp)
+			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
 			if triggered {
 				return ins.validated()
-			} else if warmUp {
+			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				return ins.flagValidated(ins.cn)
 			}
 
@@ -164,12 +184,13 @@ func (ins *Instance) HandleRequests() {
 		select {
 		case <-ins.closed:
 			return
-		case req := <-ins.chanReq: /*blocking on lambda facing channel*/
+		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
 			var err error
 			var retries = MAX_RETRY
-			if !req.Retriable() {
+			if !cmd.Retriable() {
 				retries = 1
 			}
+
 			for i := 0; i < retries; i++ {
 				if i > 0 {
 					ins.log.Debug("Attempt %d", i)
@@ -177,25 +198,25 @@ func (ins *Instance) HandleRequests() {
 				// Check lambda status first
 				validateStart := time.Now()
 				// Once active connection is confirmed, keep awake on serving.
-				conn := ins.Validate()
+				conn := ins.Validate(&ValidateOption{ Request: cmd.GetRequest() })
 				validateDuration := time.Since(validateStart)
 
 				if conn == nil {
 					// Check if conn is valid, nil if ins get closed
 					return
 				}
-				err = ins.handleRequest(conn, req, validateDuration)
+				err = ins.handleRequest(conn, cmd, validateDuration)
 				if err == nil {
 					break
 				}
 			}
 			if err != nil {
-				if req.Retriable() {
+				if cmd.Retriable() {
 					ins.log.Error("Max retry reaches, give up")
 				} else {
 					ins.log.Error("Can not retry a streaming request, give up")
 				}
-				if request, ok := req.(*types.Request); ok {
+				if request, ok := cmd.(*types.Request); ok {
 					request.SetResponse(err)
 				}
 			}
@@ -234,7 +255,7 @@ func (ins *Instance) Migrate() error {
 	}
 
 	ins.log.Info("Initiating migration to %s...", dply.Name())
-	ins.chanReq <- &types.Control{
+	ins.chanCmd <- &types.Control{
 		Cmd:        "migrate",
 		Addr:       addr,
 		Deployment: dply.Name(),
@@ -272,7 +293,7 @@ func (ins *Instance) IsClosed() bool {
 	return ins.isClosedLocked()
 }
 
-func (ins *Instance) tryTriggerLambda(warmUp bool) bool {
+func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	ins.awakeLock.Lock()
 	defer ins.awakeLock.Unlock()
 
@@ -280,18 +301,18 @@ func (ins *Instance) tryTriggerLambda(warmUp bool) bool {
 		return false
 	}
 
-	if warmUp {
+	if opt.WarmUp {
 		ins.log.Info("[Lambda store is not awake, warming up...]")
 	} else {
 		ins.log.Info("[Lambda store is not awake, activating...]")
 	}
-	go ins.triggerLambda(warmUp)
+	go ins.triggerLambda(opt)
 
 	return true
 }
 
-func (ins *Instance) triggerLambda(warmUp bool) {
-	ins.triggerLambdaLocked(warmUp)
+func (ins *Instance) triggerLambda(opt *ValidateOption) {
+	ins.triggerLambdaLocked(opt)
 	for {
 		if !ins.IsValidating() {
 			// Don't overwrite the MAYBE status.
@@ -305,36 +326,75 @@ func (ins *Instance) triggerLambda(warmUp bool) {
 
 		// Validating, retrigger.
 		ins.log.Info("[Validating lambda store,  reactivateing...]")
-		ins.triggerLambdaLocked(false)
+		ins.triggerLambdaLocked(opt)
 	}
 }
 
-func (ins *Instance) triggerLambdaLocked(warmUp bool) {
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-	client := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
-	event := &prototol.InputEvent{
+func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
+	if ins.Meta.Stale {
+		// TODO: Check stale status
+	}
+	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(global.AWSRegion)})
+
+	tips := url.Values{}
+	if opt.Request != nil && opt.Request.Cmd == protocol.CMD_GET {
+		tips.Set(protocol.TIP_SERVING_KEY, opt.Request.Key)
+	}
+	if opt.BackupID > 0 {
+		tips.Set(protocol.TIP_ID, strconv.Itoa(opt.BackupID))
+	}
+	event := &protocol.InputEvent{
 		Id:     ins.Id(),
 		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix: global.Prefix,
 		Log:    global.Log.GetLevel(),
+		Flags:  global.Flags,
+		Meta:   protocol.Meta{
+			Term:            ins.Meta.Term,
+			Updates:         ins.Meta.Updates,
+			DiffRank:        ins.Meta.DiffRank,
+			Hash:            ins.Meta.Hash,
+			SnapshotTerm:    ins.Meta.SnapshotTerm,
+			SnapshotUpdates: ins.Meta.SnapshotUpdates,
+			SnapshotSize:    ins.Meta.SnapshotSize,
+			Tip:             tips.Encode(),
+		},
 	}
-	if warmUp {
-		event.Cmd = "warmup"
+	if opt.WarmUp {
+		event.Cmd = protocol.CMD_WARMUP
 	}
-	payload, _ := json.Marshal(event)
+	payload, err := json.Marshal(event)
+	if err != nil {
+		ins.log.Error("Failed to marshal payload of lambda input: %v", err)
+	}
 	input := &lambda.InvokeInput{
 		FunctionName: aws.String(ins.Name()),
 		Payload:      payload,
 	}
 
-	_, err := client.Invoke(input)
+	output, err := client.Invoke(input)
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
 	} else {
 		ins.log.Debug("[Lambda store is deactivated]")
 	}
+	if output != nil && len(output.Payload) > 0 {
+		var outputMeta protocol.Meta
+		if err := json.Unmarshal(output.Payload, &outputMeta); err != nil {
+			ins.log.Error("Failed to unmarshal payload of lambda output: %v", err)
+		} else {
+			ins.Meta.Term = outputMeta.Term
+			ins.Meta.Updates = outputMeta.Updates
+			ins.Meta.DiffRank = outputMeta.DiffRank
+			ins.Meta.Hash = outputMeta.Hash
+			ins.Meta.SnapshotTerm = outputMeta.SnapshotTerm
+			ins.Meta.SnapshotUpdates = outputMeta.SnapshotUpdates
+			ins.Meta.SnapshotSize = outputMeta.SnapshotSize
+			ins.Meta.Stale = false
+			return
+		}
+	}
+	ins.Meta.Stale = true
 }
 
 func (ins *Instance) flagValidated(conn *Connection) *Connection {
@@ -402,10 +462,10 @@ func (ins *Instance) validated() *Connection {
 	return ins.lastValidated
 }
 
-func (ins *Instance) handleRequest(conn *Connection, req types.Command, validateDuration time.Duration) error {
-	switch req.(type) {
+func (ins *Instance) handleRequest(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
+	switch cmd.(type) {
 	case *types.Request:
-		req := req.(*types.Request)
+		req := cmd.(*types.Request)
 
 		cmd := strings.ToLower(req.Cmd)
 		if req.EnableCollector {
@@ -416,11 +476,11 @@ func (ins *Instance) handleRequest(conn *Connection, req types.Command, validate
 		}
 
 		switch cmd {
-		case "set": /*set or two argument cmd*/
+		case protocol.CMD_SET: /*set or two argument cmd*/
 			req.PrepareForSet(conn.w)
-		case "get": /*get or one argument cmd*/
+		case protocol.CMD_GET: /*get or one argument cmd*/
 			req.PrepareForGet(conn.w)
-		case "del":
+		case protocol.CMD_DEL:
 			req.PrepareForDel(conn.w)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
@@ -443,17 +503,17 @@ func (ins *Instance) handleRequest(conn *Connection, req types.Command, validate
 		}
 
 	case *types.Control:
-		ctrl := req.(*types.Control)
+		ctrl := cmd.(*types.Control)
 		cmd := strings.ToLower(ctrl.Cmd)
 		isDataRequest := false
 
 		switch cmd {
-		case "data":
+		case protocol.CMD_DATA:
 			ctrl.PrepareForData(conn.w)
 			isDataRequest = true
-		case "migrate":
+		case protocol.CMD_MIGRATE:
 			ctrl.PrepareForMigrate(conn.w)
-		case "del":
+		case protocol.CMD_DEL:
 			ctrl.PrepareForDel(conn.w)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
@@ -471,7 +531,7 @@ func (ins *Instance) handleRequest(conn *Connection, req types.Command, validate
 		}
 
 	default:
-		ins.log.Error("Unexpected request type: %v", reflect.TypeOf(req))
+		ins.log.Error("Unexpected request type: %v", reflect.TypeOf(cmd))
 		// Unrecoverable
 		return nil
 	}
@@ -490,6 +550,14 @@ func (ins *Instance) isClosedLocked() bool {
 }
 
 func (ins *Instance) warmUp() {
+	if global.IsWarmupWithFixedInterval() {
+		return
+	}
+
+	ins.resetCoolTimer()
+}
+
+func (ins *Instance) resetCoolTimer() {
 	if !ins.coolTimer.Stop() {
 		select {
 		case <-ins.coolTimer.C:
