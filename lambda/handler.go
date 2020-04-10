@@ -65,8 +65,6 @@ func init() {
 	}
 
 	storage.AWSRegion = AWS_REGION
-	store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
-	lineage = store.(*storage.Storage)
 
 	collector.AWSRegion = AWS_REGION
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
@@ -108,6 +106,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
+	store.(*storage.Storage).SetLogLevel(input.Log)
 	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
@@ -138,21 +137,28 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
 
-	// Check consistency
 	var recoverErr chan error
-	if !input.IsPersistentEnabled() || lineage.IsConsistent(&input.Meta) {
+	if !input.IsPersistentEnabled() {
 		// POND represents the node is ready to serve, no fast recovery required.
 		pongHandler(ctx, session.Connection, false)
 	} else {
-		var fast bool
-		session.Timeout.Busy()
-		fast, recoverErr = lineage.Recover(&input.Meta)
-		// POND represents the node is ready to serve, request fast recovery.
-		pongHandler(ctx, session.Connection, fast)
-	}
+		store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+		lineage = store.(*storage.Storage)
 
-	// Start tracking
-	if input.IsPersistentEnabled() {
+		if ok, err := lineage.IsConsistent(&input.Meta); err != nil {
+			return protocol.Meta{}, err
+		} else if ok {
+			// POND represents the node is ready to serve, no fast recovery required.
+			pongHandler(ctx, session.Connection, false)
+		} else {
+			var fast bool
+			session.Timeout.Busy()
+			fast, recoverErr = lineage.Recover(&input.Meta)
+			// POND represents the node is ready to serve, request fast recovery.
+			pongHandler(ctx, session.Connection, fast)
+		}
+
+		// Start tracking
 		lineage.TrackLineage()
 	}
 
@@ -252,7 +258,9 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 		session.Timeout.Halt()
 
 		// Commit and wait, error will be logged.
-		lineage.Commit()
+		if lineage != nil {
+			lineage.Commit()
+		}
 
 		if lifetime.IsTimeUp() && store.Len() > 0 {
 			// Time to migrate
@@ -276,7 +284,10 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 		} else {
 			byeHandler(session.Connection)
 			// Finalize, this is quick usually.
-			meta := lineage.StopTracker()
+			var meta *protocol.Meta
+			if lineage != nil {
+				meta = lineage.StopTracker()
+			}
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return meta
@@ -816,7 +827,6 @@ func main() {
 			start := time.Now()
 			log.Color = true
 			log.Verbose = true
-			store.(*storage.Storage).SetLogLevel(input.Log)
 			storage.Concurrency = *concurrency
 			storage.Buckets = *buckets
 

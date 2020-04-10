@@ -38,7 +38,7 @@ type Storage interface {
 }
 
 type Lineage interface {
-	IsConsistent(*protocol.Meta) bool
+	IsConsistent(*protocol.Meta) (bool, error)
 	TrackLineage()
 	Commit() error
 	StopTracker() *protocol.Meta
