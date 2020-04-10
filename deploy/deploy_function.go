@@ -94,7 +94,7 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	input := &lambda.UpdateFunctionCodeInput{
 		FunctionName: aws.String(name),
-		S3Bucket:     aws.String(BUCKET),
+		S3Bucket:     bucket,
 		S3Key:        aws.String(fmt.Sprintf("%s.zip", *key)),
 	}
 	result, err := svc.UpdateFunctionCode(input)
@@ -138,7 +138,7 @@ func createFunction(name string, svc *lambda.Lambda) {
 	}
 	input := &lambda.CreateFunctionInput{
 		Code: &lambda.FunctionCode{
-			S3Bucket: aws.String(BUCKET),
+			S3Bucket: bucket,
 			S3Key:    aws.String(fmt.Sprintf("%s.zip", *key)),
 		},
 		FunctionName: aws.String(name),
