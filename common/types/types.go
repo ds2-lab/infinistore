@@ -48,10 +48,26 @@ type Meta struct {
 }
 
 const (
-	FLAG_ENABLE_REPLICA = 0x0001
-	FLAG_WARMUP_REPLICA = 0x0002
-	FLAG_ENABLE_PERSISTENT = 0x0010
+	// Enable warmup.
+	FLAG_ENABLE_WARMUP = 0x0001
+	// Warming up with fixed interval regardless workload.
+	FLAG_FIXED_INTERVAL_WARMUP = 0x0003
+	// Enable replication.
+	FLAG_ENABLE_REPLICA = 0x0010
+	// Replication will be triggered on warming up.
+	FLAG_WARMUP_REPLICA = 0x0030
+	// Enable persist.
+	FLAG_ENABLE_PERSISTENT = 0x0100
 
+	CMD_GET = "get"
+	CMD_SET = "set"
+	CMD_DEL = "del"
+	CMD_WARMUP = "warmup"
+	CMD_MIGRATE = "migrate"
+	CMD_DATA = "data"
+
+	// Backup ID.
 	TIP_ID = "id"
+	// Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
 )

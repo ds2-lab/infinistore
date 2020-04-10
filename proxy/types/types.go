@@ -19,6 +19,12 @@ type Id struct {
 	ChunkId string
 }
 
+type Command interface {
+	GetRequest() *Request
+	Retriable() bool
+	Flush() error
+}
+
 type LambdaDeployment interface {
 	Name() string
 	Id() uint64

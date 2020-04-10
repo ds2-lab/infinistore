@@ -15,6 +15,10 @@ type Control struct {
 	w          *resp.RequestWriter
 }
 
+func (req *Control) GetRequest() *Request {
+	return req.Request
+}
+
 func (req *Control) Retriable() bool {
 	return true
 }
@@ -43,4 +47,3 @@ func (ctrl *Control) Flush() (err error) {
 
 	return w.Flush()
 }
-
