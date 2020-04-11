@@ -14,7 +14,7 @@ var (
 	cmds = sync.Pool{
 		New: func() interface{} {
 			return &storageAdapterCommand{
-				err: make(chan error),
+				ret: make(chan *types.OpRet, 1),
 			}
 		},
 	}
@@ -27,7 +27,23 @@ type storageAdapterCommand struct {
 	body       []byte
 	bodyStream resp.AllReadCloser
 	handler    func(*storageAdapterCommand)
-	err        chan error
+	ret        chan *types.OpRet
+}
+
+func (cmd *storageAdapterCommand) reset() *storageAdapterCommand {
+	cmd.key = ""
+	cmd.chunk = ""
+	cmd.body = nil
+	cmd.bodyStream = nil
+	cmd.handler = nil
+	// Drain err
+	for {
+		select {
+		case <-cmd.ret:
+		default:
+			return cmd
+		}
+	}
 }
 
 type StorageAdapter struct {
@@ -70,39 +86,34 @@ func (a *StorageAdapter) Restore() types.Storage {
 	return a.store
 }
 
-func (a *StorageAdapter) Get(key string) (string, []byte, error) {
-	chunkId, valReader, err := a.GetStream(key)
-	if err != nil {
-		return chunkId, nil, err
+func (a *StorageAdapter) Get(key string) (string, []byte, *types.OpRet) {
+	chunkId, valReader, ret := a.GetStream(key)
+	if ret.Error() != nil {
+		return chunkId, nil, ret
 	}
 
 	val, err := valReader.ReadAll()
-	return chunkId, val, err
+	return chunkId, val, types.OpError(err)
 }
 
-func (a *StorageAdapter) GetStream(key string) (string, resp.AllReadCloser, error) {
-	cmd := cmds.Get().(*storageAdapterCommand)
+func (a *StorageAdapter) GetStream(key string) (string, resp.AllReadCloser, *types.OpRet) {
+	cmd := cmds.Get().(*storageAdapterCommand).reset()
 	defer cmds.Put(cmd)
 
 	cmd.key = key
 	cmd.handler = a.getHandler
 	a.serializer <- cmd
 
-	err := <-cmd.err
-	if err != nil {
-		log.Warn("Proxying key %s: %v", cmd.key, err)
-		return "", nil, err
-	} else {
-		return cmd.chunk, cmd.bodyStream, err
-	}
+	ret := <-cmd.ret
+	return cmd.chunk, cmd.bodyStream, ret
 }
 
-func (a *StorageAdapter) Set(key string, chunk string, val []byte) error {
+func (a *StorageAdapter) Set(key string, chunk string, val []byte) *types.OpRet {
 	return a.SetStream(key, chunk, resp.NewInlineReader(val))
 }
 
-func (a *StorageAdapter) SetStream(key string, chunk string, valReader resp.AllReadCloser) error {
-	cmd := cmds.Get().(*storageAdapterCommand)
+func (a *StorageAdapter) SetStream(key string, chunk string, valReader resp.AllReadCloser) *types.OpRet {
+	cmd := cmds.Get().(*storageAdapterCommand).reset()
 	defer cmds.Put(cmd)
 
 	cmd.key = key
@@ -111,26 +122,22 @@ func (a *StorageAdapter) SetStream(key string, chunk string, valReader resp.AllR
 	cmd.handler = a.setHandler
 	a.serializer <- cmd
 
-	return <-cmd.err
+	return <-cmd.ret
 }
 
-func (a *StorageAdapter) Migrate(key string) (string, error) {
-	cmd := cmds.Get().(*storageAdapterCommand)
+func (a *StorageAdapter) Migrate(key string) (string, *types.OpRet) {
+	cmd := cmds.Get().(*storageAdapterCommand).reset()
 	defer cmds.Put(cmd)
 
 	cmd.key = key
 	cmd.handler = a.migrateHandler
 	a.serializer <- cmd
 
-	err := <-cmd.err
-	if err != nil {
-		return "", err
-	} else {
-		return cmd.chunk, err
-	}
+	ret := <-cmd.ret
+	return cmd.chunk, ret
 }
 
-func (a *StorageAdapter) Del(key string, chunk string) error {
+func (a *StorageAdapter) Del(key string, chunk string) *types.OpRet {
 	cmd := cmds.Get().(*storageAdapterCommand)
 	defer cmds.Put(cmd)
 
@@ -139,7 +146,7 @@ func (a *StorageAdapter) Del(key string, chunk string) error {
 	cmd.handler = a.delHandler
 	a.serializer <- cmd
 
-	return <-cmd.err
+	return <-cmd.ret
 }
 
 func (a *StorageAdapter) LocalDel(key string) {
@@ -154,23 +161,23 @@ func (a *StorageAdapter) Keys() <-chan string {
 }
 
 func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
-	var err error
-	cmd.chunk, cmd.bodyStream, err = a.store.GetStream(cmd.key)
-	if err == nil {
-		cmd.err <- nil
+	var ret *types.OpRet
+	cmd.chunk, cmd.bodyStream, ret = a.store.GetStream(cmd.key)
+	if ret.Error() == nil {
+		cmd.ret <- ret
 		return
 	}
 
 	reader, err := a.migrator.Send("get", nil, "migrator", "proxy", "", cmd.key)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	// Wait and read response
 	err = a.readGetResponse(reader, cmd)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
@@ -180,7 +187,7 @@ func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
 	cmd.bodyStream = interceptor
 
 	// return
-	cmd.err <- nil
+	cmd.ret <- types.OpSuccess()
 
 	// Wait until done streaming.
 	interceptor.Close()
@@ -203,14 +210,14 @@ func (a *StorageAdapter) setHandler(cmd *storageAdapterCommand) {
 
 	reader, err := a.migrator.Send("set", cmd.bodyStream, "migrator", "proxy", cmd.chunk, cmd.key)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	// Wait and read response
 	err = a.readGetResponse(reader, cmd)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
@@ -220,65 +227,61 @@ func (a *StorageAdapter) setHandler(cmd *storageAdapterCommand) {
 	// Hold released, check if any error exists
 	if err := interceptor.LastError(); err != nil {
 		log.Warn("Unexpected error on forward setting key %s: %v", cmd.key, err)
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	log.Debug("Forwarding key %s(chunk %s): success", cmd.key, cmd.chunk)
-	a.store.Set(cmd.key, cmd.chunk, interceptor.Intercepted())
-	// a.store.Set(cmd.key, cmd.chunk, cmd.body)
-	cmd.err <- nil
+	cmd.ret <- a.store.Set(cmd.key, cmd.chunk, interceptor.Intercepted())
 }
 
 func (a *StorageAdapter) migrateHandler(cmd *storageAdapterCommand) {
-	var err error
-	cmd.chunk, cmd.bodyStream, err = a.store.GetStream(cmd.key)
-	if err == nil {
-		cmd.err <- ErrSkip
+	var ret *types.OpRet
+	cmd.chunk, cmd.bodyStream, ret = a.store.GetStream(cmd.key)
+	if ret.Error() == nil {
+		cmd.ret <- types.OpError(ErrSkip)
 		return
 	}
 
 	reader, err := a.migrator.Send("get", nil, "migrator", "migrate", "", cmd.key)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	// Wait and read response
 	err = a.readGetResponse(reader, cmd)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	// Read stream
 	body, err := cmd.bodyStream.ReadAll()
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
-	a.store.Set(cmd.key, cmd.chunk, body)
-	cmd.err <- nil
+	cmd.ret <- a.store.Set(cmd.key, cmd.chunk, body)
 }
 
 func (a *StorageAdapter) delHandler(cmd *storageAdapterCommand) {
 	reader, err := a.migrator.Send("del", nil, "migrator", "proxy", cmd.chunk, cmd.key)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	// Wait and read response
 	err = a.readGetResponse(reader, cmd)
 	if err != nil {
-		cmd.err <- err
+		cmd.ret <- types.OpError(err)
 		return
 	}
 
 	log.Debug("Forwarding Del cmd on key %s(chunk %s): success", cmd.key, cmd.chunk)
-	a.store.Del(cmd.key, cmd.chunk)
-	cmd.err <- nil
+	cmd.ret <- a.store.Del(cmd.key, cmd.chunk)
 }
 
 func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storageAdapterCommand) (err error) {

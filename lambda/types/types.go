@@ -28,12 +28,12 @@ var (
 )
 
 type Storage interface {
-	Get(string) (string, []byte, error)
-	GetStream(string) (string, resp.AllReadCloser, error)
-	Set(string, string, []byte) error
-	SetStream(string, string, resp.AllReadCloser) error
+	Get(string) (string, []byte, *OpRet)
+	GetStream(string) (string, resp.AllReadCloser, *OpRet)
+	Set(string, string, []byte) *OpRet
+	SetStream(string, string, resp.AllReadCloser) *OpRet
+	Del(string,string) *OpRet
 	Len() int
-	Del(string,string) error
 	Keys()  <-chan string
 }
 
@@ -43,6 +43,7 @@ type Lineage interface {
 	Commit() error
 	StopTracker() *protocol.Meta
 	Recover(*protocol.Meta) (bool, chan error)
+	Status() *protocol.Meta
 }
 
 type LineageTerm struct {
@@ -63,8 +64,56 @@ type LineageOp struct {
 	Id       string     // Chunk id of the object
 	Size     uint64     // Size of the object
 	Accessed time.Time
-	// Ret      chan error
 	Bucket   string
+}
+
+type OpRet struct {
+	error
+	delayed chan error
+}
+
+func OpError(err error) *OpRet {
+	return &OpRet{ err, nil }
+}
+
+func OpSuccess() *OpRet {
+	return &OpRet{ nil, nil }
+}
+
+func OpDelayedSuccess() *OpRet {
+	return &OpRet{ nil, make(chan error, 1) }
+}
+
+func (ret *OpRet) Error() error {
+	return ret.error
+}
+
+func (ret *OpRet) IsDelayed() bool {
+	return ret.delayed != nil
+}
+
+func (ret *OpRet) Done(err ...error) {
+	if ret.delayed == nil {
+		return
+	} else if len(err) > 0 {
+		ret.delayed <- err[0]
+	} else {
+		ret.delayed <- nil
+	}
+}
+
+func (ret *OpRet) Wait() error {
+	if ret.delayed == nil {
+		return nil
+	} else {
+		return <-ret.delayed
+	}
+}
+
+type OpWrapper struct {
+	LineageOp
+	*OpRet
+	Body      []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
 }
 
 // For storage

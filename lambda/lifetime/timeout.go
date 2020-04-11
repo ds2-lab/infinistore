@@ -143,8 +143,9 @@ func (t *Timeout) DoneBusy() {
 }
 
 func (t *Timeout) DoneBusyWithReset(ext time.Duration) {
-	t.ResetWithExtension(ext)
-	atomic.AddInt32(&t.active, -1)
+	if atomic.AddInt32(&t.active, -1) == 0 {
+		t.ResetWithExtension(ext)
+	}
 }
 
 func (t *Timeout) IsBusy() bool {
