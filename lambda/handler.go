@@ -176,8 +176,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 
 	// Adaptive timeout control
 	meta := wait(session, lifetime)
-	log.Debug("All routing cleared(%d) at %v", runtime.NumGoroutine(), session.Timeout.Since())
 	log.Debug("Output meta: %v", meta)
+	log.Debug("All routing cleared(%d) at %v, interrupted: %v",
+		runtime.NumGoroutine(), session.Timeout.Since(), session.Timeout.Interrupted())
 	return *meta, nil
 }
 
@@ -244,6 +245,7 @@ func serve(conn net.Conn) {
 		} else if session.Migrator != nil {
 			// Signal migrator is ready and start migration.
 			session.Migrator.SetReady()
+			session.Timeout.EndInterruption()
 		} else {
 			// We are done.
 			lifetime.Rest()
@@ -289,12 +291,12 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 			}
 			log.Debug("Migration initiated.")
 		} else {
-			byeHandler(session.Connection)
 			// Finalize, this is quick usually.
 			var meta *protocol.Meta
 			if lineage != nil {
 				meta = lineage.StopTracker()
 			}
+			byeHandler(session.Connection)
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return meta

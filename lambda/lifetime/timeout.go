@@ -40,7 +40,9 @@ func init() {
 
 type Timeout struct {
 	session       *Session
-	start         time.Time
+	startAt       time.Time
+	interruptAt   time.Time
+	interruptEnd  time.Time
 	timer         *time.Timer
 	lastExtension time.Duration
 	log           logger.ILogger
@@ -72,13 +74,26 @@ func (t *Timeout) Start() time.Time {
 	return t.StartWithCalibration(time.Now())
 }
 
-func (t *Timeout) StartWithCalibration(start time.Time) time.Time {
-	t.start = start
-	return t.start
+func (t *Timeout) StartWithCalibration(startAt time.Time) time.Time {
+	t.startAt = startAt
+	return t.startAt
+}
+
+func (t *Timeout) EndInterruption() time.Time {
+	t.interruptEnd = time.Now()
+	return t.interruptEnd
 }
 
 func (t *Timeout) Since() time.Duration {
-	return time.Since(t.start)
+	return time.Since(t.startAt)
+}
+
+func (t *Timeout) Interrupted() time.Duration {
+	if t.interruptEnd.After(t.interruptAt) {
+		return t.interruptEnd.Sub(t.interruptAt)
+	} else {
+		return time.Since(t.interruptAt)
+	}
 }
 
 func (t *Timeout) C() <-chan time.Time {
@@ -199,6 +214,7 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			} else {
 				t.c <- ti
 				t.timeout = true
+				t.interruptAt = time.Now()
 			}
 			t.session.Unlock()
 		}
@@ -221,11 +237,11 @@ func (t *Timeout) resetLocked() {
 func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
 	if ext < 0 {
 		timeout = 1 * time.Millisecond
-		due = time.Since(t.start) + timeout
+		due = time.Since(t.startAt) + timeout
 		return
 	}
 
-	now := time.Since(t.start)
+	now := time.Since(t.startAt)
 	due = time.Duration(math.Ceil(float64(now + ext) / float64(TICK)))*TICK - TICK_ERROR
 	timeout = due - now
 	return

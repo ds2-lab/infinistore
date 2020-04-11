@@ -378,6 +378,7 @@ func (conn *Connection) initMigrateHandler() {
 }
 
 func (conn *Connection) bye() {
+	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
 		conn.instance.bye(conn)
 	}
