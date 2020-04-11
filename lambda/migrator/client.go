@@ -184,14 +184,14 @@ func (cli *Client) Migrate(reader resp.ResponseReader, store types.Storage) {
 			continue
 		}
 
-		chunk, err := store.(*StorageAdapter).Migrate(key)
-		if err == ErrSkip {
-			log.Debug("Migrating key %s: %v", key, err)
-		} else if err == ErrClosed {
+		chunk, ret := store.(*StorageAdapter).Migrate(key)
+		if ret.Error() == ErrSkip {
+			log.Debug("Migrating key %s: %v", key, ret.Error())
+		} else if ret.Error() == ErrClosed {
 			log.Warn("Migration connection closed unexpectedly: %v", store.(*StorageAdapter).lastError)
 			return
-		} else if err != nil {
-			log.Warn("Migrating key %s: %v", key, err)
+		} else if ret.Error() != nil {
+			log.Warn("Migrating key %s: %v", key, ret.Error())
 		} else {
 			log.Debug("Migrating key %s(chunk %s): success", key, chunk)
 		}

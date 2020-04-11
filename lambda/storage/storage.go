@@ -59,7 +59,7 @@ type Storage struct {
 	diffrank   LineageDifferenceRank
 	getSafe		 chan struct{}
 	setSafe    chan struct{}
-	chanOps    chan *types.LineageOp    // NOTE: implement an unbounded channel if neccessary.
+	chanOps    chan *types.OpWrapper    // NOTE: implement an unbounded channel if neccessary.
 	signalTracker chan bool
 	committed  chan struct{}
 	mu         sync.RWMutex             // Mutex for lienage commit.
@@ -99,19 +99,19 @@ func (s *Storage) SetLogLevel(lvl int) {
 }
 
 // Storage Implementation
-func (s *Storage) Get(key string) (string, []byte, error) {
+func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 	<-s.getSafe
 
 	chunk, ok := s.repo[key]
 	if !ok {
 		// No entry
-		return "", nil, types.ErrNotFound
+		return "", nil, types.OpError(types.ErrNotFound)
 	} else if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
 		// Not recovering
 		if chunk.Body == nil {
-			return "", nil, types.ErrNotFound
+			return "", nil, types.OpError(types.ErrNotFound)
 		} else {
-			return chunk.Id, chunk.Access(), nil
+			return chunk.Id, chunk.Access(), types.OpSuccess()
 		}
 	} else {
 		// Recovering, acquire lock
@@ -119,7 +119,7 @@ func (s *Storage) Get(key string) (string, []byte, error) {
 			// Failed, check current status
 			if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
 				// Deleted item is not worth recovering.
-				return chunk.Id, chunk.Access(), nil
+				return chunk.Id, chunk.Access(), types.OpSuccess()
 			}
 			// Someone got lock, yield
 			runtime.Gosched()
@@ -132,20 +132,20 @@ func (s *Storage) Get(key string) (string, []byte, error) {
 
 		// Wait for recovering, use chunk returned.
 		chunk = <-chanReady
-		return chunk.Id, chunk.Access(), nil
+		return chunk.Id, chunk.Access(), types.OpSuccess()
 	}
 }
 
-func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, error) {
-	chunkId, val, err := s.Get(key)
-	if err != nil {
-		return chunkId, nil, err
+func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, *types.OpRet) {
+	chunkId, val, ret := s.Get(key)
+	if ret.Error() != nil {
+		return chunkId, nil, ret
 	}
 
-	return chunkId, resp.NewInlineReader(val), nil
+	return chunkId, resp.NewInlineReader(val), types.OpSuccess()
 }
 
-func (s *Storage) Set(key string, chunkId string, val []byte) error {
+func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	<-s.setSafe
 
 	// Lock lineage
@@ -160,34 +160,40 @@ func (s *Storage) Set(key string, chunkId string, val []byte) error {
 	}
 	s.repo[key] = chunk
 	if s.chanOps != nil {
-		s.chanOps <- &types.LineageOp{
-			Op: types.OP_SET,
-			Key: key,
-			Id: chunkId,
-			Size: chunk.Size,
-			Accessed: chunk.Accessed,
-			// Ret: make(chan error, 1),
-			Bucket: chunk.Bucket,
+		op := &types.OpWrapper{
+			types.LineageOp{
+				Op: types.OP_SET,
+				Key: key,
+				Id: chunkId,
+				Size: chunk.Size,
+				Accessed: chunk.Accessed,
+				Bucket: chunk.Bucket,
+			},
+			types.OpDelayedSuccess(),
+			val,
 		}
+		s.chanOps <- op
+		return op.OpRet
+	} else {
+		return types.OpSuccess()
 	}
-	return nil
 }
 
-func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) error {
+func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) *types.OpRet {
 	val, err := valReader.ReadAll()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error on read stream: %v", err))
+		return types.OpError(errors.New(fmt.Sprintf("Error on read stream: %v", err)))
 	}
 
 	return s.Set(key, chunkId, val)
 }
 
-func (s *Storage) Del(key string, chunkId string) error {
+func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 	<-s.setSafe
 
 	chunk, ok := s.repo[key]
 	if !ok {
-		return types.ErrNotFound
+		return types.OpError(types.ErrNotFound)
 	}
 
 	// Lock lineage
@@ -199,17 +205,24 @@ func (s *Storage) Del(key string, chunkId string) error {
 	chunk.Body = nil
 
 	if s.chanOps != nil {
-		s.chanOps <- &types.LineageOp{
-			Op: types.OP_DEL,
-			Key: key,
-			Id: chunkId,
-			Size: chunk.Size,
-			Accessed: chunk.Accessed,
-			// Ret: make(chan error, 1),
-			Bucket: chunk.Bucket,
+		op := &types.OpWrapper{
+			types.LineageOp{
+				Op: types.OP_DEL,
+				Key: key,
+				Id: chunkId,
+				Size: chunk.Size,
+				Accessed: chunk.Accessed,
+				// Ret: make(chan error, 1),
+				Bucket: chunk.Bucket,
+			},
+			types.OpDelayedSuccess(),
+			nil,
 		}
+		s.chanOps <- op
+		return op.OpRet
+	} else {
+		return types.OpSuccess()
 	}
-	return nil
 }
 
 func (s *Storage) Len() int {
@@ -271,7 +284,7 @@ func (s *Storage) IsConsistent(meta *protocol.Meta) (bool, error) {
 func (s *Storage) TrackLineage() {
 	if s.chanOps == nil {
 		s.lineage.Ops = s.lineage.Ops[:0] // Reset metalogs
-		s.chanOps = make(chan *types.LineageOp, 10)
+		s.chanOps = make(chan *types.OpWrapper, 10)
 		s.signalTracker = make(chan bool, 1)
 		s.committed = make(chan struct{})
 		rand.Seed(time.Now().UnixNano()) // Reseed random.
@@ -297,52 +310,54 @@ func (s *Storage) TrackLineage() {
 				return
 			}
 
-			s.log.Debug("Tracking incoming op: %v", op)
+			s.log.Debug("Tracking incoming op: %v", op.LineageOp)
 			trackStart := time.Now()
 
 			// Upload to s3
 			var failure error
-			for i := 0; i < attemps; i++ {
-				if i > 0 {
-					s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
-				}
+			if op.LineageOp.Op == types.OP_SET {
+				for i := 0; i < attemps; i++ {
+					if i > 0 {
+						s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
+					}
 
-				bucket := op.Bucket
-				if bucket == "" {
-					bucket = s.s3bucketDefault
-				}
-				upParams := &s3manager.UploadInput{
-					Bucket: aws.String(bucket),
-					Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.Key)),
-					Body:   bytes.NewReader(s.repo[op.Key].Body),
-				}
-				// Perform an upload.
-				_, failure = s.uploader.Upload(upParams)
-				if failure != nil {
-					s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
-				} else {
-					// success
-					failure = nil
-					break
+					bucket := op.LineageOp.Bucket
+					if bucket == "" {
+						bucket = s.s3bucketDefault
+					}
+					upParams := &s3manager.UploadInput{
+						Bucket: aws.String(bucket),
+						Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.LineageOp.Key)),
+						Body:   bytes.NewReader(op.Body),
+					}
+					// Perform an upload.
+					_, failure = s.uploader.Upload(upParams)
+					if failure != nil {
+						s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
+					} else {
+						// success
+						failure = nil
+						break
+					}
 				}
 			}
 
 			// Success?
 			if failure != nil {
 				s.log.Error("Failed to upload %s: %v", op.Key, failure)
-				// op.Ret <- failure
+				op.OpRet.Done(failure)
 			} else {
 				// Record after upload success, so if upload failed, the lineage will not have the operation.
-				s.lineage.Ops = append(s.lineage.Ops, *op)
+				s.lineage.Ops = append(s.lineage.Ops, op.LineageOp)
 
 				// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
 				select {
 				case <-s.getSafe:
-					s.diffrank.AddOp(op)
+					s.diffrank.AddOp(&op.LineageOp)
 				default:
 					// Skip
 				}
-				// close(op.Ret)
+				op.OpRet.Done()
 			}
 			trackDuration += time.Since(trackStart)
 		// The tracker will only be signaled after tracked all existing operations.
@@ -398,6 +413,10 @@ func (s *Storage) StopTracker() *protocol.Meta {
 		s.uploader = nil
 	}
 
+	return s.Status()
+}
+
+func (s *Storage) Status() *protocol.Meta {
 	meta := &protocol.Meta {
 		Term: s.lineage.Term,
 		Updates: s.lineage.Updates,
@@ -434,6 +453,7 @@ func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
 	s.lineage.Term = meta.Term
 	s.lineage.Updates = meta.Updates
 	s.lineage.Hash = meta.Hash
+	s.log.Debug("During recovery, write operations enabled at term %d", s.lineage.Term + 1)
 
 	// Flag get as unsafe
 	s.delayGet()

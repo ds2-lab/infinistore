@@ -145,8 +145,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 		store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 		lineage = store.(*storage.Storage)
 
+		log.Debug("Input meta: %v", &input.Meta)
 		if ok, err := lineage.IsConsistent(&input.Meta); err != nil {
-			return protocol.Meta{}, err
+			return *lineage.Status(), err
 		} else if ok {
 			// POND represents the node is ready to serve, no fast recovery required.
 			pongHandler(ctx, session.Connection, false)
@@ -176,6 +177,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	// Adaptive timeout control
 	meta := wait(session, lifetime)
 	log.Debug("All routing cleared(%d) at %v", runtime.NumGoroutine(), session.Timeout.Since())
+	log.Debug("Output meta: %v", meta)
 	return *meta, nil
 }
 
@@ -215,6 +217,7 @@ func serve(conn net.Conn) {
 	if err != nil && err != io.EOF {
 		log.Info("Connection closed: %v", err)
 	} else {
+		err = nil
 		log.Info("Connection closed.")
 	}
 	conn.Close()
@@ -235,14 +238,15 @@ func serve(conn net.Conn) {
 		return
 	} else {
 		// The connection of current session is closed.
-		//   Signal migrator is ready and start migration;
-		//   Or we are done.
 		proxyConn = nil
-		if session.Migrator != nil {
+		if err != nil {
+			// Connection interrupted. do nothing and session will timeout.
+		} else if session.Migrator != nil {
+			// Signal migrator is ready and start migration.
 			session.Migrator.SetReady()
 		} else {
+			// We are done.
 			lifetime.Rest()
-			session.Done()
 		}
 	}
 }
@@ -252,7 +256,10 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 
 	select {
 	case <-session.WaitDone():
-		return nil
+		if lineage != nil {
+			log.Error("Seesion aborted faultly when persistence is enabled.")
+			return lineage.Status()
+		}
 	case <-session.Timeout.C():
 		// There's no turning back.
 		session.Timeout.Halt()
@@ -294,6 +301,8 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 		}
 	}
 
+	// Unlikely to reach here
+	log.Error("Wait, where am I?")
 	return nil
 }
 
@@ -467,10 +476,10 @@ func main() {
 		//	log.Debug("not found")
 		//}
 		t2 := time.Now()
-		chunkId, stream, err := store.GetStream(key)
+		chunkId, stream, ret := store.GetStream(key)
 		d2 := time.Since(t2)
 
-		if err == nil {
+		if ret.Error() == nil {
 			// construct lambda store response
 			response := &types.Response{
 				ResponseWriter: w,
@@ -496,11 +505,11 @@ func main() {
 			collector.Send(&types.DataEntry{types.OP_GET, "200", reqId, chunkId, d2, d3, dt, session.Id})
 		} else {
 			var respError *types.ResponseError
-			if err == types.ErrNotFound {
+			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, err)
+				respError = types.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, err)
+				respError = types.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to get %s: %v", key, respError)
@@ -520,7 +529,17 @@ func main() {
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
 
 		t := time.Now()
 		log.Debug("In SET handler")
@@ -538,21 +557,15 @@ func main() {
 			}
 			return
 		}
-		// val, err := valReader.ReadAll()
-		// if err != nil {
-		// 	log.Error("Error on get value: %v", err)
-		// 	w.AppendErrorf("Error on get value: %v", err)
-		// 	if err := w.Flush(); err != nil {
-		// 		log.Error("Error on flush(error 500): %v", err)
-		// 	}
-		// 	return
-		// }
-		err = store.SetStream(key, chunkId, valReader)
-		if err != nil {
-			log.Error("%v", err)
-			w.AppendErrorf("%v", err)
+
+		// Streaming set.
+		ret = store.SetStream(key, chunkId, valReader)
+		if ret.Error() != nil {
+			log.Error("%v", ret.Error())
+			w.AppendErrorf("%v", ret.Error())
 			if err := w.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
+				// Ignore
 			}
 			return
 		}
@@ -568,7 +581,7 @@ func main() {
 		response.Prepare()
 		if err := response.Flush(); err != nil {
 			log.Error("Error on set::flush(set key %s): %v", key, err)
-			return
+			// Ignore
 		}
 
 		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s", key, connId, chunkId)
@@ -583,7 +596,17 @@ func main() {
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
 
 		//t := time.Now()
 		log.Debug("In Del Handler")
@@ -593,8 +616,8 @@ func main() {
 		chunkId := c.Arg(2).String()
 		key := c.Arg(3).String()
 
-		err := store.Del(key, chunkId)
-		if err == nil {
+		ret = store.Del(key, chunkId)
+		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
 			response := &types.Response{
 				ResponseWriter: w,
@@ -610,11 +633,11 @@ func main() {
 			}
 		} else {
 			var respError *types.ResponseError
-			if err == types.ErrNotFound {
+			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, err)
+				respError = types.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, err)
+				respError = types.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to del %s: %v", key, respError)
@@ -623,8 +646,8 @@ func main() {
 				log.Error("Error on flush: %v", err)
 			}
 		}
-
 	})
+
 	srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
@@ -751,8 +774,8 @@ func main() {
 		delList := make([]string, 0, 2 * store.Len())
 		getList := delList[store.Len():store.Len()]
 		for key := range store.Keys() {
-			_, _, err := store.Get(key)
-			if err == types.ErrNotFound {
+			_, _, ret := store.Get(key)
+			if ret.Error() == types.ErrNotFound {
 				delList = append(delList, key)
 			} else {
 				getList = append(getList, key)

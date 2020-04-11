@@ -382,6 +382,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		var outputMeta protocol.Meta
 		if err := json.Unmarshal(output.Payload, &outputMeta); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v", err)
+			ins.Meta.Stale = true
 		} else {
 			ins.Meta.Term = outputMeta.Term
 			ins.Meta.Updates = outputMeta.Updates
@@ -391,10 +392,12 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			ins.Meta.SnapshotUpdates = outputMeta.SnapshotUpdates
 			ins.Meta.SnapshotSize = outputMeta.SnapshotSize
 			ins.Meta.Stale = false
-			return
+			ins.log.Debug("Got updated instance lineage: %v", outputMeta)
 		}
+	} else if event.IsPersistentEnabled() {
+		ins.log.Error("No instance lineage returned, output: %v", output)
+		ins.Meta.Stale = true
 	}
-	ins.Meta.Stale = true
 }
 
 func (ins *Instance) flagValidated(conn *Connection) *Connection {
