@@ -331,7 +331,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	}
 }
 
-func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) bool {
+func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	if ins.Meta.Stale {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
