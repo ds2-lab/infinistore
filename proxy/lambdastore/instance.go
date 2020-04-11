@@ -81,6 +81,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 
 	return &Instance{
 		Deployment:    dp,
+		Meta:          Meta{ Term: 1 }, // Term start with 1 to avoid uninitialized term ambigulous.
 		awake:         INSTANCE_SLEEP,
 		chanCmd:       make(chan types.Command, 1),
 		chanValidated: chanValidated, // Initialize with a closed channel.
@@ -330,9 +331,10 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	}
 }
 
-func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
+func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) bool {
 	if ins.Meta.Stale {
 		// TODO: Check stale status
+		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
 	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(global.AWSRegion)})
 
@@ -372,6 +374,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		Payload:      payload,
 	}
 
+	ins.Meta.Stale = true
 	output, err := client.Invoke(input)
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
@@ -382,7 +385,6 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		var outputMeta protocol.Meta
 		if err := json.Unmarshal(output.Payload, &outputMeta); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v", err)
-			ins.Meta.Stale = true
 		} else {
 			ins.Meta.Term = outputMeta.Term
 			ins.Meta.Updates = outputMeta.Updates
@@ -391,12 +393,21 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			ins.Meta.SnapshotTerm = outputMeta.SnapshotTerm
 			ins.Meta.SnapshotUpdates = outputMeta.SnapshotUpdates
 			ins.Meta.SnapshotSize = outputMeta.SnapshotSize
-			ins.Meta.Stale = false
-			ins.log.Debug("Got updated instance lineage: %v", outputMeta)
+			var uptodate bool
+			ins.awakeLock.Lock()
+			if ins.awake == INSTANCE_AWAKE {
+				ins.Meta.Stale = false
+				uptodate = true
+			}
+			ins.awakeLock.Unlock()
+			if uptodate {
+				ins.log.Debug("Got updated instance lineage: %v", outputMeta)
+			} else {
+				ins.log.Debug("Got staled instance lineage: %v", outputMeta)
+			}
 		}
 	} else if event.IsPersistentEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
-		ins.Meta.Stale = true
 	}
 }
 
@@ -438,11 +449,16 @@ func (ins *Instance) bye(conn *Connection) {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	if ins.cn == conn {
-		ins.awakeLock.Lock()
-		defer ins.awakeLock.Unlock()
+	if ins.cn != conn {
+		return
+	}
 
+	ins.awakeLock.Lock()
+	defer ins.awakeLock.Unlock()
+	if ins.awake == INSTANCE_MAYBE {
 		ins.awake = INSTANCE_SLEEP
+	} else {
+		ins.log.Debug("Bye ignored, waiting for return of synchronous invocation.")
 	}
 }
 

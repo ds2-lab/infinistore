@@ -84,6 +84,7 @@ func New() *Storage {
 		getSafe: getSafe,
 		setSafe: setSafe,
 		lineage: &types.LineageTerm{
+			Term: 1,  // Term start with 1 to avoid uninitialized term ambigulous.
 			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
 		},
 		diffrank: NewSimpleDifferenceRank(Backups),
