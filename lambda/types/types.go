@@ -116,6 +116,13 @@ type OpWrapper struct {
 	Body      []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
 }
 
+type CommitOption struct {
+	Full bool
+	Snapshotted bool
+	BytesUploaded uint64
+	Checked bool
+}
+
 // For storage
 type Chunk struct {
 	Key      string

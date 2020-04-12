@@ -60,10 +60,11 @@ type Storage struct {
 	getSafe		 chan struct{}
 	setSafe    chan struct{}
 	chanOps    chan *types.OpWrapper    // NOTE: implement an unbounded channel if neccessary.
-	signalTracker chan bool
-	committed  chan struct{}
+	signalTracker chan *types.CommitOption
+	committed  chan *types.CommitOption
 	mu         sync.RWMutex             // Mutex for lienage commit.
 	notifier   map[string]chan *types.Chunk
+	commitOpt  *types.CommitOption
 
 	// Persistent backpack
 	s3bucket   string
@@ -287,8 +288,8 @@ func (s *Storage) TrackLineage() {
 	if s.chanOps == nil {
 		s.lineage.Ops = s.lineage.Ops[:0] // Reset metalogs
 		s.chanOps = make(chan *types.OpWrapper, 10)
-		s.signalTracker = make(chan bool, 1)
-		s.committed = make(chan struct{})
+		s.signalTracker = make(chan *types.CommitOption, 1)
+		s.committed = make(chan *types.CommitOption)
 		rand.Seed(time.Now().UnixNano()) // Reseed random.
 		s.resetSet()
 		go s.TrackLineage()
@@ -381,6 +382,9 @@ func (s *Storage) Commit() error {
 
 	s.log.Debug("Commiting lineage.")
 
+	// Initialize option for committing.
+	s.commitOpt = &types.CommitOption{}
+
 	// Are we goint to do the snapshot?
 	var snapshotTerm uint64
 	if s.snapshot != nil {
@@ -392,19 +396,24 @@ func (s *Storage) Commit() error {
 	// and it takes roughly same time to download a snapshot or up to 10 lineage terms.
 	// So snapshot every 5 - 10 terms will be appropriate.
 	// Hard-coded to 5, noted s.lineage.Term is one term smaller before commit
-	full := s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
+	s.commitOpt.Full = s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
 
 	// Signal and wait for committed.
-	s.signalTracker <- full
+	s.signalTracker <- s.commitOpt
 	<-s.committed
 
+	// Flag checked
+	s.commitOpt.Checked = true
 	return nil
 }
 
 func (s *Storage) StopTracker() *protocol.Meta {
 	if s.signalTracker != nil {
+		// Reset bytes uploaded
+		s.commitOpt.BytesUploaded = 0
+
 		// Signal for double check and wait for confirmation.
-		s.signalTracker <- false
+		s.signalTracker <- s.commitOpt
 		<-s.committed
 
 		// Clean up
@@ -413,6 +422,7 @@ func (s *Storage) StopTracker() *protocol.Meta {
 		s.signalTracker = nil
 		s.committed = nil
 		s.uploader = nil
+		s.commitOpt = nil
 	}
 
 	return s.Status()
@@ -466,27 +476,28 @@ func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
 	return s.diffrank.IsSignificant(meta.DiffRank) && tips.Get(protocol.TIP_ID) == "", chanErr
 }
 
-func (s *Storage) doCommit(full bool) {
+func (s *Storage) doCommit(opt *types.CommitOption) {
 	if len(s.lineage.Ops) > 0 {
-		snapshotted := false
-		var uploadedBytes uint64
+		var bytesUploaded uint64
 
 		start := time.Now()
-		term, err := s.doCommitTerm(s.lineage)
+		lineage, term, err := s.doCommitTerm(s.lineage)
+		s.lineage = lineage
 		stop1 := time.Now()
 		if err != nil {
 			s.log.Warn("Failed to commit term %d: %v", term, err)
-		} else if full {
-			uploadedBytes += s.lineage.Size
-			err = s.doSnapshot(s.lineage)
-			if err != nil {
+		} else {
+			bytesUploaded += s.lineage.Size
+
+			if !opt.Full || opt.Snapshotted {
+				// pass
+			} else if snapshot, err := s.doSnapshot(s.lineage); err != nil {
 				s.log.Warn("Failed to snapshot up to term %d: %v", term, err)
 			} else {
-				snapshotted = true
-				uploadedBytes += s.snapshot.Size
+				bytesUploaded += snapshot.Size
+				s.snapshot = snapshot
+				opt.Snapshotted = true
 			}
-		} else {
-			uploadedBytes += s.lineage.Size
 		}
 		end := time.Now()
 
@@ -494,17 +505,22 @@ func (s *Storage) doCommit(full bool) {
 		// This time, ignore argument "full" if snapshotted.
 		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
-		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), uploadedBytes)
-		s.signalTracker <- full && !snapshotted
+		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), bytesUploaded)
+		opt.BytesUploaded += bytesUploaded
+		s.signalTracker <- opt
 	} else {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
 		// DO NOT close "committed", since there will be a double check on stoping the tracker.
-		s.log.Debug("No more term to commit, signal committed.")
-		s.committed <- struct{}{}
+		if opt.Checked {
+			s.log.Debug("Double checked: no more term to commit, signal committed.")
+		} else {
+			s.log.Debug("Checked: no more term to commit, signal committed.")
+		}
+		s.committed <- opt
 	}
 }
 
-func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
+func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (*types.LineageTerm, uint64, error) {
 	// Lock local lineage
 	s.mu.Lock()
 
@@ -512,7 +528,7 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
 	raw, err := binary.Marshal(lineage.Ops)
 	if err != nil {
 		s.mu.Unlock()
-		return lineage.Term + 1, err
+		return lineage, lineage.Term + 1, err
 	}
 
 	// Construct the term.
@@ -534,11 +550,11 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
 	zipWriter := gzip.NewWriter(buf)
 	if err := binary.MarshalTo(term, zipWriter); err != nil {
 		s.mu.Unlock()
-		return term.Term, err
+		return lineage, term.Term, err
 	}
 	if err := zipWriter.Close(); err != nil {
 		s.mu.Unlock()
-		return term.Term, err
+		return lineage, term.Term, err
 	}
 
 	// Update local lineage. Size must be updated before used for uploading.
@@ -560,13 +576,11 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (uint64, error) {
 	_, err = s.uploader.Upload(params)
 	if err != nil {
 		// TODO: Pending and retry at a later time.
-		return term.Term, err
 	}
-
-	return term.Term, nil
+	return lineage, term.Term, err
 }
 
-func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
+func (s *Storage) doSnapshot(lineage *types.LineageTerm) (*types.LineageTerm, error) {
 	start := time.Now()
 	// Construct object list.
 	allOps := make([]types.LineageOp, 0, len(s.repo))
@@ -594,10 +608,10 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
 	buf := new(bytes.Buffer)
 	zipWriter := gzip.NewWriter(buf)
 	if err := binary.MarshalTo(ss, zipWriter); err != nil {
-		return err
+		return nil, err
 	}
 	if err := zipWriter.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	// Release "Ops" and update size. Size must be updated before used for uploading.
 	ss.Ops = nil
@@ -612,15 +626,11 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) error {
 		Body:   buf,
 	}
 	if _, err := s.uploader.Upload(params); err != nil {
-		// TODO: Add retrial
-		return err
+		// Simply abandon.
+		return nil, err
 	}
-	s.log.Debug("buflen: %v", buf.Len())
 
-	// Update local snapshot.
-	s.snapshot = ss
-
-	return nil
+	return ss, nil
 }
 
 func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tips url.Values, chanErr chan error) {

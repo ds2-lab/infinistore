@@ -39,6 +39,8 @@ func init() {
 }
 
 type Timeout struct {
+	Confirm       func(*Timeout) bool
+
 	session       *Session
 	startAt       time.Time
 	interruptAt   time.Time
@@ -51,7 +53,6 @@ type Timeout struct {
 	reset         chan time.Duration
 	c             chan time.Time
 	timeout       bool
-	hasReset      bool
 	due           time.Duration
 }
 
@@ -192,8 +193,7 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			t.due = due
 			t.timer.Reset(timeout)
 			t.log.Debug("Due expectation updated: %v, timeout in %v", due, timeout)
-			t.hasReset = false
-		case ti := <-t.timer.C:
+		case <-t.timer.C:
 			// Timeout channel should be empty, or we clear it
 			select{
 			case <-t.c:
@@ -201,22 +201,30 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 				// Nothing
 			}
 
-			t.session.Lock()
-			// Double check timeout after locked.
-			if t.hasReset || t.IsDisabled() {
-				// pass
-			} else if t.IsBusy() {
-				t.resetLocked()
-			} else if t.Since() < t.due {
-				// FIXME: This is just a precaution check, remove if possible.
-				t.log.Debug("Unexpected timeout before due (%v / %v), try reset.", t.Since(), t.due)
-				t.resetLocked()
-			} else {
-				t.c <- ti
-				t.timeout = true
-				t.interruptAt = time.Now()
+			// t.session.Lock()
+			// // Double check timeout after locked.
+			// if len(t.reset) > 0 || t.IsDisabled() {
+			// 	// pass
+			// } else if t.IsBusy() {
+			// 	t.resetLocked()
+			// } else if t.Since() < t.due {
+			// 	// FIXME: This is just a precaution check, remove if possible.
+			// 	t.log.Debug("Unexpected timeout before due (%v / %v), try reset.", t.Since(), t.due)
+			// 	t.resetLocked()
+			// } else if t.OnTimeout != nil && t.OnTimeout(t) { // Final chance to deny timeout.
+			// 	t.c <- ti
+			// 	t.timeout = true
+			// 	t.OnTimeout = nil
+			// 	t.interruptAt = time.Now()
+			// }
+			// t.session.Unlock()
+			if !t.tryTimeout(false) {
+				continue
 			}
-			t.session.Unlock()
+
+			if t.Confirm != nil && t.Confirm(t) {
+				t.tryTimeout(true)
+			}
 		}
 	}
 }
@@ -231,7 +239,6 @@ func (t *Timeout) resetLocked() {
 		<-t.reset
 		t.reset <- t.lastExtension
 	}
-	t.hasReset = true
 }
 
 func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
@@ -245,4 +252,28 @@ func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
 	due = time.Duration(math.Ceil(float64(now + ext) / float64(TICK)))*TICK - TICK_ERROR
 	timeout = due - now
 	return
+}
+
+func (t *Timeout) tryTimeout(confirmed bool) bool {
+	t.session.Lock()
+	defer t.session.Unlock()
+
+	// Double check timeout after locked.
+	if len(t.reset) > 0 || t.IsDisabled() {
+		return false
+	} else if t.IsBusy() {
+		t.resetLocked()
+		return false
+	} else if t.Since() < t.due {
+		// FIXME: This is just a precaution check, remove if possible.
+		t.log.Debug("Unexpected timeout before due (%v / %v), try reset.", t.Since(), t.due)
+		t.resetLocked()
+		return false
+	} else if confirmed {
+		t.timeout = true
+		t.interruptAt = time.Now()
+		t.c <- t.interruptAt
+	}
+
+	return true
 }

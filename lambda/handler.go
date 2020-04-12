@@ -13,6 +13,7 @@ import (
 
 	//	"github.com/wangaoone/s3gof3r"
 	"io"
+	"math"
 	"math/rand"
 	"net"
 	"net/url"
@@ -97,13 +98,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	defer lambdaLife.ClearSession()
 
 	session.Timeout.SetLogger(log)
-	if input.Timeout > 0 {
-		deadline, _ := ctx.Deadline()
-		session.Timeout.StartWithCalibration(deadline.Add(-time.Duration(input.Timeout) * time.Second))
-	} else {
-		session.Timeout.Start()
-	}
-	issuePong()
+	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
+	deadline, _ := ctx.Deadline()
+	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline)) / float64(time.Second))) * time.Second
+	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
+	issuePong()     // Ensure pong will only be issued once on invocation
 
 	// Update global parameters
 	collector.Prefix = input.Prefix
@@ -163,6 +162,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 
 		// Start tracking
 		lineage.TrackLineage()
+		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
+			// Commit and wait, error will be logged.
+			lineage.Commit()
+			return true
+		}
 	}
 
 	// Start data collector
@@ -269,11 +273,6 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *pro
 	case <-session.Timeout.C():
 		// There's no turning back.
 		session.Timeout.Halt()
-
-		// Commit and wait, error will be logged.
-		if lineage != nil {
-			lineage.Commit()
-		}
 
 		if lifetime.IsTimeUp() && store.Len() > 0 {
 			// Time to migrate
@@ -887,8 +886,8 @@ func main() {
 			for i := 0; i < *numToInsert; i++ {
 				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
-				if err := store.Set(fmt.Sprintf("obj-%d", int(input.Meta.DiffRank) + i), "0", val); err != nil {
-					log.Error("Error on set obj-%d: %v", i, err)
+				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Meta.DiffRank) + i), "0", val); ret.Error() != nil {
+					log.Error("Error on set obj-%d: %v", i, ret.Error())
 				}
 			}
 			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
