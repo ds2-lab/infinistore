@@ -35,6 +35,8 @@ const (
 )
 
 var (
+	EMPTY_META = protocol.Meta{}
+
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
 
@@ -113,7 +115,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 
 	// migration triggered lambda
 	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
-		return protocol.Meta{}, nil
+		return EMPTY_META, nil
 	}
 
 	// Check connection
@@ -123,7 +125,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	// Connect proxy and serve
 	if session.Connection == nil {
 		if err := connect(&input, session); err != nil {
-			return protocol.Meta{}, err
+			return EMPTY_META, err
 		}
 		// Cross session gorouting
 		go serve(session.Connection)
@@ -253,15 +255,17 @@ func serve(conn net.Conn) {
 	}
 }
 
-func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.Meta {
+func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *protocol.Meta) {
 	defer session.CleanUp.Wait()
 
+	meta = &EMPTY_META
 	select {
 	case <-session.WaitDone():
 		if lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			return lineage.Status()
+			meta = lineage.Status()
 		}
+		return
 	case <-session.Timeout.C():
 		// There's no turning back.
 		session.Timeout.Halt()
@@ -283,7 +287,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 			for err := session.Migrator.Initiate(initiator); err != nil; {
 				log.Warn("Fail to initiaiate migration: %v", err)
 				if err == types.ErrProxyClosing {
-					return nil
+					return
 				}
 
 				log.Warn("Retry migration")
@@ -292,20 +296,19 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) *protocol.
 			log.Debug("Migration initiated.")
 		} else {
 			// Finalize, this is quick usually.
-			var meta *protocol.Meta
 			if lineage != nil {
 				meta = lineage.StopTracker()
 			}
 			byeHandler(session.Connection)
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
-			return meta
+			return
 		}
 	}
 
 	// Unlikely to reach here
 	log.Error("Wait, where am I?")
-	return nil
+	return
 }
 
 func issuePong() {
@@ -811,7 +814,7 @@ func main() {
 		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
 		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
 		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior")
-		flag.Uint64Var(&input.Meta.Term, "term", 0, "Lineage.Term")
+		flag.Uint64Var(&input.Meta.Term, "term", 1, "Lineage.Term")
 		flag.Uint64Var(&input.Meta.Updates, "updates", 0, "Lineage.Updates")
 		flag.Float64Var(&input.Meta.DiffRank, "diffrank", 0, "Difference rank")
 		flag.StringVar(&input.Meta.Hash, "hash", "", "Lineage.Hash")
@@ -875,8 +878,8 @@ func main() {
 			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 			session.Timeout.Busy()
 			if tips.Get(protocol.TIP_SERVING_KEY) != "" {
-				if _, _, err := store.Get(tips.Get(protocol.TIP_SERVING_KEY)); err != nil {
-					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), err)
+				if _, _, ret := store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
+					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
 				} else {
 					log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
 				}
