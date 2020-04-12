@@ -279,7 +279,8 @@ func (s *Storage) IsConsistent(meta *protocol.Meta) (bool, error) {
 	if s.lineage.Term > meta.Term {
 		return false, errors.New(fmt.Sprintf("Detected staled term from proxy, expected at least %d, have %d", s.lineage.Term, meta.Term))
 	}
-	return s.lineage.Term == meta.Term && s.lineage.Hash == meta.Hash, nil
+	// Don't check hash if term is the start term(1).
+	return s.lineage.Term == meta.Term && (meta.Term == 1 || s.lineage.Hash == meta.Hash), nil
 }
 
 func (s *Storage) TrackLineage() {
@@ -437,7 +438,7 @@ func (s *Storage) Status() *protocol.Meta {
 // The recovery ends if returned channel is closed.
 // If the first return value is false, no fast recovery is needed.
 func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
-	if ok, _ := s.IsConsistent(meta); !ok {
+	if ok, _ := s.IsConsistent(meta); ok {
 		return ok, nil
 	}
 
@@ -675,6 +676,13 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *protocol.Meta, tip
 }
 
 func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader S3Downloader) (int, []*types.LineageTerm, int, error) {
+	// If hash not match, invalidate lineage.
+	if meta.Term == lineage.Term && meta.Hash != lineage.Hash {
+		lineage.Term = 1
+		lineage.Updates = 0
+		lineage.Hash = ""
+	}
+
 	// meta.Updates - meta.SnapshotUpdates + meta.SnapshotSize < meta.Updates - lineage.Updates
 	baseTerm := lineage.Term
 	snapshot := false
