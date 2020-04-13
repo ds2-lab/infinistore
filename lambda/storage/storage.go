@@ -64,14 +64,12 @@ type Storage struct {
 	committed  chan *types.CommitOption
 	mu         sync.RWMutex             // Mutex for lienage commit.
 	notifier   map[string]chan *types.Chunk
-	commitOpt  *types.CommitOption
 
 	// Persistent backpack
 	s3bucket   string
 	s3bucketDefault string
 	s3prefix   string
 	awsSession *awsSession.Session
-	uploader   *s3manager.Uploader
 }
 
 func New() *Storage {
@@ -93,10 +91,11 @@ func New() *Storage {
 	}
 }
 
-func (s *Storage) SetLogLevel(lvl int) {
+func (s *Storage) ConfigLogger(lvl int, color bool) {
 	if colorLogger, ok := s.log.(*logger.ColorLogger); ok {
 		colorLogger.Level = lvl
 		colorLogger.Verbose = lvl == logger.LOG_LEVEL_ALL
+		colorLogger.Color = color
 	}
 }
 
@@ -163,7 +162,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	s.repo[key] = chunk
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
-			types.LineageOp{
+			LineageOp: types.LineageOp{
 				Op: types.OP_SET,
 				Key: key,
 				Id: chunkId,
@@ -171,8 +170,8 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 				Accessed: chunk.Accessed,
 				Bucket: chunk.Bucket,
 			},
-			types.OpDelayedSuccess(),
-			val,
+			OpRet: types.OpDelayedSuccess(),
+			Body: val,
 		}
 		s.chanOps <- op
 		return op.OpRet
@@ -208,7 +207,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
-			types.LineageOp{
+			LineageOp: types.LineageOp{
 				Op: types.OP_DEL,
 				Key: key,
 				Id: chunkId,
@@ -217,8 +216,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 				// Ret: make(chan error, 1),
 				Bucket: chunk.Bucket,
 			},
-			types.OpDelayedSuccess(),
-			nil,
+			OpRet: types.OpDelayedSuccess(),
 		}
 		s.chanOps <- op
 		return op.OpRet
@@ -299,10 +297,20 @@ func (s *Storage) TrackLineage() {
 	s.log.Debug("Tracking lineage...")
 
 	// Initialize s3 uploader
-	s.uploader = s3manager.NewUploader(s.GetAWSSession())
+	smallUploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+		u.Concurrency = 1
+	})
+	largeUploader := s3manager.NewUploader(s.GetAWSSession())
 	attemps := 3
+	persistedOps := make([]*types.OpWrapper, 0, 10)
+	persisted := 0
+	// Token is used as concurrency throttler as well as to accept upload result and keep total ordering.
+	freeToken := Concurrency
+	token := make(chan *types.OpWrapper, freeToken)
+	var commitOpt *types.CommitOption
 
 	var trackDuration time.Duration
+	var trackStart time.Time
 	for {
 		select {
 		case op := <-s.chanOps:
@@ -313,77 +321,146 @@ func (s *Storage) TrackLineage() {
 				return
 			}
 
+			// Count duration
+			if persisted == len(persistedOps) {
+				trackStart = time.Now()
+			}
+
+			// Fill token
+			if freeToken > 0 {
+				freeToken--
+				token <- nil
+			}
+
+			// Try to get token to continue
+			persistedOp := <-token
+			if persistedOp != nil {
+				// Accept result
+				persistedOps[persistedOp.OpIdx] = persistedOp
+				for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
+					persistedOp = persistedOps[persisted]
+					if persistedOp.OpRet.Wait() == nil {
+						s.lineage.Ops = append(s.lineage.Ops, persistedOp.LineageOp)
+
+						// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
+						select {
+						case <-s.getSafe:
+							s.diffrank.AddOp(&op.LineageOp)
+						default:
+							// Skip
+						}
+					}
+				}
+			}
+
 			s.log.Debug("Tracking incoming op: %v", op.LineageOp)
-			trackStart := time.Now()
+
+			op.OpIdx = len(persistedOps)
+			persistedOps = append(persistedOps, nil)
 
 			// Upload to s3
 			var failure error
 			if op.LineageOp.Op == types.OP_SET {
-				for i := 0; i < attemps; i++ {
-					if i > 0 {
-						s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
+				go func() {
+					for i := 0; i < attemps; i++ {
+						if i > 0 {
+							s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
+						}
+
+						bucket := op.LineageOp.Bucket
+						if bucket == "" {
+							bucket = s.s3bucketDefault
+						}
+						upParams := &s3manager.UploadInput{
+							Bucket: aws.String(bucket),
+							Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.LineageOp.Key)),
+							Body:   bytes.NewReader(op.Body),
+						}
+						// Perform an upload.
+						uploader := smallUploader
+						if int64(len(op.Body)) >= largeUploader.PartSize {
+							uploader = largeUploader
+						}
+						_, failure = uploader.Upload(upParams)
+						if failure != nil {
+							s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
+						} else {
+							// success
+							failure = nil
+							break
+						}
 					}
 
-					bucket := op.LineageOp.Bucket
-					if bucket == "" {
-						bucket = s.s3bucketDefault
-					}
-					upParams := &s3manager.UploadInput{
-						Bucket: aws.String(bucket),
-						Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.LineageOp.Key)),
-						Body:   bytes.NewReader(op.Body),
-					}
-					// Perform an upload.
-					_, failure = s.uploader.Upload(upParams)
+					// Success?
 					if failure != nil {
-						s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
-					} else {
-						// success
-						failure = nil
-						break
+						s.log.Error("Failed to upload %s: %v", op.Key, failure)
+					}
+					op.OpRet.Done(failure)
+					token <- op
+				}()
+			} else {
+				op.OpRet.Done()
+				token <- op
+			}
+		case persistedOp := <-token:
+			if persistedOp != nil {
+				// Accept result
+				persistedOps[persistedOp.OpIdx] = persistedOp
+				for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
+					persistedOp = persistedOps[persisted]
+					if persistedOp.OpRet.Wait() == nil {
+						s.lineage.Ops = append(s.lineage.Ops, persistedOp.LineageOp)
+
+						// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
+						select {
+						case <-s.getSafe:
+							s.diffrank.AddOp(&persistedOp.LineageOp)
+						default:
+							// Skip
+						}
 					}
 				}
 			}
+			// Refill freeToken
+			freeToken++
+			// All persisted?
+			if persisted == len(persistedOps) {
+				// Count duration
+				trackDuration += time.Since(trackStart)
 
-			// Success?
-			if failure != nil {
-				s.log.Error("Failed to upload %s: %v", op.Key, failure)
-				op.OpRet.Done(failure)
-			} else {
-				// Record after upload success, so if upload failed, the lineage will not have the operation.
-				s.lineage.Ops = append(s.lineage.Ops, op.LineageOp)
-
-				// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
-				select {
-				case <-s.getSafe:
-					s.diffrank.AddOp(&op.LineageOp)
-				default:
-					// Skip
+				// Signal tracker if commit initiated.
+				if commitOpt != nil {
+					s.signalTracker <- commitOpt
 				}
-				op.OpRet.Done()
 			}
-			trackDuration += time.Since(trackStart)
 		// The tracker will only be signaled after tracked all existing operations.
-		case full := <-s.signalTracker:
+		case opt := <-s.signalTracker:
 			if len(s.chanOps) > 0 {
 				// We wait for chanOps get drained.
-				s.signalTracker <- full
+				s.signalTracker <- opt
+			} else if persisted < len(persistedOps) {
+				// Wait for being persisted and signalTracker get refilled.
+				commitOpt = opt
 			} else {
-				s.doCommit(full)
+				// All operations persisted.
+				persistedOps = persistedOps[:0]
+				persisted = 0
+				commitOpt = nil
+				s.doCommit(opt)
 			}
 		}
 	}
 }
 
-func (s *Storage) Commit() error {
+func (s *Storage) Commit() (*types.CommitOption, error) {
 	if s.signalTracker == nil {
-		return ERR_TRACKER_NOT_STARTED
+		return nil, ERR_TRACKER_NOT_STARTED
 	}
 
 	s.log.Debug("Commiting lineage.")
 
 	// Initialize option for committing.
-	s.commitOpt = &types.CommitOption{}
+	option := &types.CommitOption{}
 
 	// Are we goint to do the snapshot?
 	var snapshotTerm uint64
@@ -396,33 +473,30 @@ func (s *Storage) Commit() error {
 	// and it takes roughly same time to download a snapshot or up to 10 lineage terms.
 	// So snapshot every 5 - 10 terms will be appropriate.
 	// Hard-coded to 5, noted s.lineage.Term is one term smaller before commit
-	s.commitOpt.Full = s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
+	option.Full = s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
 
 	// Signal and wait for committed.
-	s.signalTracker <- s.commitOpt
-	<-s.committed
+	s.signalTracker <- option
+	option = <-s.committed
 
 	// Flag checked
-	s.commitOpt.Checked = true
-	return nil
+	return option, nil
 }
 
-func (s *Storage) StopTracker() *protocol.Meta {
+func (s *Storage) StopTracker(option *types.CommitOption) *protocol.Meta {
 	if s.signalTracker != nil {
 		// Reset bytes uploaded
-		s.commitOpt.BytesUploaded = 0
+		option.BytesUploaded = 0
 
 		// Signal for double check and wait for confirmation.
-		s.signalTracker <- s.commitOpt
+		s.signalTracker <- option
 		<-s.committed
 
 		// Clean up
 		close(s.chanOps)
-		s.chanOps = nil
+		runtime.Gosched()
 		s.signalTracker = nil
 		s.committed = nil
-		s.uploader = nil
-		s.commitOpt = nil
 	}
 
 	return s.Status()
@@ -479,9 +553,12 @@ func (s *Storage) Recover(meta *protocol.Meta) (bool, chan error) {
 func (s *Storage) doCommit(opt *types.CommitOption) {
 	if len(s.lineage.Ops) > 0 {
 		var bytesUploaded uint64
+		uploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+			u.Concurrency = 1
+		})
 
 		start := time.Now()
-		lineage, term, err := s.doCommitTerm(s.lineage)
+		lineage, term, err := s.doCommitTerm(s.lineage, uploader)
 		s.lineage = lineage
 		stop1 := time.Now()
 		if err != nil {
@@ -491,7 +568,7 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 
 			if !opt.Full || opt.Snapshotted {
 				// pass
-			} else if snapshot, err := s.doSnapshot(s.lineage); err != nil {
+			} else if snapshot, err := s.doSnapshot(s.lineage, uploader); err != nil {
 				s.log.Warn("Failed to snapshot up to term %d: %v", term, err)
 			} else {
 				bytesUploaded += snapshot.Size
@@ -520,7 +597,7 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 	}
 }
 
-func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (*types.LineageTerm, uint64, error) {
+func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.Uploader) (*types.LineageTerm, uint64, error) {
 	// Lock local lineage
 	s.mu.Lock()
 
@@ -573,14 +650,14 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm) (*types.LineageTerm, 
 		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, term.Term)),
 		Body:   buf,
 	}
-	_, err = s.uploader.Upload(params)
+	_, err = uploader.Upload(params)
 	if err != nil {
 		// TODO: Pending and retry at a later time.
 	}
 	return lineage, term.Term, err
 }
 
-func (s *Storage) doSnapshot(lineage *types.LineageTerm) (*types.LineageTerm, error) {
+func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Uploader) (*types.LineageTerm, error) {
 	start := time.Now()
 	// Construct object list.
 	allOps := make([]types.LineageOp, 0, len(s.repo))
@@ -625,7 +702,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm) (*types.LineageTerm, er
 		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
 		Body:   buf,
 	}
-	if _, err := s.uploader.Upload(params); err != nil {
+	if _, err := uploader.Upload(params); err != nil {
 		// Simply abandon.
 		return nil, err
 	}
