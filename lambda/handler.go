@@ -107,7 +107,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
-	store.(*storage.Storage).SetLogLevel(input.Log)
+	store.(*storage.Storage).ConfigLogger(log.Level, log.Color)
 	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
@@ -162,11 +162,6 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 
 		// Start tracking
 		lineage.TrackLineage()
-		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
-			// Commit and wait, error will be logged.
-			lineage.Commit()
-			return true
-		}
 	}
 
 	// Start data collector
@@ -262,6 +257,15 @@ func serve(conn net.Conn) {
 func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *protocol.Meta) {
 	defer session.CleanUp.Wait()
 
+	var commitOpt *types.CommitOption
+	if lineage != nil {
+		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
+			// Commit and wait, error will be logged.
+			commitOpt, _ = lineage.Commit()
+			return true
+		}
+	}
+
 	meta = &EMPTY_META
 	select {
 	case <-session.WaitDone():
@@ -296,7 +300,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *pro
 		} else {
 			// Finalize, this is quick usually.
 			if lineage != nil {
-				meta = lineage.StopTracker()
+				meta = lineage.StopTracker(commitOpt)
 			}
 			byeHandler(session.Connection)
 			session.Done()

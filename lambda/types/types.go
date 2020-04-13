@@ -40,8 +40,8 @@ type Storage interface {
 type Lineage interface {
 	IsConsistent(*protocol.Meta) (bool, error)
 	TrackLineage()
-	Commit() error
-	StopTracker() *protocol.Meta
+	Commit() (*CommitOption, error)
+	StopTracker(*CommitOption) *protocol.Meta
 	Recover(*protocol.Meta) (bool, chan error)
 	Status() *protocol.Meta
 }
@@ -97,16 +97,21 @@ func (ret *OpRet) Done(err ...error) {
 		return
 	} else if len(err) > 0 {
 		ret.delayed <- err[0]
-	} else {
-		ret.delayed <- nil
 	}
+	close(ret.delayed)
 }
 
+// Behavior like the Promise in javascript.
+// Allow blocking wait or return last result if delayed is closed.
 func (ret *OpRet) Wait() error {
 	if ret.delayed == nil {
 		return nil
+	} else if err := <-ret.delayed; err != nil {
+		ret.error = err
+		return err
 	} else {
-		return <-ret.delayed
+		// At this time, error can be stored Error.
+		return ret.error
 	}
 }
 
@@ -114,6 +119,7 @@ type OpWrapper struct {
 	LineageOp
 	*OpRet
 	Body      []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
+	OpIdx     int
 }
 
 type CommitOption struct {
