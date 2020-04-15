@@ -46,7 +46,7 @@ type Chunk struct {
 	Term     uint64     // Lineage term of last write operation.
 	Deleted  bool
 	Recovering uint32   // Recovering
-	Notifier sync.Waitgroup // See benchmarks in github.com/mason-leap-lab/infinicache/common/sync
+	Notifier sync.WaitGroup // See benchmarks in github.com/mason-leap-lab/infinicache/common/sync
 	Accessed time.Time
 	Bucket   string
 	Backup   bool

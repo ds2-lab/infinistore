@@ -206,19 +206,17 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	// Wait until recovered to avoid timeout on recovery.
-	log.Debug("recoverErrors %v", recoverErrs)
 	if recoverErrs != nil {
-		log.Debug("start wait")
 		waitForRecovery(recoverErrs...)
 		session.Timeout.DoneBusy()
 	}
 
 	// Adaptive timeout control
-	meta := wait(session, lifetime)
+	meta := wait(session, lifetime).ProtocolStatus()
 	log.Debug("Output meta: %v", meta)
 	log.Debug("All routing cleared(%d) at %v, interrupted: %v",
 		runtime.NumGoroutine(), session.Timeout.Since(), session.Timeout.Interrupted())
-	return meta.ProtocolStatus(), nil
+	return meta, nil
 }
 
 func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
@@ -307,11 +305,9 @@ func waitForRecovery(chs ...chan error) {
 		go func() {
 			waitForRecovery(ch)
 			wg.Done()
-			log.Debug("recovery done")
 		}()
 	}
 	wg.Wait()
-	log.Debug("wait done")
 }
 
 func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status types.LineageStatus) {
@@ -870,9 +866,9 @@ func main() {
 
 		var input protocol.InputEvent
 		input.Status = make(protocol.Status, 1)
-		input.Status = append(input.Status, protocol.Meta{
-			1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
-		})
+		// input.Status = append(input.Status, protocol.Meta{
+		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
+		// })
 		flag.StringVar(&input.Cmd, "cmd", "warmup", "Command to trigger")
 		flag.Uint64Var(&input.Id, "id", 1, "Node id")
 		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")

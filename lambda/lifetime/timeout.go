@@ -6,7 +6,7 @@ import (
 	"math"
 	"sync/atomic"
 	"time"
-	"log"
+	// "log"
 )
 
 const TICK = 100 * time.Millisecond
@@ -152,17 +152,17 @@ func (t *Timeout) SetLogger(log logger.ILogger) {
 }
 
 func (t *Timeout) Busy() {
-	log.Println("busy")
+	// log.Println("busy")
 	atomic.AddInt32(&t.active, 1)
 }
 
 func (t *Timeout) DoneBusy() {
-	log.Println("done busy")
+	// log.Println("done busy")
 	atomic.AddInt32(&t.active, -1)
 }
 
 func (t *Timeout) DoneBusyWithReset(ext time.Duration) {
-	log.Printf("done busy with reset %v\n", ext)
+	// log.Printf("done busy with reset %v\n", ext)
 	atomic.AddInt32(&t.active, -1)
 	t.ResetWithExtension(ext)
 }

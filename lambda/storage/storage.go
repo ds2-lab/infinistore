@@ -66,7 +66,6 @@ type Storage struct {
 	signalTracker chan *types.CommitOption
 	committed  chan *types.CommitOption
 	lineageMu  sync.RWMutex             // Mutex for lienage commit.
-	notifier   map[string]chan *types.Chunk
 
 	// backup
 	backup     *hashmap.HashMap        // Just a index, all will be available to repo
@@ -134,24 +133,8 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 			return chunk.Id, chunk.Access(), types.OpSuccess()
 		}
 	} else {
-		// Recovering, acquire lock
-		for !atomic.CompareAndSwapUint32(&chunk.Recovering, types.CHUNK_RECOVERING, types.CHUNK_LOCK) {
-			// Failed, check current status
-			if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
-				// Good now
-				return chunk.Id, chunk.Access(), types.OpSuccess()
-			}
-			// Someone got lock, yield
-			runtime.Gosched()
-		}
-		// Lock acquired, register notifier
-		chanReady := make(chan *types.Chunk)
-		s.notifier[chunk.Key] = chanReady
-		// Release Lock
-		atomic.StoreUint32(&chunk.Recovering, types.CHUNK_RECOVERING)
-
-		// Wait for recovering, use chunk returned.
-		chunk = <-chanReady
+		// Recovering, wait to be notified.
+		chunk.Notifier.Wait()
 		return chunk.Id, chunk.Access(), types.OpSuccess()
 	}
 }
@@ -793,18 +776,18 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	}
 
 	// Replay lineage
-	tbd := s.doReplayLineage(meta, terms, numOps)
+	tbds := s.doReplayLineage(meta, terms, numOps)
 	// Now get is safe
 	s.resetGet()
 
-	s.log.Debug("tbd %d: %v", meta.Meta.Id, tbd)
-	for i, t := range tbd {
-		s.log.Debug("%d: %v", i, *t)
-	}
+	// s.log.Debug("tbds %d: %v", meta.Meta.Id, tbds)
+	// for i, t := range tbds {
+	// 	s.log.Debug("%d: %v", i, *t)
+	// }
 
 	stop2 := time.Now()
-	if len(tbd) > 0 {
-		if n, err := s.doRecoverObjects(tbd, downloader); err != nil {
+	if len(tbds) > 0 {
+		if n, err := s.doRecoverObjects(tbds, downloader); err != nil {
 			chanErr <- err
 			receivedBytes += n
 		} else {
@@ -813,7 +796,6 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	}
 	end := time.Now()
 
-	s.notifier = nil
 	s.log.Debug("End recovery node %d.", meta.Meta.Id)
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
 	s.log.Trace("recover,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop2), end.Sub(start), receivedBytes)
@@ -955,7 +937,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 			numOps = 10	// Arbitary 10 minimum.
 		}
 	}
-	tbd := make([]*types.Chunk, 0, numOps)  // To be downloaded. Initial capacity is estimated by the # of ops.
+	tbds := make([]*types.Chunk, 0, numOps)  // To be downloaded. Initial capacity is estimated by the # of ops.
 
 	s.lineageMu.Lock()
   defer s.lineageMu.Unlock()
@@ -974,7 +956,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 			// Occupy the repository, details will be filled later.
 			s.set(servingKey, chunk)
 			// Add to head so it will be load first, no duplication is possible because it is inserted to repository.
-			tbd = append(tbd, chunk)
+			tbds = append(tbds, chunk)
 		}
 	}
 
@@ -1036,7 +1018,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 				// New chunk can't be a deleted chunk, just in case something wrong.
 				if op.Op != types.OP_DEL {
 					chunk.Recovering = 1
-					tbd = append(tbd, chunk)
+					tbds = append(tbds, chunk)
 					s.set(op.Key, chunk)
 				}
 			}
@@ -1056,6 +1038,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 				s.snapshot.Size = meta.SnapshotSize  // We didn't start from a snapshot, copy passed from the proxy.
 			}
 			s.snapshot.DiffRank = s.diffrank.Rank()
+		}
+	}
+
+	// Now tbds are settled, initiate notifiers
+	for _, tbd := range tbds {
+		if tbd.Recovering == types.CHUNK_RECOVERING {
+			tbd.Notifier.Add(1)
 		}
 	}
 
@@ -1080,17 +1069,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 	} else {
 		s.backupMeta = meta
 	}
-	// Initialize notifier if neccessary
-	if len(tbd) > 0 && s.notifier == nil {
-		s.notifier = make(map[string]chan *types.Chunk)
-	}
 
-	return tbd
+	return tbds
 }
 
-func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) (int, error) {
+func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader) (int, error) {
 	// Setup receivers
-	inputs := make([]S3BatchDownloadObject, len(tbd))
+	inputs := make([]S3BatchDownloadObject, len(tbds))
 	chanNotify := make(chan int, Concurrency)
 	chanError := make(chan error)
 	succeed := 0
@@ -1098,20 +1083,21 @@ func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) 
 	receivedBytes := 0
 
 	// Setup inputs for terms downloading.
-	for i := 0; i < len(tbd); i++ {
+	for i := 0; i < len(tbds); i++ {
 		inputs[i].Object = &s3.GetObjectInput {
-			Bucket: s.bucket(&tbd[i].Bucket),
-			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbd[i].Key)),
+			Bucket: s.bucket(&tbds[i].Bucket),
+			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key)),
 		}
-		// tbd[i].Body = make([]byte, 0)
-		inputs[i].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(tbd[i].Body)
+		// tbds[i].Body = make([]byte, tbds[i].Size)  // We don't initialize buffer here, or partial download can't be detected.
+		inputs[i].Writer = new(aws.WriteAtBuffer)     // aws.NewWriteAtBuffer(tbds[i].Body)
 		inputs[i].After = s.getReadyNotifier(i, chanNotify)
 
 		// Custom properties, remove if use the downloader in AWS SDK
-		if tbd[i].Size <= downloader.GetDownloadPartSize() {
+		// Also, change Notifiers initializations logic in doReplayLineage
+		if tbds[i].Size <= downloader.GetDownloadPartSize() {
 			inputs[i].Small = true   // Size hint.
 		}
-		if tbd[i].Deleted {
+		if tbds[i].Deleted {
 			// Invalidate and skip deleted objects after set
 			inputs[i].Invalid = true
 			succeed++
@@ -1138,36 +1124,17 @@ func (s *Storage) doRecoverObjects(tbd []*types.Chunk, downloader S3Downloader) 
 		case idx := <-chanNotify:
 			received++
 			buffer := inputs[idx].Writer.(*aws.WriteAtBuffer)
-			if uint64(len(buffer.Bytes())) == tbd[idx].Size {
+			if uint64(len(buffer.Bytes())) == tbds[idx].Size {
 				succeed++
-				tbd[idx].Body = buffer.Bytes()
+				tbds[idx].Body = buffer.Bytes()
 			}
-			receivedBytes += len(tbd[idx].Body)
+			receivedBytes += len(tbds[idx].Body)
 
 			// Reset "Recovering" status
-			// Acquire lock
-			var abandon bool
-			for !atomic.CompareAndSwapUint32(&tbd[idx].Recovering, types.CHUNK_RECOVERING, types.CHUNK_LOCK) {
-				// Failed, check current status
-				if atomic.LoadUint32(&tbd[idx].Recovering) == types.CHUNK_OK {
-					// Someone touched my cheese!
-					abandon = true
-					break
-				}
-				// Someone got lock, yield and retry.
-				runtime.Gosched()
+			if atomic.CompareAndSwapUint32(&tbds[idx].Recovering, types.CHUNK_RECOVERING, types.CHUNK_OK) {
+				// Lock acquired, now we are safe to notify.
+				tbds[idx].Notifier.Done()
 			}
-			if abandon {
-				break
-			}
-
-			// Lock acquired, notify, and free
-			s.log.Debug("got %s", tbd[idx].Key)
-			if chanReady, existed := s.notifier[tbd[idx].Key]; existed {
-				chanReady <- tbd[idx]
-				s.log.Debug("notify %s", tbd[idx].Key)
-			}
-			atomic.StoreUint32(&tbd[idx].Recovering, types.CHUNK_OK)
 		}
 	}
 	return receivedBytes, nil
