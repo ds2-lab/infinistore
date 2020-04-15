@@ -36,15 +36,15 @@ const (
 )
 
 var (
-	EMPTY_META = protocol.Meta{}
+	EMPTY_STATUS = protocol.Status{}
 
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
 
 	// Data storage
-	store   types.Storage = storage.New()
-	lineage types.Lineage
 	storeId uint64
+	store   types.Storage = (*storage.Storage)(nil)
+	lineage types.Lineage
 
 	// Proxy that links stores as a system
 	proxy     string // Passed from proxy dynamically.
@@ -86,8 +86,10 @@ func getAwsReqId(ctx context.Context) string {
 	return lc.AwsRequestID
 }
 
-func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Meta, error) {
-	// gorouting start from 3
+func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
+	// Just once, persistent feature can not be changed anymore.
+	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
+	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
 	// Reset if necessary.
 	// This is essential for debugging, and useful if deployment pool is not large enough.
@@ -114,7 +116,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 
 	// migration triggered lambda
 	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
-		return EMPTY_META, nil
+		return EMPTY_STATUS, nil
 	}
 
 	// Check connection
@@ -124,7 +126,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	// Connect proxy and serve
 	if session.Connection == nil {
 		if err := connect(&input, session); err != nil {
-			return EMPTY_META, err
+			return EMPTY_STATUS, err
 		}
 		// Cross session gorouting
 		go serve(session.Connection)
@@ -138,26 +140,62 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
 
-	var recoverErr chan error
-	if !input.IsPersistentEnabled() {
+	var recoverErrs []chan error
+	if lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
 		pongHandler(ctx, session.Connection, false)
 	} else {
-		store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
-		lineage = store.(*storage.Storage)
+		log.Debug("Input meta: %v", input.Status)
+		if len(input.Status) == 0 {
+			return lineage.Status().ProtocolStatus(), errors.New("No node status found in the input.")
+		} else if len(input.Status) == 1 {
+			// No backup info
+			lineage.ResetBackup()
+		}
 
-		log.Debug("Input meta: %v", &input.Meta)
-		if ok, err := lineage.IsConsistent(&input.Meta); err != nil {
-			return *lineage.Status(), err
-		} else if ok {
+		// Preprocess protocol meta and check consistency
+		metas := make([]*types.LineageMeta, len(input.Status))
+		var err error
+		var inconsistency int
+		for i := 0; i < len(metas); i++ {
+			metas[i], err = types.LineageMetaFromProtocol(&input.Status[i])
+			if err != nil {
+				return lineage.Status().ProtocolStatus(), err
+			}
+
+			metas[i].Consistent, err = lineage.IsConsistent(metas[i])
+			if err != nil {
+				return lineage.Status().ProtocolStatus(), err
+			} else if !metas[i].Consistent {
+				inconsistency++
+			}
+		}
+
+		// Recover if inconsistent
+		if inconsistency == 0 {
 			// POND represents the node is ready to serve, no fast recovery required.
 			pongHandler(ctx, session.Connection, false)
 		} else {
-			var fast bool
 			session.Timeout.Busy()
-			fast, recoverErr = lineage.Recover(&input.Meta)
-			// POND represents the node is ready to serve, request fast recovery.
-			pongHandler(ctx, session.Connection, fast)
+			recoverErrs = make([]chan error, 0, inconsistency)
+
+			// Meta 0 is always the main meta
+			if !metas[0].Consistent {
+				fast, chanErr := lineage.Recover(metas[0])
+				// POND represents the node is ready to serve, request fast recovery.
+				pongHandler(ctx, session.Connection, fast)
+				recoverErrs = append(recoverErrs, chanErr)
+			} else {
+				pongHandler(ctx, session.Connection, false)
+			}
+
+			// Recovery backup
+			for i := 1; i < len(metas); i++ {
+				if !metas[i].Consistent {
+					_, chanErr := lineage.Recover(metas[i])
+					recoverErrs = append(recoverErrs, chanErr)
+				}
+			}
 		}
 
 		// Start tracking
@@ -168,10 +206,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	go collector.Collect(session)
 
 	// Wait until recovered to avoid timeout on recovery.
-	if recoverErr != nil {
-		for err := range recoverErr {
-			log.Warn("Error on recovering: %v", err)
-		}
+	log.Debug("recoverErrors %v", recoverErrs)
+	if recoverErrs != nil {
+		log.Debug("start wait")
+		waitForRecovery(recoverErrs...)
 		session.Timeout.DoneBusy()
 	}
 
@@ -180,7 +218,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Met
 	log.Debug("Output meta: %v", meta)
 	log.Debug("All routing cleared(%d) at %v, interrupted: %v",
 		runtime.NumGoroutine(), session.Timeout.Since(), session.Timeout.Interrupted())
-	return *meta, nil
+	return meta.ProtocolStatus(), nil
 }
 
 func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
@@ -254,7 +292,29 @@ func serve(conn net.Conn) {
 	}
 }
 
-func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *protocol.Meta) {
+func waitForRecovery(chs ...chan error) {
+	if len(chs) == 1 {
+		for err := range chs[0] {
+			log.Warn("Error on recovering: %v", err)
+		}
+		return
+	}
+
+	// For multiple channels
+	var wg sync.WaitGroup
+	for _, ch := range chs {
+		wg.Add(1)
+		go func() {
+			waitForRecovery(ch)
+			wg.Done()
+			log.Debug("recovery done")
+		}()
+	}
+	wg.Wait()
+	log.Debug("wait done")
+}
+
+func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status types.LineageStatus) {
 	defer session.CleanUp.Wait()
 
 	var commitOpt *types.CommitOption
@@ -266,12 +326,11 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *pro
 		}
 	}
 
-	meta = &EMPTY_META
 	select {
 	case <-session.WaitDone():
 		if lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			meta = lineage.Status()
+			status = lineage.Status()
 		}
 		return
 	case <-session.Timeout.C():
@@ -300,7 +359,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (meta *pro
 		} else {
 			// Finalize, this is quick usually.
 			if lineage != nil {
-				meta = lineage.StopTracker(commitOpt)
+				status = lineage.StopTracker(commitOpt)
 			}
 			byeHandler(session.Connection)
 			session.Done()
@@ -681,7 +740,7 @@ func main() {
 		// No need to close server, it will serve the new connection next time.
 
 		// Reset store
-		store = storage.New()
+		store = (*storage.Storage)(nil)
 	})
 
 	srv.HandleFunc("ping", func(w resp.ResponseWriter, c *resp.Command) {
@@ -810,23 +869,27 @@ func main() {
 		flag.BoolVar(&DRY_RUN, "dryrun", false, "Dryrun on local.")
 
 		var input protocol.InputEvent
+		input.Status = make(protocol.Status, 1)
+		input.Status = append(input.Status, protocol.Meta{
+			1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
+		})
 		flag.StringVar(&input.Cmd, "cmd", "warmup", "Command to trigger")
 		flag.Uint64Var(&input.Id, "id", 1, "Node id")
 		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")
-		flag.IntVar(&input.Timeout, "timeout", 900, "Execution timeout")
 		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
 		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
 		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior")
-		flag.Uint64Var(&input.Meta.Term, "term", 1, "Lineage.Term")
-		flag.Uint64Var(&input.Meta.Updates, "updates", 0, "Lineage.Updates")
-		flag.Float64Var(&input.Meta.DiffRank, "diffrank", 0, "Difference rank")
-		flag.StringVar(&input.Meta.Hash, "hash", "", "Lineage.Hash")
-		flag.Uint64Var(&input.Meta.SnapshotTerm, "snapshot", 0, "Snapshot.Term")
-		flag.Uint64Var(&input.Meta.SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
-		flag.Uint64Var(&input.Meta.SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
-		flag.StringVar(&input.Meta.Tip, "tip", "", "Tips in http query format")
+		flag.Uint64Var(&input.Status[0].Term, "term", 1, "Lineage.Term")
+		flag.Uint64Var(&input.Status[0].Updates, "updates", 0, "Lineage.Updates")
+		flag.Float64Var(&input.Status[0].DiffRank, "diffrank", 0, "Difference rank")
+		flag.StringVar(&input.Status[0].Hash, "hash", "", "Lineage.Hash")
+		flag.Uint64Var(&input.Status[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
+		flag.Uint64Var(&input.Status[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
+		flag.Uint64Var(&input.Status[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
+		flag.StringVar(&input.Status[len(input.Status) - 1].Tip, "tip", "", "Tips in http query format")
 
 		// More args
+		timeout := flag.Int("timeout", 900, "Execution timeout")
 		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 		concurrency := flag.Int("c", 5, "Concurrency of recovery")
@@ -841,13 +904,14 @@ func main() {
 			os.Exit(0)
 		}
 
-		tips, err := url.ParseQuery(input.Meta.Tip)
+		input.Status[0].Id = input.Id
+		tips, err := url.ParseQuery(input.Status[len(input.Status) - 1].Tip)
 		if err != nil {
-			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Meta.Tip, err)
+			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status) - 1].Tip, err)
 		}
 
 		if DRY_RUN {
-			d := time.Now().Add(time.Duration(input.Timeout) * time.Second)
+			d := time.Now().Add(time.Duration(*timeout) * time.Second)
 			ctx, cancel := context.WithDeadline(context.Background(), d)
 
 			// Even though ctx will be expired, it is good practice to call its
@@ -890,7 +954,7 @@ func main() {
 			for i := 0; i < *numToInsert; i++ {
 				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
-				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Meta.DiffRank) + i), "0", val); ret.Error() != nil {
+				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank) + i), "0", val); ret.Error() != nil {
 					log.Error("Error on set obj-%d: %v", i, ret.Error())
 				}
 			}

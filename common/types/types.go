@@ -5,12 +5,11 @@ type InputEvent struct {
 	Cmd     string `json:"cmd"`
 	Id      uint64 `json:"id"`
 	Proxy   string `json:"proxy"`
-	Timeout int    `json:"timeout"`
 	Addr    string `json:"addr"`
 	Prefix  string `json:"prefix"`
 	Log     int    `json:"log"`
 	Flags   uint64 `json:"flags"`
-	Meta    Meta   `json:"meta"`
+	Status  Status `json:"metas"`
 }
 
 func (i *InputEvent) IsReplicaEnabled() bool {
@@ -21,7 +20,12 @@ func (i *InputEvent) IsPersistentEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
 }
 
+type Status []Meta
+
 type Meta struct {
+	// Lambda ID
+	Id       uint64 `json:"id"`
+
 	// Sequence of the last confirmed log. Logs store by sequence.
 	Term     uint64 `json:"term"`
 
@@ -67,7 +71,7 @@ const (
 	CMD_DATA = "data"
 
 	// Backup ID.
-	TIP_ID = "id"
+	TIP_BACKUP_KEY = "bak"
 	// Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
 )
