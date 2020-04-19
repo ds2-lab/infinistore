@@ -237,11 +237,12 @@ func (conn *Connection) pongHandler() {
 
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
+	sid, _ := conn.r.ReadBulkString()
 	flag, _ := conn.r.ReadInt()
 	recovery := flag & 0x01 > 0
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn, recovery)
+		conn.instance.flagValidated(conn, sid, recovery)
 		return
 	}
 
@@ -251,8 +252,12 @@ func (conn *Connection) pongHandler() {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	instance.flagValidated(conn, recovery)
-	conn.log.Debug("PONG from lambda confirmed.")
+	if instance.flagValidated(conn, sid, recovery).instance != nil {
+		conn.log.Debug("PONG from lambda confirmed.")
+	} else {
+		conn.log.Warn("Discard rouge POND for %d.", id)
+		conn.Close()
+	}
 }
 
 func (conn *Connection) recoveredHandler() {

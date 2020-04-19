@@ -15,6 +15,7 @@ var (
 )
 
 type Session struct {
+	Sid       string
 	Id        string
 	Input     *protocol.InputEvent
 	Requests  int

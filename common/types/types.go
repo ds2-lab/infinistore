@@ -2,6 +2,7 @@ package types
 
 // InputEvent Input for the Lambda
 type InputEvent struct {
+	Sid     string `json:"sid"`  // session id.
 	Cmd     string `json:"cmd"`
 	Id      uint64 `json:"id"`
 	Proxy   string `json:"proxy"`

@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/cespare/xxhash"
 	"github.com/cornelk/hashmap"
+	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"net/url"
@@ -75,6 +76,9 @@ type Instance struct {
 	closed        chan struct{}
 	coolTimer     *time.Timer
 
+	// Connection management
+	sessions      *hashmap.HashMap
+
 	// Backup fields
 	candidates    []*Instance       // Must be initialized before invoke lambda. Stores pointers instead of ids for query, so legacy instances may be used.
 	backups       []*Instance       // Actual backups in use.
@@ -105,6 +109,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
 		coolTimer:     time.NewTimer(WarmTimout),
+		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 	}
 }
@@ -318,6 +323,7 @@ func (ins *Instance) Switch(to types.LambdaDeployment) *Instance {
 	return ins
 }
 
+// TODO: Add sid support, proxy now need sid to connect.
 func (ins *Instance) Migrate() error {
 	// func launch Mproxy
 	// get addr if Mproxy
@@ -376,6 +382,24 @@ func (ins *Instance) IsClosed() bool {
 	return ins.isClosedLocked()
 }
 
+func (ins *Instance) getSid() string {
+	return uuid.New().String()
+}
+
+func (ins *Instance) initSession() string {
+	sid := ins.getSid()
+	ins.sessions.Set(sid, false)
+	return sid
+}
+
+func (ins *Instance) startSession(sid string) bool {
+	return ins.sessions.Cas(sid, false, true)
+}
+
+func (ins *Instance) endSession(sid string) {
+	ins.sessions.Del(sid)
+}
+
 func (ins *Instance) validate(opt *ValidateOption) *Connection {
 	ins.mu.Lock()
 
@@ -392,7 +416,7 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 			if triggered {
 				return ins.validated()
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
-				return ins.flagValidated(ins.cn, false)
+				return ins.flagValidated(ins.cn, "", false) // No new session involved.
 			}
 
 			// Ping is issued to ensure awake
@@ -497,6 +521,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		status[1].Tip = tips.Encode()
 	}
 	event := &protocol.InputEvent{
+		Sid:    ins.initSession(),
 		Id:     ins.Id(),
 		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix: global.Prefix,
@@ -519,6 +544,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 
 	ins.Meta.Stale = true
 	output, err := client.Invoke(input)
+	ins.endSession(event.Sid)
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
 	} else {
@@ -555,12 +581,17 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 }
 
-func (ins *Instance) flagValidated(conn *Connection, recoveryRequired bool) *Connection {
+func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequired bool) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
 	ins.warmUp()
 	if ins.cn != conn {
+		if !ins.startSession(sid) {
+			// Deny session
+			return conn
+		}
+
 		oldConn := ins.cn
 
 		// Set instance, order matters here.

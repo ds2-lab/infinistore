@@ -97,6 +97,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// This is essential for debugging, and useful if deployment pool is not large enough.
 	lifetime.RebornIfDead()
 	session := lambdaLife.GetOrCreateSession()
+	session.Sid = input.Sid
 	session.Id = getAwsReqId(ctx)
 	session.Input = &input
 	defer lambdaLife.ClearSession()
@@ -423,6 +424,7 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 
 	w.AppendBulkString("pong")
 	w.AppendInt(info)
+	w.AppendBulkString(lambdaLife.GetSession().Sid)
 	w.AppendInt(flag)
 	if err := w.Flush(); err != nil {
 		log.Error("Error on PONG flush: %v", err)
@@ -886,6 +888,7 @@ func main() {
 		flag.BoolVar(&DRY_RUN, "dryrun", false, "Dryrun on local.")
 
 		var input protocol.InputEvent
+		input.Sid = "dummysid"
 		input.Status = make(protocol.Status, 1)
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
