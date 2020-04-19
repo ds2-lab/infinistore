@@ -190,6 +190,10 @@ func (ins *Instance) StartRecovery() int {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
+	return ins.startRecoveryLocked()
+}
+
+func (ins *Instance) startRecoveryLocked() int {
 	if recovering = atomic.LoadUint32(&ins.recovering); recovering > 0 {
 		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
 		return int(recovering)
@@ -586,7 +590,7 @@ func (ins *Instance) flagValidated(conn *Connection, recoveryRequired bool) *Con
 
 	if recoveryRequired {
 		ins.log.Debug("Parallel recovery requested.")
-		ins.StartRecovery()
+		ins.startRecoveryLocked()
 	}
 	return ins.flagValidatedLocked(conn)
 }
