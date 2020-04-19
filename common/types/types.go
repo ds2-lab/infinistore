@@ -10,7 +10,7 @@ type InputEvent struct {
 	Log     int    `json:"log"`
 	Flags   uint64 `json:"flags"`
 	Backups int    `json:"baks"`
-	Status  Status `json:"metas"`
+	Status  Status `json:"status"`
 }
 
 func (i *InputEvent) IsReplicaEnabled() bool {

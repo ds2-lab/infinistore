@@ -532,9 +532,9 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			}
 
 			if uptodate {
-				ins.log.Debug("Got updated instance lineage: %v", &ins.Meta)
+				ins.log.Debug("Got updated instance lineage: %v", &outputStatus)
 			} else {
-				ins.log.Debug("Got staled instance lineage: %v", &ins.Meta)
+				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
 	} else if event.IsPersistentEnabled() {
