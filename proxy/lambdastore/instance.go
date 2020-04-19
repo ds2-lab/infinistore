@@ -817,7 +817,7 @@ func (ins *Instance) promoteCandidate(dest int, src int) int {
 		ins.candidates[dest], ins.candidates[src] = ins.candidates[src], ins.candidates[dest]
 	}
 	ins.backups = ins.backups[:dest + 1]
-	change := ins.backups[dest].Id() != ins.candidates[dest].Id()
+	change := ins.backups[dest] != nil && ins.backups[dest].Id() != ins.candidates[dest].Id()
 	ins.backups[dest] = ins.candidates[dest]
 	if change {
 		return 1
