@@ -117,6 +117,7 @@ func NewInstance(name string, id uint64, replica bool) *Instance {
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 	ins.candidates = candidates
 	ins.backups = make([]*Instance, 0, numBak)
+	ins.log.Debug("Assigned backups:%d, %v", numBak, candidates)
 }
 
 func (ins *Instance) C() chan types.Command {
@@ -519,7 +520,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	if output != nil && len(output.Payload) > 0 {
 		var outputStatus protocol.Status
 		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
-			ins.log.Error("Failed to unmarshal payload of lambda output: %v", err)
+			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
 		} else if len(outputStatus) > 0 {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
 			if uptodate {

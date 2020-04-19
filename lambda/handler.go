@@ -415,13 +415,15 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 	}
 
 	info := int64(storeId)
+	flag := int64(0)
 	if recover {
-		info = -info
+		flag += 0x01
 		log.Debug("Fast recovery requested.")
 	}
 
 	w.AppendBulkString("pong")
 	w.AppendInt(info)
+	w.AppendInt(flag)
 	if err := w.Flush(); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err

@@ -233,12 +233,15 @@ func (conn *Connection) peekResponse() {
 }
 
 func (conn *Connection) pongHandler() {
+	conn.log.Debug("PONG from lambda.")
+
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
-	conn.log.Debug("PONG from lambda. id %d", id)
+	flag, _ := conn.r.ReadInt()
+	recovery := flag & 0x01 > 0
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn, id < 0)
+		conn.instance.flagValidated(conn, recovery)
 		return
 	}
 
@@ -248,7 +251,7 @@ func (conn *Connection) pongHandler() {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	instance.flagValidated(conn, id < 0)
+	instance.flagValidated(conn, recovery)
 	conn.log.Debug("PONG from lambda confirmed.")
 }
 
