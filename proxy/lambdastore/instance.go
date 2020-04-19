@@ -291,6 +291,9 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	ins.backingId = bakId
 	ins.backingTotal = total
 	atomic.StoreUint32(&ins.backing, BACKING_ENABLED)
+
+	// Trigger backups to initiate parallel recovery
+	go ins.WarmUp()
 	return true
 }
 
