@@ -564,13 +564,18 @@ func (ins *Instance) flagValidated(conn *Connection, recoveryRequired bool) *Con
 				// 2. Accidential concurrent triggering, usually after lambda returning and before it get reclaimed.
 				// In either case, the status is awake and it indicate the status of the old instance, it is not reliable.
 				ins.awakeLock.Lock()
-				defer ins.awakeLock.Unlock()
 				ins.awake = INSTANCE_MAYBE
+				ins.awakeLock.Unlock()
 			}
+		} else {
+			ins.awakeLock.Lock()
+			ins.awake = INSTANCE_AWAKE
+			ins.awakeLock.Unlock()
 		}
-		// No need to set awake for new connection, it has been set already.
 	} else if ins.awake != INSTANCE_MAYBE { // For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
+		ins.awakeLock.Lock()
 		ins.awake = INSTANCE_AWAKE
+		ins.awakeLock.Unlock()
 	}
 
 	if recoveryRequired {
