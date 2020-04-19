@@ -15,6 +15,10 @@ type Control struct {
 	w          *resp.RequestWriter
 }
 
+func (req *Control) String() string {
+	return req.Cmd
+}
+
 func (req *Control) GetRequest() *Request {
 	return req.Request
 }

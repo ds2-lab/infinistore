@@ -7,6 +7,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/cespare/xxhash"
+	"github.com/cornelk/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"net/url"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -26,6 +29,10 @@ const (
 	INSTANCE_AWAKE = 1
 	INSTANCE_MAYBE = 2
 	MAX_RETRY      = 3
+	TEMP_MAP_SIZE  = 10
+	BACKING_DISABLED = 0
+	BACKING_RESERVED = 1
+	BACKING_ENABLED = 2
 )
 
 var (
@@ -51,7 +58,6 @@ type InstanceRegistry interface {
 type ValidateOption struct {
 	WarmUp      bool
 	Request     *types.Request
-	BackupID    int
 }
 
 type Instance struct {
@@ -60,6 +66,7 @@ type Instance struct {
 
 	cn            *Connection
 	chanCmd       chan types.Command
+	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	awake         int
 	awakeLock     sync.Mutex
 	chanValidated chan struct{}
@@ -67,6 +74,16 @@ type Instance struct {
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
+
+	// Backup fields
+	candidates    []*Instance       // Must be initialized before invoke lambda. Stores pointers instead of ids for query, so legacy instances may be used.
+	backups       []*Instance       // Actual backups in use.
+	recovering    uint32            // # of backups in use, also if the recovering > 0, the instance is recovering.
+	writtens      *hashmap.HashMap  // Whitelist, write opertions will be added to it during parallel recovery.
+	backing       uint32            // backing status, 0 for non backing, 1 for reserved, 2 for backing.
+	backingIns    *Instance
+	backingId     int               // Identifier for backup, ranging from [0, # of backups)
+	backingTotal  int               // Total # of backups ready for backing instance.
 }
 
 func NewInstanceFromDeployment(dp *Deployment) *Instance {
@@ -84,15 +101,22 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		Meta:          Meta{ Term: 1 }, // Term start with 1 to avoid uninitialized term ambigulous.
 		awake:         INSTANCE_SLEEP,
 		chanCmd:       make(chan types.Command, 1),
+		chanPriorCmd:  make(chan types.Command, 1),
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
 		coolTimer:     time.NewTimer(WarmTimout),
+		writtens:      hashmap.New(TEMP_MAP_SIZE),
 	}
 }
 
 // create new lambda instance
 func NewInstance(name string, id uint64, replica bool) *Instance {
 	return NewInstanceFromDeployment(NewDeployment(name, id, replica))
+}
+
+func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
+	ins.candidates = candidates
+	ins.backups = make([]*Instance, 0, numBak)
 }
 
 func (ins *Instance) C() chan types.Command {
@@ -116,56 +140,6 @@ func (ins *Instance) Validate(opts ...*ValidateOption) *Connection {
 	return ins.validate(opt)
 }
 
-func (ins *Instance) validate(opt *ValidateOption) *Connection {
-	ins.mu.Lock()
-
-	select {
-	case <-ins.chanValidated:
-		// Not validating. Validate...
-		ins.chanValidated = make(chan struct{})
-		ins.lastValidated = nil
-		ins.mu.Unlock()
-
-		for {
-			ins.log.Debug("Validating...")
-			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
-			if triggered {
-				return ins.validated()
-			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
-				return ins.flagValidated(ins.cn)
-			}
-
-			// Ping is issued to ensure awake
-			ins.cn.Ping()
-
-			// Start timeout, ping may get stucked anytime.
-			timeout := timeouts.Get().(*time.Timer)
-			if !timeout.Stop() {
-				select {
-				case <-timeout.C:
-				default:
-				}
-			}
-			timeout.Reset(ConnectTimeout)
-
-			select {
-			case <-timeout.C:
-				// Set status to dead and revalidate.
-				timeouts.Put(timeout)
-				ins.awake = INSTANCE_SLEEP
-				ins.log.Warn("Timeout on validating, assuming instance dead and retry...")
-			case <-ins.chanValidated:
-				timeouts.Put(timeout)
-				return ins.validated()
-			}
-		}
-	default:
-		// Validating... Wait and return false
-		ins.mu.Unlock()
-		return ins.validated()
-	}
-}
-
 func (ins *Instance) IsValidating() bool {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
@@ -185,48 +159,146 @@ func (ins *Instance) HandleRequests() {
 		select {
 		case <-ins.closed:
 			return
+		case cmd := <-ins.chanPriorCmd: // Priority queue get
+			ins.handleRequest(cmd)
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
-			var err error
-			var retries = MAX_RETRY
-			if !cmd.Retriable() {
-				retries = 1
+			// Drain priority channel first.
+			for len(ins.chanPriorCmd) > 0 {
+				ins.handleRequest(<-ins.chanPriorCmd)
 			}
-
-			for i := 0; i < retries; i++ {
-				if i > 0 {
-					ins.log.Debug("Attempt %d", i)
-				}
-				// Check lambda status first
-				validateStart := time.Now()
-				// Once active connection is confirmed, keep awake on serving.
-				conn := ins.Validate(&ValidateOption{ Request: cmd.GetRequest() })
-				validateDuration := time.Since(validateStart)
-
-				if conn == nil {
-					// Check if conn is valid, nil if ins get closed
-					return
-				}
-				err = ins.handleRequest(conn, cmd, validateDuration)
-				if err == nil {
-					break
-				}
-			}
-			if err != nil {
-				if cmd.Retriable() {
-					ins.log.Error("Max retry reaches, give up")
-				} else {
-					ins.log.Error("Can not retry a streaming request, give up")
-				}
-				if request, ok := cmd.(*types.Request); ok {
-					request.SetResponse(err)
-				}
-			}
-			ins.warmUp()
+			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
-			// Warm up
-			ins.WarmUp()
+			// Double check, for it could timeout before a previous request got handled.
+			if len(ins.chanPriorCmd) == 0 || len(ins.chanCmd) == 0 {
+				// Do warm up
+				ins.WarmUp()
+			}
 		}
 	}
+}
+
+// Start parallel recovery mode.
+// Return # of ready backups
+func (ins *Instance) StartRecovery() int {
+	recovering := atomic.LoadUint32(&ins.recovering)
+	if recovering > 0 {
+		return int(recovering)
+	}
+
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	if recovering = atomic.LoadUint32(&ins.recovering); recovering > 0 {
+		return int(recovering)
+	}
+
+	// Reset backups
+	lastnum := len(ins.backups)
+	changes := 0
+	ins.backups = ins.backups[:0]
+	// Reserve backups so we can know how many backups are available
+	alters := cap(ins.backups)    // If failed to reserve a backup, select one start from alters.
+	offset := 0                   // Offset based on alters.
+	tested := make([]bool, len(ins.candidates) - alters) // Count start from alters
+	for i := 0; i < cap(ins.backups); i++ {
+		if ins.candidates[i].ReserveBacking() {
+			changes += ins.promoteCandidate(i, i)
+			continue
+		}
+		// Try alter + i to keep backingID stable.
+		if alters + i < len(ins.candidates) && !tested[i] && ins.candidates[alters + i].ReserveBacking() {
+			// exchange candidates
+			changes += ins.promoteCandidate(i, alters + i)
+			continue
+		}
+		// Try find whatever possible
+		for ; offset < len(tested); offset++ {
+			if !tested[offset] && ins.candidates[alters + offset].ReserveBacking() {
+				tested[offset] = true
+				changes += ins.promoteCandidate(i, alters + offset)
+				break
+			}
+		}
+	}
+	if len(ins.backups) != lastnum {
+		// The difference of total changes everything.
+		changes = len(ins.backups)
+	}
+
+	// Start backups.
+	var msg strings.Builder
+	for i, candid := range ins.backups {
+		candid.StartBacking(ins, i, len(ins.backups))
+		msg.WriteString(" ")
+		msg.WriteString(strconv.FormatUint(candid.Id(), 10))
+	}
+
+	atomic.StoreUint32(&ins.recovering, uint32(len(ins.backups)))
+	if len(ins.backups) > 0 {
+		ins.log.Debug("Parallel recovery started with %d backup instances: %s, changes: %d", len(ins.backups), msg.String(), changes)
+	} else {
+		ins.log.Warn("Unable to start parallel recovery due to no backup instances available")
+	}
+
+	return len(ins.backups)
+}
+
+// Resume serving
+func (ins *Instance) ResumeServing() {
+	ins.mu.Lock()
+	atomic.StoreUint32(&ins.recovering, 0)
+	for _, backup := range ins.backups {
+		backup.StopBacking(ins)
+	}
+	// Clear whitelist during fast recovery.
+	if ins.writtens.Len() > 0 {
+		ins.writtens = hashmap.New(TEMP_MAP_SIZE)
+	}
+	ins.mu.Unlock()
+	ins.log.Debug("Recovered and service resumed")
+}
+
+func (ins *Instance) IsRecovering() bool {
+	return atomic.LoadUint32(&ins.recovering) > 0
+}
+
+// Check if the instance is available for serving as a backup for specified instance.
+// Return false if the instance is backing another instance.
+func (ins *Instance) ReserveBacking() bool {
+	return atomic.LoadUint32(&ins.recovering) == 0 &&
+		atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
+}
+
+// Start serving as the backup for specified instance.
+// Return false if the instance is backing another instance.
+func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	if atomic.LoadUint32(&ins.backing) != BACKING_RESERVED {
+		ins.log.Error("Please call ReserveBacking before StartBacking")
+		return false
+	}
+
+	ins.backingIns = bakIns
+	ins.backingId = bakId
+	ins.backingTotal = total
+	atomic.StoreUint32(&ins.backing, BACKING_ENABLED)
+	return true
+}
+
+// Stop serving as a backup
+func (ins *Instance) StopBacking(bakIns *Instance) {
+	if ins.backingIns != bakIns {
+		return
+	}
+	ins.mu.Lock()
+	atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
+	ins.mu.Unlock()
+}
+
+func (ins *Instance) IsBacking() bool {
+	return atomic.LoadUint32(&ins.backing) == BACKING_ENABLED
 }
 
 func (ins *Instance) Switch(to types.LambdaDeployment) *Instance {
@@ -294,6 +366,56 @@ func (ins *Instance) IsClosed() bool {
 	return ins.isClosedLocked()
 }
 
+func (ins *Instance) validate(opt *ValidateOption) *Connection {
+	ins.mu.Lock()
+
+	select {
+	case <-ins.chanValidated:
+		// Not validating. Validate...
+		ins.chanValidated = make(chan struct{})
+		ins.lastValidated = nil
+		ins.mu.Unlock()
+
+		for {
+			ins.log.Debug("Validating...")
+			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
+			if triggered {
+				return ins.validated()
+			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
+				return ins.flagValidated(ins.cn, false)
+			}
+
+			// Ping is issued to ensure awake
+			ins.cn.Ping()
+
+			// Start timeout, ping may get stucked anytime.
+			timeout := timeouts.Get().(*time.Timer)
+			if !timeout.Stop() {
+				select {
+				case <-timeout.C:
+				default:
+				}
+			}
+			timeout.Reset(ConnectTimeout)
+
+			select {
+			case <-timeout.C:
+				// Set status to dead and revalidate.
+				timeouts.Put(timeout)
+				ins.awake = INSTANCE_SLEEP
+				ins.log.Warn("Timeout on validating, assuming instance dead and retry...")
+			case <-ins.chanValidated:
+				timeouts.Put(timeout)
+				return ins.validated()
+			}
+		}
+	default:
+		// Validating... Wait and return false
+		ins.mu.Unlock()
+		return ins.validated()
+	}
+}
+
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	ins.awakeLock.Lock()
 	defer ins.awakeLock.Unlock()
@@ -338,12 +460,31 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(global.AWSRegion)})
 
-	tips := url.Values{}
+	tips := &url.Values{}
 	if opt.Request != nil && opt.Request.Cmd == protocol.CMD_GET {
 		tips.Set(protocol.TIP_SERVING_KEY, opt.Request.Key)
 	}
-	if opt.BackupID > 0 {
-		tips.Set(protocol.TIP_ID, strconv.Itoa(opt.BackupID))
+
+	var status protocol.Status
+	if !ins.IsBacking() {
+		// Main store only
+		status = protocol.Status{ *ins.Meta.ToProtocolMeta(ins.Id()) }
+		status[0].Tip = tips.Encode()
+	} else {
+		// Main store + backing store
+		status = protocol.Status{
+			*ins.Meta.ToProtocolMeta(ins.Id()),
+			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
+		}
+		if opt.Request != nil && opt.Request.Cmd == protocol.CMD_GET && opt.Request.InsId == ins.Id() {
+			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
+			status[0].Tip = tips.Encode()
+			tips = &url.Values{}
+		}
+		// Add backing infos to tips
+		tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(ins.backingId))
+		tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(ins.backingTotal))
+		status[1].Tip = tips.Encode()
 	}
 	event := &protocol.InputEvent{
 		Id:     ins.Id(),
@@ -351,16 +492,8 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		Prefix: global.Prefix,
 		Log:    global.Log.GetLevel(),
 		Flags:  global.Flags,
-		Meta:   protocol.Meta{
-			Term:            ins.Meta.Term,
-			Updates:         ins.Meta.Updates,
-			DiffRank:        ins.Meta.DiffRank,
-			Hash:            ins.Meta.Hash,
-			SnapshotTerm:    ins.Meta.SnapshotTerm,
-			SnapshotUpdates: ins.Meta.SnapshotUpdates,
-			SnapshotSize:    ins.Meta.SnapshotSize,
-			Tip:             tips.Encode(),
-		},
+		Backups:len(ins.candidates),
+		Status: status,
 	}
 	if opt.WarmUp {
 		event.Cmd = protocol.CMD_WARMUP
@@ -382,28 +515,26 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		ins.log.Debug("[Lambda store is deactivated]")
 	}
 	if output != nil && len(output.Payload) > 0 {
-		var outputMeta protocol.Meta
-		if err := json.Unmarshal(output.Payload, &outputMeta); err != nil {
+		var outputStatus protocol.Status
+		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v", err)
-		} else {
-			ins.Meta.Term = outputMeta.Term
-			ins.Meta.Updates = outputMeta.Updates
-			ins.Meta.DiffRank = outputMeta.DiffRank
-			ins.Meta.Hash = outputMeta.Hash
-			ins.Meta.SnapshotTerm = outputMeta.SnapshotTerm
-			ins.Meta.SnapshotUpdates = outputMeta.SnapshotUpdates
-			ins.Meta.SnapshotSize = outputMeta.SnapshotSize
-			var uptodate bool
-			ins.awakeLock.Lock()
-			if ins.awake == INSTANCE_AWAKE {
-				ins.Meta.Stale = false
-				uptodate = true
-			}
-			ins.awakeLock.Unlock()
+		} else if len(outputStatus) > 0 {
+			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
 			if uptodate {
-				ins.log.Debug("Got updated instance lineage: %v", outputMeta)
+				// If the node was invoked by other than the proxy, it could be stale.
+				ins.awakeLock.Lock()
+				if ins.awake == INSTANCE_AWAKE {
+					ins.Meta.Stale = false
+				} else {
+					uptodate = false
+				}
+				ins.awakeLock.Unlock()
+			}
+
+			if uptodate {
+				ins.log.Debug("Got updated instance lineage: %v", &ins.Meta)
 			} else {
-				ins.log.Debug("Got staled instance lineage: %v", outputMeta)
+				ins.log.Debug("Got staled instance lineage: %v", &ins.Meta)
 			}
 		}
 	} else if event.IsPersistentEnabled() {
@@ -411,7 +542,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 }
 
-func (ins *Instance) flagValidated(conn *Connection) *Connection {
+func (ins *Instance) flagValidated(conn *Connection, recoveryRequired bool) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
@@ -442,6 +573,9 @@ func (ins *Instance) flagValidated(conn *Connection) *Connection {
 		ins.awake = INSTANCE_AWAKE
 	}
 
+	if recoveryRequired {
+		ins.StartRecovery()
+	}
 	return ins.flagValidatedLocked(conn)
 }
 
@@ -481,7 +615,71 @@ func (ins *Instance) validated() *Connection {
 	return ins.lastValidated
 }
 
-func (ins *Instance) handleRequest(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
+func (ins *Instance) handleRequest(cmd types.Command) {
+	// On parallel recovering, we will try reroute get requests.
+	if ins.IsRecovering() && cmd.String() == protocol.CMD_GET && ins.rerouteGetRequest(cmd.GetRequest()) {
+		return
+	}
+
+	var err error
+	var retries = MAX_RETRY
+	if !cmd.Retriable() {
+		retries = 1
+	}
+
+	for i := 0; i < retries; i++ {
+		if i > 0 {
+			ins.log.Debug("Attempt %d", i)
+		}
+		// Check lambda status first
+		validateStart := time.Now()
+		// Once active connection is confirmed, keep awake on serving.
+		conn := ins.Validate(&ValidateOption{ Request: cmd.GetRequest() })
+		validateDuration := time.Since(validateStart)
+
+		if conn == nil {
+			// Check if conn is valid, nil if ins get closed
+			return
+		}
+		err = ins.request(conn, cmd, validateDuration)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		if cmd.Retriable() {
+			ins.log.Error("Max retry reaches, give up")
+		} else {
+			ins.log.Error("Can not retry a streaming request, give up")
+		}
+		if request, ok := cmd.(*types.Request); ok {
+			request.SetResponse(err)
+		}
+	}
+
+	// Reset timer
+	ins.warmUp()
+}
+
+func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
+	// Rerouted keys will not be rerouted.
+	// During parallel recovery, the instance can be backing another instance. (Backing before recovery triggered)
+	if req.InsId != ins.Id() {
+		return false
+	}
+
+	// Written keys during recovery will not be rerouted.
+	if _, ok := ins.writtens.Get(req.Key); ok {
+		return false
+	}
+
+	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
+	ins.backups[bakId].C() <- req
+	return true
+}
+
+
+func (ins *Instance) request(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
 	switch cmd.(type) {
 	case *types.Request:
 		req := cmd.(*types.Request)
@@ -497,10 +695,18 @@ func (ins *Instance) handleRequest(conn *Connection, cmd types.Command, validate
 		switch cmd {
 		case protocol.CMD_SET: /*set or two argument cmd*/
 			req.PrepareForSet(conn.w)
+			// If parallel recovery is triggered, record keys set during recovery.
+			if ins.IsRecovering() {
+				ins.writtens.Set(req.Key, &struct{}{})
+			}
 		case protocol.CMD_GET: /*get or one argument cmd*/
 			req.PrepareForGet(conn.w)
+			// If parallel recovery is triggered, there is no need to forward the serving key.
 		case protocol.CMD_DEL:
 			req.PrepareForDel(conn.w)
+			if ins.IsRecovering() {
+				ins.writtens.Set(req.Key, &struct{}{})
+			}
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
 			// Unrecoverable
@@ -534,6 +740,9 @@ func (ins *Instance) handleRequest(conn *Connection, cmd types.Command, validate
 			ctrl.PrepareForMigrate(conn.w)
 		case protocol.CMD_DEL:
 			ctrl.PrepareForDel(conn.w)
+			if ins.IsRecovering() {
+				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
+			}
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
 			// Unrecoverable
@@ -584,4 +793,19 @@ func (ins *Instance) resetCoolTimer() {
 		}
 	}
 	ins.coolTimer.Reset(WarmTimout)
+}
+
+func (ins *Instance) promoteCandidate(dest int, src int) int {
+	if dest != src {
+		// Exchange candidates to keep the next elections get a stable result
+		ins.candidates[dest], ins.candidates[src] = ins.candidates[src], ins.candidates[dest]
+	}
+	ins.backups = ins.backups[:dest + 1]
+	change := ins.backups[dest].Id() != ins.candidates[dest].Id()
+	ins.backups[dest] = ins.candidates[dest]
+	if change {
+		return 1
+	} else {
+		return 0
+	}
 }

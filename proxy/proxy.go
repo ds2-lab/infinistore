@@ -83,7 +83,7 @@ func main() {
 
 	// initiate lambda store proxy
 	go prxy.Serve(lambdaLis)
-	<-prxy.Ready()
+	prxy.WaitReady()
 
 	err = ioutil.WriteFile(filePath, []byte(fmt.Sprintf("%d", os.Getpid())), 0660)
 	if err != nil {

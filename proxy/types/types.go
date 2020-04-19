@@ -20,6 +20,7 @@ type Id struct {
 }
 
 type Command interface {
+	String() string
 	GetRequest() *Request
 	Retriable() bool
 	Flush() error

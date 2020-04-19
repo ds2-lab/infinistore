@@ -7,6 +7,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"net"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 var (
@@ -142,19 +144,21 @@ func (conn *Connection) ServeLambda() {
 			}
 
 			switch cmd {
-			case "pong":
+			case protocol.CMD_POND:
 				conn.pongHandler()
-			case "get":
+			case protocol.CMD_RECOVERED:
+				conn.recoveredHandler()
+			case protocol.CMD_GET:
 				conn.getHandler(start)
-			case "set":
+			case protocol.CMD_SET:
 				conn.setHandler(start)
-			case "del":
+			case protocol.CMD_DEL:
 				conn.delHandler()
-			case "data":
+			case protocol.CMD_DATA:
 				conn.receiveData()
-			case "initMigrate":
+			case protocol.CMD_INITMIGRATE:
 				go conn.initMigrateHandler()
-			case "bye":
+			case protocol.CMD_BYE:
 				conn.bye()
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
@@ -231,22 +235,33 @@ func (conn *Connection) peekResponse() {
 func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda.")
 
-	// Read lambdaId
+	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn)
+		conn.instance.flagValidated(conn, id < 0)
 		return
 	}
 
 	// Lock up lambda instance
-	instance, exists := Registry.Instance(uint64(id))
+	instance, exists := Registry.Instance(uint64(math.Abs(float64(id))))
 	if !exists {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	instance.flagValidated(conn)
+	instance.flagValidated(conn, id < 0)
 	conn.log.Debug("PONG from lambda confirmed.")
+}
+
+func (conn *Connection) recoveredHandler() {
+	conn.log.Debug("RECOVERED from lambda.")
+
+	if conn.instance == nil {
+		conn.log.Error("No instance set on recovered")
+		return
+	}
+
+	conn.instance.ResumeServing()
 }
 
 func (conn *Connection) getHandler(start time.Time) {

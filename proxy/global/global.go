@@ -3,7 +3,9 @@ package global
 import (
 	"github.com/cornelk/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"math/rand"
 	"sync"
+	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -24,6 +26,7 @@ var (
 )
 
 func init() {
+	rand.Seed(time.Now().UnixNano()) // Reseed random.
 	Log = logger.NilLogger
 
 	if ServerIp == "" {
