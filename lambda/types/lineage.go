@@ -13,6 +13,7 @@ type LineageMeta struct {
 	Consistent bool
 	Backup     bool
 	BackupId   int
+	BackupTotal int
 	Tips       url.Values
 }
 
@@ -29,6 +30,10 @@ func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
 	if sId := lm.Tips.Get(protocol.TIP_BACKUP_KEY); sId != "" {
 		lm.Backup = true
 		lm.BackupId, err = strconv.Atoi(sId)
+		if err != nil {
+			return
+		}
+		lm.BackupTotal, err = strconv.Atoi(lm.Tips.Get(protocol.TIP_BACKUP_TOTAL))
 		if err != nil {
 			return
 		}

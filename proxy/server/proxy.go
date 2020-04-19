@@ -5,14 +5,16 @@ import (
 
 	//	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 	"net"
+	"math/rand"
 	"strconv"
-	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -25,7 +27,7 @@ type Proxy struct {
 	metaStore *Placer
 
 	initialized int32
-	ready       chan struct{}
+	ready       sync.WaitGroup
 }
 
 // initial lambda group
@@ -39,7 +41,6 @@ func New(replica bool) *Proxy {
 		},
 		group:     group,
 		metaStore: NewPlacer(NewMataStore(), group),
-		ready:     make(chan struct{}),
 	}
 
 	for i := range p.group.All {
@@ -53,14 +54,18 @@ func New(replica bool) *Proxy {
 		node := scheduler.GetForGroup(p.group, i)
 		node.Meta.Capacity = InstanceCapacity
 		node.Meta.IncreaseSize(InstanceOverhead)
+	}
+	// Something can only be done after all nodes initialized.
+	for i := range p.group.All {
+		num, candidates := p.getBackupsForNode(p.group, i)
+		node := p.group.Instance(i)
+		node.AssignBackups(num, candidates)
 
 		// Initialize instance, this is not neccessary if the start time of the instance is acceptable.
+		p.ready.Add(1)
 		go func() {
 			node.WarmUp()
-			if atomic.AddInt32(&p.initialized, 1) == int32(p.group.Len()) {
-				p.log.Info("[Proxy is ready]")
-				close(p.ready)
-			}
+			p.ready.Done()
 		}()
 
 		// Begin handle requests
@@ -82,8 +87,9 @@ func (p *Proxy) Serve(lis net.Listener) {
 	}
 }
 
-func (p *Proxy) Ready() chan struct{} {
-	return p.ready
+func (p *Proxy) WaitReady() {
+	p.ready.Wait()
+	p.log.Info("[Proxy is ready]")
 }
 
 func (p *Proxy) Close(lis net.Listener) {
@@ -155,7 +161,8 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	p.group.Instance(lambdaDest).C() <- &types.Request{
 		Id:           types.Id{connId, reqId, chunkId},
-		Cmd:          strings.ToLower(c.Name),
+		InsId:        uint64(lambdaDest),
+		Cmd:          protocol.CMD_SET,
 		Key:          chunkKey,
 		BodyStream:   bodyStream,
 		ChanResponse: client.Responses(),
@@ -197,7 +204,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 	p.group.Instance(lambdaDest).C() <- &types.Request{
 		Id:           types.Id{connId, reqId, chunkId},
-		Cmd:          strings.ToLower(c.Name),
+		InsId:        uint64(lambdaDest),
+		Cmd:          protocol.CMD_GET,
 		Key:          chunkKey,
 		ChanResponse: client.Responses(),
 		EnableCollector: true,
@@ -253,14 +261,32 @@ func (p *Proxy) CollectData() {
 	}
 }
 
+func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
+	numBaks := BackupsPerInstance
+	numTotal := numBaks * 2
+	distance := g.Len() / (numTotal + 1)     // main + double backup candidates
+	if distance == 0 {
+		// In case 2 * total >= g.Len()
+		distance = 1
+		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len() - 1, numBaks).(int)    // Use all
+		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len() - 1, numTotal).(int)
+	}
+	candidates := make([]*lambdastore.Instance, numTotal)
+	for j := 0; j < numTotal; j++ {
+		candidates[j] = g.Instance((i + j * distance + rand.Int() % distance + 1) % g.Len()) // Random to avoid the same backup set.
+	}
+	return numBaks, candidates
+}
+
 func (p *Proxy) dropEvicted(meta *Meta) {
 	reqId := uuid.New().String()
 	for i, lambdaId := range meta.Placement {
 		instance := p.group.Instance(lambdaId)
 		instance.C() <- &types.Request{
-			Id:  types.Id{0, reqId, strconv.Itoa(i)},
-			Cmd: "del",
-			Key: meta.ChunkKey(i),
+			Id:    types.Id{0, reqId, strconv.Itoa(i)},
+			InsId: uint64(lambdaId),
+			Cmd:   protocol.CMD_DEL,
+			Key:   meta.ChunkKey(i),
 		}
 	}
 }

@@ -44,8 +44,12 @@ func (dr *SimpleDifferenceRank) AddOp(op *types.LineageOp) {
 }
 
 func (dr *SimpleDifferenceRank) IsSignificant(rank float64) bool {
+	// The feature is disabled for backups == 0
+	if dr.backups < 1 {
+		return false
+	}
 	return (math.Abs(rank - dr.num) >= dr.backups * SimpleDifferenceRankSignificanceRatio) && // Minimum requirement.
-		(math.Abs(rank - dr.num) * dr.backups >= dr.num)  // Utilization requirement, assumming backups are empty.
+		(math.Abs(rank - dr.num) * dr.backups > dr.num)  // Utilization requirement, assumming backups are empty.
 }
 
 func (dr *SimpleDifferenceRank) Rank() float64 {

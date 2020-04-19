@@ -36,7 +36,8 @@ const (
 )
 
 var (
-	EMPTY_STATUS = protocol.Status{}
+	DefaultStatus = protocol.Status{}
+	ContextKeyReady = "ready"
 
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
@@ -88,6 +89,7 @@ func getAwsReqId(ctx context.Context) string {
 
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
+	storage.Backups = input.Backups
 	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
 	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
@@ -116,7 +118,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// migration triggered lambda
 	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
-		return EMPTY_STATUS, nil
+		return DefaultStatus, nil
 	}
 
 	// Check connection
@@ -126,7 +128,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Connect proxy and serve
 	if session.Connection == nil {
 		if err := connect(&input, session); err != nil {
-			return EMPTY_STATUS, err
+			return DefaultStatus, err
 		}
 		// Cross session gorouting
 		go serve(session.Connection)
@@ -141,13 +143,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 
 	var recoverErrs []chan error
+	var recoverFast bool
 	if lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
 		pongHandler(ctx, session.Connection, false)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
-			return lineage.Status().ProtocolStatus(), errors.New("No node status found in the input.")
+			return lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
 		} else if len(input.Status) == 1 {
 			// No backup info
 			lineage.ResetBackup()
@@ -185,6 +188,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				// POND represents the node is ready to serve, request fast recovery.
 				pongHandler(ctx, session.Connection, fast)
 				recoverErrs = append(recoverErrs, chanErr)
+				recoverFast = fast
 			} else {
 				pongHandler(ctx, session.Connection, false)
 			}
@@ -208,6 +212,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Wait until recovered to avoid timeout on recovery.
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
+		// Signal proxy the recover procedure is done.
+		if recoverFast {
+			recoveredHandler(ctx, session.Connection)
+		}
 		session.Timeout.DoneBusy()
 	}
 
@@ -224,7 +232,7 @@ func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
 		if DRY_RUN {
 			return nil
 		}
-		return errors.New("No proxy specified.")
+		return errors.New("no proxy specified")
 	}
 
 	storeId = input.Id
@@ -383,7 +391,7 @@ func issuePong() {
 func pongHandler(ctx context.Context, conn net.Conn, recover bool) error {
 	if conn == nil && DRY_RUN {
 		log.Debug("Issue pong, request fast recovery: %v", recover)
-		ready := ctx.Value("ready")
+		ready := ctx.Value(&ContextKeyReady)
 		close(ready.(chan struct{}))
 		return nil
 	}
@@ -418,6 +426,16 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 		return err
 	}
 
+	return nil
+}
+
+func recoveredHandler(ctx context.Context, conn net.Conn) error {
+	w := resp.NewResponseWriter(conn)
+	w.AppendBulkString(protocol.CMD_RECOVERED)
+	if err := w.Flush(); err != nil {
+		log.Error("Error on RECOVERED flush: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -922,7 +940,7 @@ func main() {
 			storage.Buckets = *buckets
 
 			ready := make(chan struct{})
-			ctx = context.WithValue(ctx, "ready", ready)
+			ctx = context.WithValue(ctx, &ContextKeyReady, ready)
 			go func() {
 				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
 				log.Info("Start dummy node: %s", lambdacontext.FunctionName)

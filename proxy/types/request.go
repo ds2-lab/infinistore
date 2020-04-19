@@ -9,6 +9,7 @@ import (
 
 type Request struct {
 	Id           Id
+	InsId        uint64   // Instance the request targeted.
 	Cmd          string
 	Key          string
 	Body         []byte
@@ -19,6 +20,10 @@ type Request struct {
 	w                *resp.RequestWriter
 	responded        uint32
 	streamingStarted bool
+}
+
+func (req *Request) String() string {
+	return req.Cmd
 }
 
 func (req *Request) GetRequest() *Request {

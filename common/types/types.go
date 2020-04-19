@@ -1,6 +1,6 @@
 package types
 
-// Input
+// InputEvent Input for the Lambda
 type InputEvent struct {
 	Cmd     string `json:"cmd"`
 	Id      uint64 `json:"id"`
@@ -9,6 +9,7 @@ type InputEvent struct {
 	Prefix  string `json:"prefix"`
 	Log     int    `json:"log"`
 	Flags   uint64 `json:"flags"`
+	Backups int    `json:"baks"`
 	Status  Status `json:"metas"`
 }
 
@@ -52,26 +53,33 @@ type Meta struct {
 }
 
 const (
-	// Enable warmup.
+	// FLAG_ENABLE_WARMUP Enable warmup.
 	FLAG_ENABLE_WARMUP = 0x0001
-	// Warming up with fixed interval regardless workload.
+	// FLAG_FIXED_INTERVAL_WARMUP Warming up with fixed interval regardless workload.
 	FLAG_FIXED_INTERVAL_WARMUP = 0x0003
-	// Enable replication.
+	// FLAG_ENABLE_REPLICA Enable replication.
 	FLAG_ENABLE_REPLICA = 0x0010
-	// Replication will be triggered on warming up.
+	// FLAG_WARMUP_REPLICA Replication will be triggered on warming up.
 	FLAG_WARMUP_REPLICA = 0x0030
-	// Enable persist.
+	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
 
 	CMD_GET = "get"
 	CMD_SET = "set"
 	CMD_DEL = "del"
 	CMD_WARMUP = "warmup"
+	CMD_PING = "ping"
+	CMD_POND = "pong"
+	CMD_RECOVERED = "recovered"
+	CMD_INITMIGRATE = "initMigrate"
 	CMD_MIGRATE = "migrate"
 	CMD_DATA = "data"
+	CMD_BYE = "bye"
 
-	// Backup ID.
+	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"
-	// Key should be recovered as the first one.
+	// TIP_BACKUP_TOTAL Total backups available.
+	TIP_BACKUP_TOTAL = "baks"
+	// TIP_SERVING_KEY Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
 )

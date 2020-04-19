@@ -56,9 +56,9 @@ type Storage struct {
 	log        logger.ILogger
 
 	// Lineage
-	lineage    *types.LineageTerm
-	recovered  *types.LineageTerm
-	snapshot   *types.LineageTerm
+	lineage    *types.LineageTerm       // The lineage of current/recent term. The lineage is updated to recent term while recovering.
+	recovered  *types.LineageTerm       // Stores recovered lineage if it is not fully recovered, and will replace lineage on returning.
+	snapshot   *types.LineageTerm       // The latest snapshot of the lineage.
 	diffrank   LineageDifferenceRank
 	getSafe    csync.WaitGroup
 	setSafe    csync.WaitGroup
@@ -309,6 +309,9 @@ func (s *Storage) GetAWSSession() *awsSession.Session {
 func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	if meta.Backup {
+		if s.backupMeta == nil || s.backupMeta.BackupId != meta.BackupId || s.backupMeta.BackupTotal != meta.BackupTotal {
+			return false, nil
+		}
 		lineage = types.LineageTermFromMeta(s.backupMeta)
 	}
 	if lineage.Term > meta.Term {
@@ -525,7 +528,12 @@ func (s *Storage) StopTracker(option *types.CommitOption) types.LineageStatus {
 
 		// Clean up
 		close(s.chanOps)
-		runtime.Gosched()
+		runtime.Gosched()   // Take time to finalize.
+		if s.recovered != nil {
+			// The recovery is not complete, discard current term and replaced with whatever recovered.
+			// The node will try recovery in next invocation.
+			s.lineage = s.recovered
+		}
 		s.signalTracker = nil
 		s.committed = nil
 	}
@@ -573,9 +581,19 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		s.lineage.Updates = meta.Updates
 		s.lineage.Hash = meta.Hash
 		s.log.Debug("During recovery, write operations enabled at term %d", s.lineage.Term + 1)
-	} else if s.backupMeta != nil && s.backupMeta.Meta.Id == meta.Meta.Id {
+	} else if s.backupMeta != nil &&
+		s.backupMeta.Meta.Id == meta.Meta.Id &&
+		s.backupMeta.BackupId == meta.BackupId &&
+		s.backupMeta.BackupTotal == meta.BackupTotal {
 		// Compare metas of backups for the same lambda
 		old = types.LineageTermFromMeta(s.backupMeta)
+		if s.backupMeta.Meta.Id != meta.Meta.Id {
+			// Clean obsolete backups
+			for keyValue := range s.backup.Iter() {
+				s.repo.Del(keyValue.Key)
+				s.backup.Del(keyValue.Key)
+			}
+		}
 	} else {
 		// New backup lambda
 		old = types.LineageTermFromMeta(nil)
@@ -1141,7 +1159,7 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 }
 
 func (s *Storage) isRecoverable(key string, meta *types.LineageMeta) bool {
-	return !meta.Backup || xxhash.Sum64([]byte(key)) % uint64(Backups) == uint64(meta.BackupId)
+	return !meta.Backup || xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal) == uint64(meta.BackupId)
 }
 
 func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {

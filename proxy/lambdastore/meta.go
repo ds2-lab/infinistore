@@ -2,6 +2,8 @@ package lambdastore
 
 import (
 	"sync/atomic"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 // type ChuckMeta {
@@ -61,4 +63,32 @@ func (m *Meta) IncreaseSize(inc int64) uint64 {
 
 func (m *Meta) DecreaseSize(dec int64) uint64 {
 	return atomic.AddUint64(&m.size, ^uint64(dec-1))
+}
+
+func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
+	return &protocol.Meta {
+		Id:              id,
+		Term:            m.Term,
+		Updates:         m.Updates,
+		DiffRank:        m.DiffRank,
+		Hash:            m.Hash,
+		SnapshotTerm:    m.SnapshotTerm,
+		SnapshotUpdates: m.SnapshotUpdates,
+		SnapshotSize:    m.SnapshotSize,
+	}
+}
+
+func (m *Meta) FromProtocolMeta(meta *protocol.Meta) bool {
+	if meta.Term < m.Term {
+		return false
+	}
+
+	m.Term = meta.Term
+	m.Updates = meta.Updates
+	m.DiffRank = meta.DiffRank
+	m.Hash = meta.Hash
+	m.SnapshotTerm = meta.SnapshotTerm
+	m.SnapshotUpdates = meta.SnapshotUpdates
+	m.SnapshotSize = meta.SnapshotSize
+	return true
 }

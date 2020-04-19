@@ -15,6 +15,8 @@ const InstanceWarmTimout = 1 * time.Minute
 const InstanceCapacity = 1536 * 1000000    // MB
 const InstanceOverhead = 100 * 1000000     // MB
 const ServerPublicIp = ""                  // Leave it empty if using VPC.
+const RecoverRate = 40 * 1000000           // 40MB for 1536MB instance, 70MB for 3008MB instance.
+const BackupsPerInstance = 36              // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 func init() {
 	lambdastore.WarmTimout = InstanceWarmTimout
