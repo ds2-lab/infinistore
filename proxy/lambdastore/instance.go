@@ -194,7 +194,7 @@ func (ins *Instance) StartRecovery() int {
 }
 
 func (ins *Instance) startRecoveryLocked() int {
-	if recovering = atomic.LoadUint32(&ins.recovering); recovering > 0 {
+	if recovering := atomic.LoadUint32(&ins.recovering); recovering > 0 {
 		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
 		return int(recovering)
 	}
