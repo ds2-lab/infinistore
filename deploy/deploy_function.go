@@ -221,7 +221,7 @@ func main() {
 			fmt.Println(j)
 			var wg sync.WaitGroup
 			//for i := j*(*batch) + *from; i < (j+1)*(*batch); i++ {
-			for i := int64(0); i < *batch; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to ; i++ {
 				wg.Add(1)
 				go updateCode(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}
@@ -233,7 +233,7 @@ func main() {
 		for j := int64(0); j < group; j++ {
 			fmt.Println(j)
 			var wg sync.WaitGroup
-			for i := int64(0); i < *batch; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to; i++ {
 				wg.Add(1)
 				go updateConfig(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}
