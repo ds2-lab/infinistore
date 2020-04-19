@@ -57,7 +57,7 @@ func (s *Scaler) Daemon() {
 
 				// Begin handle requests
 				go node.HandleRequests()
-				s.placer.Append(node)
+				//s.placer.Append(node)
 			}
 
 			// update current active lambda instance

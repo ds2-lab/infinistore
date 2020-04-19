@@ -4,7 +4,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,9 +18,10 @@ import (
 )
 
 type Proxy struct {
-	log   logger.ILogger
-	group *Group
-	//placer *LruPlacer
+	log    logger.ILogger
+	group  *Group
+	window *MovingWindow
+
 	scaler *Scaler
 
 	initialized int32
@@ -37,45 +37,46 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group: group,
+		group:  group,
+		window: NewMovingWindow(10, 1),
 		//placer: NewLruPlacer(NewMataStore(), group),
 		scaler: NewScaler(NewLruPlacer(NewMataStore(), group)),
 		ready:  make(chan struct{}),
 	}
-	for i := range p.group.All {
-		name := LambdaPrefix
-		if replica {
-			p.log.Info("[Registering lambda store replica %d.]", i)
-			name = LambdaStoreName
-		} else {
-			p.log.Info("[Registering lambda store %s%d]", name, i)
-		}
-		node := scheduler.GetForGroup(p.group, i, "")
-		node.Meta.Capacity = InstanceCapacity
-		node.Meta.IncreaseSize(InstanceOverhead)
-
-		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
-		go func() {
-			node.WarmUp()
-			if atomic.AddInt32(&p.initialized, 1) == int32(p.group.Len()) {
-				p.log.Info("[Proxy is ready]")
-				close(p.ready)
-			}
-		}()
-
-		// Begin handle requests
-		go node.HandleRequests()
-	}
-
-	ActiveInstance = p.group.Len()
+	//for i := range p.group.All {
+	//	name := LambdaPrefix
+	//	if replica {
+	//		p.log.Info("[Registering lambda store replica %d.]", i)
+	//		name = LambdaStoreName
+	//	} else {
+	//		p.log.Info("[Registering lambda store %s%d]", name, i)
+	//	}
+	//	node := scheduler.GetForGroup(p.group, i, "")
+	//	node.Meta.Capacity = InstanceCapacity
+	//	node.Meta.IncreaseSize(InstanceOverhead)
+	//
+	//	// Initialize instance, this is not necessary if the start time of the instance is acceptable.
+	//	go func() {
+	//		node.WarmUp()
+	//		if atomic.AddInt32(&p.initialized, 1) == int32(p.group.Len()) {
+	//			p.log.Info("[Proxy is ready]")
+	//			close(p.ready)
+	//		}
+	//	}()
+	//
+	//	// Begin handle requests
+	//	go node.HandleRequests()
+	//}
+	p.window.start()
+	ActiveInstance = len(p.window.Active())
 	p.log.Debug("active number of instance is %v", ActiveInstance)
-
+	close(p.ready)
 	// init placer
-	p.scaler.placer.Init()
+	//p.scaler.placer.Init()
 
 	// start auto scaler
-	p.log.Debug("AutoScaler daemon start...")
-	go p.scaler.Daemon()
+	//p.log.Debug("AutoScaler daemon start...")
+	//go p.scaler.Daemon()
 
 	return p
 }
@@ -146,7 +147,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
 	p.log.Debug("key is %v, lambdaId is", prepared.Key, lambdaId)
 	// redirect to do load balance
-	meta, _, postProcess := p.scaler.placer.GetOrInsert(key, prepared)
+	meta, _ := p.scaler.placer.GetOrInsert(key, prepared)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -157,9 +158,9 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	//	w.Flush()
 	//	return
 	//}
-	if postProcess != nil {
-		postProcess(p.dropEvicted)
-	}
+	//if postProcess != nil {
+	//	postProcess(p.dropEvicted)
+	//}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 
