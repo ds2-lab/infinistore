@@ -519,7 +519,10 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 	if output != nil && len(output.Payload) > 0 {
 		var outputStatus protocol.Status
-		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
+		var outputError error
+		if err := json.Unmarshal(output.Payload, &outputError); err == nil {
+			ins.log.Error("[Lambda deactivated with error]: %v", outputError)
+		} else if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
 		} else if len(outputStatus) > 0 {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
