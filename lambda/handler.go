@@ -417,6 +417,7 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 	info := int64(storeId)
 	if recover {
 		info = -info
+		log.Debug("Fast recovery requested.")
 	}
 
 	w.AppendBulkString("pong")

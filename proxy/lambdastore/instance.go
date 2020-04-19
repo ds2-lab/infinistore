@@ -182,6 +182,7 @@ func (ins *Instance) HandleRequests() {
 func (ins *Instance) StartRecovery() int {
 	recovering := atomic.LoadUint32(&ins.recovering)
 	if recovering > 0 {
+		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
 		return int(recovering)
 	}
 
@@ -189,6 +190,7 @@ func (ins *Instance) StartRecovery() int {
 	defer ins.mu.Unlock()
 
 	if recovering = atomic.LoadUint32(&ins.recovering); recovering > 0 {
+		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
 		return int(recovering)
 	}
 
@@ -579,6 +581,7 @@ func (ins *Instance) flagValidated(conn *Connection, recoveryRequired bool) *Con
 	}
 
 	if recoveryRequired {
+		ins.log.Debug("Parallel recovery requested.")
 		ins.StartRecovery()
 	}
 	return ins.flagValidatedLocked(conn)

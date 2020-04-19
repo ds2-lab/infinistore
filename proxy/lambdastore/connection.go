@@ -233,10 +233,9 @@ func (conn *Connection) peekResponse() {
 }
 
 func (conn *Connection) pongHandler() {
-	conn.log.Debug("PONG from lambda.")
-
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
+	conn.log.Debug("PONG from lambda. id %d", id)
 
 	if conn.instance != nil {
 		conn.instance.flagValidated(conn, id < 0)
