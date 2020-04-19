@@ -519,7 +519,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 	if output != nil && len(output.Payload) > 0 {
 		var outputStatus protocol.Status
-		var outputError error
+		var outputError protocol.OutputError
 		if err := json.Unmarshal(output.Payload, &outputError); err == nil {
 			ins.log.Error("[Lambda deactivated with error]: %v", outputError)
 		} else if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {

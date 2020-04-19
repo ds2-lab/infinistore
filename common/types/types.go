@@ -52,6 +52,15 @@ type Meta struct {
 	Tip string `json:"tip"`
 }
 
+type OutputError struct {
+	Message    string `json:"errorMessage"`
+	Type       string `json:"errorType"`
+}
+
+func (e *OutputError) String() string {
+	return e.Message
+}
+
 const (
 	// FLAG_ENABLE_WARMUP Enable warmup.
 	FLAG_ENABLE_WARMUP = 0x0001
