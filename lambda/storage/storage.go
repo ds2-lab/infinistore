@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,7 @@ var (
 	Backups        = 10
 	Concurrency    = 5
 	Buckets        = 1
+	FunctionKey    string
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -79,6 +81,9 @@ type Storage struct {
 }
 
 func New(id uint64, persistent bool) *Storage {
+	if FunctionKey == "" {
+		FunctionKey = strings.Replace(lambdacontext.FunctionName, strconv.FormatUint(id, 10), "%d", 1)
+	}
 	return &Storage{
 		id: id,
 		repo: hashmap.New(1024),
@@ -710,7 +715,7 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.U
 	// Upload
 	params := &s3manager.UploadInput{
 		Bucket: aws.String(s.s3bucketDefault),
-		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, term.Term)),
+		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(s.id), term.Term)),
 		Body:   buf,
 	}
 	_, err = uploader.Upload(params)
@@ -763,7 +768,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Upl
 	// Persists.
 	params := &s3manager.UploadInput{
 		Bucket: aws.String(s.s3bucketDefault),
-		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
+		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(s.id), ss.Term)),
 		Body:   buf,
 	}
 	if _, err := uploader.Upload(params); err != nil {
@@ -860,7 +865,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	if snapshot {
 		inputs[0].Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
-			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + 1)), // meta.SnapshotTerm
+			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + 1)), // meta.SnapshotTerm
 		}
 		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
 		inputs[0].After = s.getReadyNotifier(0, chanNotify)
@@ -872,7 +877,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	for from < len(inputs) {
 		inputs[from].Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
-			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + uint64(from) + 1)),
+			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + uint64(from) + 1)),
 		}
 		inputs[from].Writer = new(aws.WriteAtBuffer)
 		inputs[from].After = s.getReadyNotifier(from, chanNotify)
@@ -988,9 +993,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		// Diffrank is supposed to be a moving value, we should replay it as long as possible.
 		s.diffrank.Reset(terms[0].DiffRank)	// Reset diffrank if recover from the snapshot
 	}
+	allKeys := make([]string, 0, numOps)
 	for _, term := range terms {
 		for i := 0; i < len(term.Ops); i++ {
 			op := &term.Ops[i]
+			if meta.Backup {
+				allKeys = append(allKeys, op.Key)
+			}
 
 			// Replay diffrank, skip ops in snapshot.
 			// Condition: !fromSnapshot || term.Term > meta.SnapshotTerm
@@ -1091,6 +1100,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		}
 	} else {
 		s.backupMeta = meta
+		var allchunks strings.Builder
+		for _, tbd := range tbds {
+			allchunks.WriteString(" ")
+			allchunks.WriteString(tbd.Key)
+		}
+		s.log.Debug("Keys to checked(%d of %d): %s", meta.BackupId, meta.BackupTotal, strings.Join(allKeys, " "))
+		s.log.Debug("Keys to recover(%d of %d): %s", meta.BackupId, meta.BackupTotal, allchunks.String())
 	}
 
 	return tbds
@@ -1197,6 +1213,10 @@ func (s *Storage) delayGet() {
 
 func (s *Storage) resetGet() {
 	s.getSafe.Done()
+}
+
+func (S *Storage) functionName(id uint64) string {
+	return fmt.Sprintf(FunctionKey, id)
 }
 
 // S3 Downloader Optimization

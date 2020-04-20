@@ -72,15 +72,15 @@ func (conn *Connection) Close() {
 }
 
 func (conn *Connection) close() {
+	if conn.instance != nil {
+		conn.instance.flagClosed(conn)
+	}
 	conn.Close()
 	conn.bye()
 	// Don't use c.Close(), it will stuck and wait for lambda.
 	conn.cn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	conn.cn.Close()
 	conn.clearResponses()
-	if conn.instance != nil {
-		go conn.instance.flagClosed(conn)
-	}
 	conn.log.Debug("Closed.")
 }
 

@@ -680,6 +680,10 @@ func (ins *Instance) flagClosed(conn *Connection) {
 	}
 
 	ins.cn = nil
+
+	ins.awakeLock.Lock()
+	defer ins.awakeLock.Unlock()
+	ins.awake = INSTANCE_SLEEP
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
