@@ -592,6 +592,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 			// Deny session
 			return conn
 		}
+		ins.log.Debug("Session %s started.", sid)
 
 		oldConn := ins.cn
 

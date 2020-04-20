@@ -591,16 +591,17 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		s.backupMeta.BackupTotal == meta.BackupTotal {
 		// Compare metas of backups for the same lambda
 		old = types.LineageTermFromMeta(s.backupMeta)
-		if s.backupMeta.Meta.Id != meta.Meta.Id {
+	} else {
+		// New backup lambda
+		old = types.LineageTermFromMeta(nil)
+		if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
+			s.log.Debug("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
 			// Clean obsolete backups
 			for keyValue := range s.backup.Iter() {
 				s.repo.Del(keyValue.Key)
 				s.backup.Del(keyValue.Key)
 			}
 		}
-	} else {
-		// New backup lambda
-		old = types.LineageTermFromMeta(nil)
 	}
 
 	// Flag get as unsafe
