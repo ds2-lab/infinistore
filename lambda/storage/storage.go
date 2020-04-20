@@ -20,10 +20,11 @@ import (
 	csync "github.com/mason-leap-lab/infinicache/common/sync"
 	"github.com/mason-leap-lab/redeo/resp"
 	"io"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
-	"strings"
+//	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,7 +44,8 @@ var (
 	Backups        = 10
 	Concurrency    = 5
 	Buckets        = 1
-	FunctionKey    string
+	FunctionPrefix string
+	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -81,8 +83,8 @@ type Storage struct {
 }
 
 func New(id uint64, persistent bool) *Storage {
-	if FunctionKey == "" {
-		FunctionKey = strings.Replace(lambdacontext.FunctionName, strconv.FormatUint(id, 10), "%d", 1)
+	if FunctionPrefix == "" {
+		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte(strconv.FormatUint(id, 10))))
 	}
 	return &Storage{
 		id: id,
@@ -172,7 +174,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	defer s.lineageMu.Unlock()
 
 	chunk := types.NewChunk(key, chunkId, val)
-	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
 	chunk.Bucket = s.getBucket(key)
 	s.set(key, chunk)
 	if s.chanOps != nil {
@@ -218,7 +220,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
 
-	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
 	chunk.Access()
 	chunk.Deleted = true
 	chunk.Body = nil
@@ -993,13 +995,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		// Diffrank is supposed to be a moving value, we should replay it as long as possible.
 		s.diffrank.Reset(terms[0].DiffRank)	// Reset diffrank if recover from the snapshot
 	}
-	allKeys := make([]string, 0, numOps)
+	// allKeys := make([]string, 0, numOps)
 	for _, term := range terms {
 		for i := 0; i < len(term.Ops); i++ {
 			op := &term.Ops[i]
-			if meta.Backup {
-				allKeys = append(allKeys, op.Key)
-			}
+			// if meta.Backup {
+			// 	allKeys = append(allKeys, op.Key)
+			// }
 
 			// Replay diffrank, skip ops in snapshot.
 			// Condition: !fromSnapshot || term.Term > meta.SnapshotTerm
@@ -1100,13 +1102,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		}
 	} else {
 		s.backupMeta = meta
-		var allchunks strings.Builder
-		for _, tbd := range tbds {
-			allchunks.WriteString(" ")
-			allchunks.WriteString(tbd.Key)
-		}
-		s.log.Debug("Keys to checked(%d of %d): %s", meta.BackupId, meta.BackupTotal, strings.Join(allKeys, " "))
-		s.log.Debug("Keys to recover(%d of %d): %s", meta.BackupId, meta.BackupTotal, allchunks.String())
+		// var allchunks strings.Builder
+		// for _, tbd := range tbds {
+		// 	allchunks.WriteString(" ")
+		// 	allchunks.WriteString(tbd.Key)
+		// }
+		// s.log.Debug("Keys to checked(%d of %d): %s", meta.BackupId, meta.BackupTotal, strings.Join(allKeys, " "))
+		// s.log.Debug("Keys to recover(%d of %d): %s", meta.BackupId, meta.BackupTotal, allchunks.String())
 	}
 
 	return tbds
@@ -1216,7 +1218,7 @@ func (s *Storage) resetGet() {
 }
 
 func (S *Storage) functionName(id uint64) string {
-	return fmt.Sprintf(FunctionKey, id)
+	return fmt.Sprintf("%s%d", FunctionPrefix, id)
 }
 
 // S3 Downloader Optimization
@@ -1272,11 +1274,13 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 	var chanLarge chan *S3BatchDownloadObject
 	// Launch small object downloaders
 	for i := 0; i < Concurrency; i++ {
+		wg.Add(1)
 		go d.Download(ctx, d[i], chanSmall, chanErr, &wg)
 	}
 	// Launch large object downloaders
 	if !smallOnly && len(d) > Concurrency {
 		chanLarge = make(chan *S3BatchDownloadObject, 1)
+		wg.Add(1)
 		go d.Download(ctx, d[Concurrency], chanLarge, chanErr, &wg)
 	}
 	// Collect errors
@@ -1309,7 +1313,6 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 }
 
 func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
-	wg.Add(1)
 	defer wg.Done()
 
 	for object := range ch {
