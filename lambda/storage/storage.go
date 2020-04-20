@@ -20,12 +20,15 @@ import (
 	csync "github.com/mason-leap-lab/infinicache/common/sync"
 	"github.com/mason-leap-lab/redeo/resp"
 	"io"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
+//	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"log"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
@@ -42,6 +45,8 @@ var (
 	Backups        = 10
 	Concurrency    = 5
 	Buckets        = 1
+	FunctionPrefix string
+	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
 )
@@ -79,6 +84,10 @@ type Storage struct {
 }
 
 func New(id uint64, persistent bool) *Storage {
+	if FunctionPrefix == "" {
+		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte("")))
+	}
+	log.Println(FunctionPrefix)
 	return &Storage{
 		id: id,
 		repo: hashmap.New(1024),
@@ -123,6 +132,10 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 
 	chunk, ok := s.get(key)
 	if !ok {
+		// TODO: remove debug option
+		if s.log.GetLevel() == logger.LOG_LEVEL_ALL && s.backupMeta != nil {
+			s.isRecoverable(key, s.backupMeta, true)
+		}
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
 	} else if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
@@ -163,7 +176,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	defer s.lineageMu.Unlock()
 
 	chunk := types.NewChunk(key, chunkId, val)
-	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
 	chunk.Bucket = s.getBucket(key)
 	s.set(key, chunk)
 	if s.chanOps != nil {
@@ -209,7 +222,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
 
-	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
 	chunk.Access()
 	chunk.Deleted = true
 	chunk.Body = nil
@@ -587,16 +600,17 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		s.backupMeta.BackupTotal == meta.BackupTotal {
 		// Compare metas of backups for the same lambda
 		old = types.LineageTermFromMeta(s.backupMeta)
-		if s.backupMeta.Meta.Id != meta.Meta.Id {
+	} else {
+		// New backup lambda
+		old = types.LineageTermFromMeta(nil)
+		if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
+			s.log.Debug("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
 			// Clean obsolete backups
 			for keyValue := range s.backup.Iter() {
 				s.repo.Del(keyValue.Key)
 				s.backup.Del(keyValue.Key)
 			}
 		}
-	} else {
-		// New backup lambda
-		old = types.LineageTermFromMeta(nil)
 	}
 
 	// Flag get as unsafe
@@ -705,7 +719,7 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.U
 	// Upload
 	params := &s3manager.UploadInput{
 		Bucket: aws.String(s.s3bucketDefault),
-		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, term.Term)),
+		Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(s.id), term.Term)),
 		Body:   buf,
 	}
 	_, err = uploader.Upload(params)
@@ -758,7 +772,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Upl
 	// Persists.
 	params := &s3manager.UploadInput{
 		Bucket: aws.String(s.s3bucketDefault),
-		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, ss.Term)),
+		Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(s.id), ss.Term)),
 		Body:   buf,
 	}
 	if _, err := uploader.Upload(params); err != nil {
@@ -855,7 +869,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	if snapshot {
 		inputs[0].Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
-			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + 1)), // meta.SnapshotTerm
+			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + 1)), // meta.SnapshotTerm
 		}
 		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
 		inputs[0].After = s.getReadyNotifier(0, chanNotify)
@@ -867,7 +881,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	for from < len(inputs) {
 		inputs[from].Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
-			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, lambdacontext.FunctionName, baseTerm + uint64(from) + 1)),
+			Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + uint64(from) + 1)),
 		}
 		inputs[from].Writer = new(aws.WriteAtBuffer)
 		inputs[from].After = s.getReadyNotifier(from, chanNotify)
@@ -983,9 +997,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		// Diffrank is supposed to be a moving value, we should replay it as long as possible.
 		s.diffrank.Reset(terms[0].DiffRank)	// Reset diffrank if recover from the snapshot
 	}
+	// allKeys := make([]string, 0, numOps)
 	for _, term := range terms {
 		for i := 0; i < len(term.Ops); i++ {
 			op := &term.Ops[i]
+			// if meta.Backup {
+			// 	allKeys = append(allKeys, op.Key)
+			// }
 
 			// Replay diffrank, skip ops in snapshot.
 			// Condition: !fromSnapshot || term.Term > meta.SnapshotTerm
@@ -1021,7 +1039,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 				}
 			}
 			// New or reset chunk
-			if chunk == nil && s.isRecoverable(op.Key, meta) {
+			if chunk == nil && s.isRecoverable(op.Key, meta, false) {
 				// Main repository or backup repository if backup ID matches.
 				chunk := &types.Chunk{
 					Key: op.Key,
@@ -1086,6 +1104,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		}
 	} else {
 		s.backupMeta = meta
+		// var allchunks strings.Builder
+		// for _, tbd := range tbds {
+		// 	allchunks.WriteString(" ")
+		// 	allchunks.WriteString(tbd.Key)
+		// }
+		// s.log.Debug("Keys to checked(%d of %d): %s", meta.BackupId, meta.BackupTotal, strings.Join(allKeys, " "))
+		// s.log.Debug("Keys to recover(%d of %d): %s", meta.BackupId, meta.BackupTotal, allchunks.String())
 	}
 
 	return tbds
@@ -1158,8 +1183,17 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 	return receivedBytes, nil
 }
 
-func (s *Storage) isRecoverable(key string, meta *types.LineageMeta) bool {
-	return !meta.Backup || xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal) == uint64(meta.BackupId)
+func (s *Storage) isRecoverable(key string, meta *types.LineageMeta, verify bool) bool {
+	if !meta.Backup {
+		return true
+	}
+	target := xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal)
+	if target == uint64(meta.BackupId) {
+		return true
+	} else if verify {
+		s.log.Warn("Detected backup reroute error, expected %d, actual %d, key %s", meta.BackupId, target, key)
+	}
+	return false
 }
 
 func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {
@@ -1183,6 +1217,10 @@ func (s *Storage) delayGet() {
 
 func (s *Storage) resetGet() {
 	s.getSafe.Done()
+}
+
+func (S *Storage) functionName(id uint64) string {
+	return fmt.Sprintf("%s%d", FunctionPrefix, id)
 }
 
 // S3 Downloader Optimization
@@ -1238,11 +1276,13 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 	var chanLarge chan *S3BatchDownloadObject
 	// Launch small object downloaders
 	for i := 0; i < Concurrency; i++ {
+		wg.Add(1)
 		go d.Download(ctx, d[i], chanSmall, chanErr, &wg)
 	}
 	// Launch large object downloaders
 	if !smallOnly && len(d) > Concurrency {
 		chanLarge = make(chan *S3BatchDownloadObject, 1)
+		wg.Add(1)
 		go d.Download(ctx, d[Concurrency], chanLarge, chanErr, &wg)
 	}
 	// Collect errors
@@ -1275,7 +1315,6 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter []S3BatchDownlo
 }
 
 func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
-	wg.Add(1)
 	defer wg.Done()
 
 	for object := range ch {

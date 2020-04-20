@@ -2,6 +2,7 @@ package types
 
 // InputEvent Input for the Lambda
 type InputEvent struct {
+	Sid     string `json:"sid"`  // session id.
 	Cmd     string `json:"cmd"`
 	Id      uint64 `json:"id"`
 	Proxy   string `json:"proxy"`
@@ -50,6 +51,15 @@ type Meta struct {
 
 	// Tips offer the lambda clues of how to recovery data. It is in http query format.
 	Tip string `json:"tip"`
+}
+
+type OutputError struct {
+	Message    string `json:"errorMessage"`
+	Type       string `json:"errorType"`
+}
+
+func (e *OutputError) String() string {
+	return e.Message
 }
 
 const (
