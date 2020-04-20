@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"log"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
@@ -84,8 +85,9 @@ type Storage struct {
 
 func New(id uint64, persistent bool) *Storage {
 	if FunctionPrefix == "" {
-		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte(strconv.FormatUint(id, 10))))
+		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte("")))
 	}
+	log.Println(FunctionPrefix)
 	return &Storage{
 		id: id,
 		repo: hashmap.New(1024),
