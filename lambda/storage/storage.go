@@ -123,6 +123,10 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 
 	chunk, ok := s.get(key)
 	if !ok {
+		// TODO: remove debug option
+		if s.log.GetLevel() == logger.LOG_LEVEL_ALL && s.backupMeta != nil {
+			s.isRecoverable(key, s.backupMeta, true)
+		}
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
 	} else if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
@@ -1021,7 +1025,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 				}
 			}
 			// New or reset chunk
-			if chunk == nil && s.isRecoverable(op.Key, meta) {
+			if chunk == nil && s.isRecoverable(op.Key, meta, false) {
 				// Main repository or backup repository if backup ID matches.
 				chunk := &types.Chunk{
 					Key: op.Key,
@@ -1158,8 +1162,17 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 	return receivedBytes, nil
 }
 
-func (s *Storage) isRecoverable(key string, meta *types.LineageMeta) bool {
-	return !meta.Backup || xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal) == uint64(meta.BackupId)
+func (s *Storage) isRecoverable(key string, meta *types.LineageMeta, verify bool) bool {
+	if !meta.Backup {
+		return true
+	}
+	target := xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal)
+	if target == uint64(meta.BackupId) {
+		return true
+	} else if verify {
+		s.log.Warn("Detected backup reroute error, expected %d, actual %d, key %s", meta.BackupId, target, key)
+	}
+	return false
 }
 
 func (s *Storage) getReadyNotifier(i int, chanNotify chan int) func() error {

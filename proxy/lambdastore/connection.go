@@ -78,6 +78,9 @@ func (conn *Connection) close() {
 	conn.cn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	conn.cn.Close()
 	conn.clearResponses()
+	if conn.instance != nil {
+		go conn.instance.flagClosed(conn)
+	}
 	conn.log.Debug("Closed.")
 }
 
@@ -256,7 +259,7 @@ func (conn *Connection) pongHandler() {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
 		conn.log.Warn("Discard rouge POND for %d.", id)
-		conn.Close()
+		conn.close()
 	}
 }
 

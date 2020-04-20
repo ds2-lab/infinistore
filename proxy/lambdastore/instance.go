@@ -371,6 +371,7 @@ func (ins *Instance) Close() {
 	}
 	if ins.cn != nil {
 		ins.cn.Close()
+		ins.cn = nil
 	}
 	ins.flagValidatedLocked(nil)
 }
@@ -665,6 +666,21 @@ func (ins *Instance) validated() *Connection {
 	return ins.lastValidated
 }
 
+func (ins *Instance) flagClosed(conn *Connection) {
+	if ins.cn != conn {
+		return
+	}
+
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	if ins.cn != conn {
+		return
+	}
+
+	ins.cn = nil
+}
+
 func (ins *Instance) handleRequest(cmd types.Command) {
 	// On parallel recovering, we will try reroute get requests.
 	if ins.IsRecovering() && cmd.String() == protocol.CMD_GET && ins.rerouteGetRequest(cmd.GetRequest()) {
@@ -725,6 +741,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
 	ins.backups[bakId].C() <- req
+	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
 	return true
 }
 
