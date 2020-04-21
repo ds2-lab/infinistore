@@ -38,10 +38,10 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 	}
 }
 
-func (mw *MovingWindow) start() {
-	bucket := NewBucket(0)
-	<-bucket.Ready()
+func (mw *MovingWindow) start(ready chan struct{}) *Group {
+	bucket := NewBucket(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
+	return bucket.group
 }
 
 func (mw *MovingWindow) Rolling() {
@@ -50,7 +50,7 @@ func (mw *MovingWindow) Rolling() {
 		ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
 		select {
 		case <-ticker.C:
-			mw.buckets = append(mw.buckets, NewBucket(idx))
+			mw.buckets = append(mw.buckets, NewBucket(idx, make(chan struct{})))
 			if len(mw.buckets) > mw.num {
 				mw.buckets = mw.buckets[1:]
 			}
@@ -71,7 +71,7 @@ func (mw *MovingWindow) getCold() []*bucket {
 }
 
 // retrieve hot bucket (second half)
-func (mw *MovingWindow) Active() []*bucket {
+func (mw *MovingWindow) getActive() []*bucket {
 	if len(mw.buckets) < mw.num {
 		return mw.buckets
 	} else {

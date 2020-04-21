@@ -67,10 +67,8 @@ func New(replica bool) *Proxy {
 	//	// Begin handle requests
 	//	go node.HandleRequests()
 	//}
-	p.window.start()
-	ActiveInstance = len(p.window.Active())
-	p.log.Debug("active number of instance is %v", ActiveInstance)
-	close(p.ready)
+	p.group = p.window.start(p.Ready())
+	//close(p.ready)
 	// init placer
 	//p.scaler.placer.Init()
 

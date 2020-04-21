@@ -31,7 +31,7 @@ type bucket struct {
 	start int64
 }
 
-func NewBucket(id int) *bucket {
+func NewBucket(id int, ready chan struct{}) *bucket {
 	bucket := bucketPool.Get().(*bucket)
 
 	bucket.log = &logger.ColorLogger{
@@ -59,7 +59,7 @@ func NewBucket(id int) *bucket {
 			node.WarmUp()
 			if atomic.AddInt32(&bucket.initialized, 1) == int32(bucket.group.Len()) {
 				bucket.log.Info("[Proxy is ready]")
-				close(bucket.ready)
+				close(ready)
 			}
 		}()
 
