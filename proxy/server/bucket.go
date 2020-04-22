@@ -31,7 +31,7 @@ type bucket struct {
 	start int64
 }
 
-func NewBucket(id int, ready chan struct{}) *bucket {
+func bucketStart(id int, ready chan struct{}) *bucket {
 	bucket := bucketPool.Get().(*bucket)
 
 	bucket.log = &logger.ColorLogger{
@@ -52,7 +52,7 @@ func NewBucket(id int, ready chan struct{}) *bucket {
 		node := scheduler.GetForGroup(bucket.group, idx, "")
 		node.Meta.Capacity = InstanceCapacity
 		node.Meta.IncreaseSize(InstanceOverhead)
-		bucket.log.Debug("[Scaling lambda instance %v]", node.Name())
+		bucket.log.Debug("[adding lambda instance %v]", node.Name())
 
 		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
 		go func() {
@@ -60,6 +60,44 @@ func NewBucket(id int, ready chan struct{}) *bucket {
 			if atomic.AddInt32(&bucket.initialized, 1) == int32(bucket.group.Len()) {
 				bucket.log.Info("[Proxy is ready]")
 				close(ready)
+			}
+		}()
+
+		// Begin handle requests
+		go node.HandleRequests()
+
+	}
+
+	return bucket
+}
+
+func NewBucket(id int) *bucket {
+	bucket := bucketPool.Get().(*bucket)
+
+	bucket.log = &logger.ColorLogger{
+		Prefix: fmt.Sprintf("Bucket %d", id),
+		Level:  global.Log.GetLevel(),
+		Color:  true,
+	}
+	bucket.m = hashmap.HashMap{}
+	bucket.id = id
+	bucket.start = time.Now().UnixNano()
+
+	// initial corresponding group
+	bucket.group = NewGroup(NumLambdaClusters)
+
+	for i := range bucket.group.All {
+		bucket.log.Debug("i is %v", i)
+		node := scheduler.GetForGroup(bucket.group, i, "")
+		node.Meta.Capacity = InstanceCapacity
+		node.Meta.IncreaseSize(InstanceOverhead)
+		bucket.log.Debug("[adding lambda instance %v]", node.Name())
+
+		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
+		go func() {
+			node.WarmUp()
+			if atomic.AddInt32(&bucket.initialized, 1) == int32(bucket.group.Len()) {
+				bucket.log.Info("[Bucket %v is ready]", bucket.id)
 			}
 		}()
 

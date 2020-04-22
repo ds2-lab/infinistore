@@ -9,20 +9,19 @@ import (
 
 type Scaler struct {
 	log     logger.ILogger
-	placer  *LruPlacer
+	proxy   *Proxy
 	Signal  chan struct{}
 	ready   chan struct{}
 	counter int32
 }
 
-func NewScaler(placer *LruPlacer) *Scaler {
+func NewScaler(placer *Placer) *Scaler {
 	s := &Scaler{
 		log: &logger.ColorLogger{
 			Prefix: "Scaler ",
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		placer:  placer,
 		Signal:  make(chan struct{}, 1),
 		ready:   make(chan struct{}),
 		counter: 0,
@@ -33,7 +32,7 @@ func NewScaler(placer *LruPlacer) *Scaler {
 // check the cluster usage information periodically
 func (s *Scaler) Daemon() {
 	for {
-		s.log.Debug("in scaler Daemon, Group len is %v, active instance is %v", s.placer.group.Len(), ActiveInstance)
+		s.log.Debug("in scaler Daemon, Group len is %v, active instance is %v", s.proxy.group.Len(), ActiveInstance)
 		t := time.NewTicker(INTERVAL)
 		select {
 		// receive scaling out signal
@@ -43,7 +42,7 @@ func (s *Scaler) Daemon() {
 				name := LambdaPrefix
 				s.log.Debug("[Scaling lambda instance %v%v]", name, i)
 
-				node := scheduler.GetForGroup(s.placer.group, i, "out")
+				node := scheduler.GetForGroup(s.proxy.group, i, "out")
 				node.Meta.Capacity = InstanceCapacity
 				node.Meta.IncreaseSize(InstanceOverhead)
 
@@ -69,7 +68,7 @@ func (s *Scaler) Daemon() {
 		case <-t.C:
 			//TODO: periodically check storage capacity information
 			// Responsible for scaling in phase
-			s.log.Debug("current status is %v, len is %v", s.placer.AvgSize(), s.placer.group.Len())
+			//s.log.Debug("current status is %v, len is %v", s.proxy.placer.AvgSize(), s.placer.window.proxy.group.Len())
 
 		}
 	}

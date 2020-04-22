@@ -9,14 +9,14 @@ import (
 
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
+	proxy    *Proxy
 	log      logger.ILogger
 	window   int
 	interval int
-	num      int
+	num      int // number of hot bucket 1 hour time window = 6 num * 10 min
 	buckets  []*bucket
 
-	cursor int
-
+	cursor    int
 	startTime time.Time
 }
 
@@ -31,7 +31,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		},
 		window:    window,
 		interval:  interval,
-		num:       num,
+		num:       2,
 		buckets:   make([]*bucket, 0, num*2),
 		startTime: time.Now(),
 		cursor:    0,
@@ -39,47 +39,72 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 }
 
 func (mw *MovingWindow) start(ready chan struct{}) *Group {
-	bucket := NewBucket(0, ready)
+	bucket := bucketStart(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
+	mw.getActiveGroup()
+	ActiveInstance += bucket.group.Len()
 	return bucket.group
 }
 
 func (mw *MovingWindow) Rolling() {
+	mw.log.Debug("in rolling")
 	idx := 1
 	for {
-		ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
+		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
+		ticker := time.NewTicker(30 * time.Second)
 		select {
 		case <-ticker.C:
-			mw.buckets = append(mw.buckets, NewBucket(idx, make(chan struct{})))
-			if len(mw.buckets) > mw.num {
+			mw.buckets = append(mw.buckets, NewBucket(idx))
+			if len(mw.buckets) > mw.num*2 {
+				mw.log.Debug("trim bucket")
 				mw.buckets = mw.buckets[1:]
 			}
+			mw.proxy.group = mw.getActiveGroup()
 			mw.cursor = len(mw.buckets) - 1
-			//fmt.Println(mw.buckets, mw.cursor)
+
 		}
 		idx += 1
 	}
 }
 
 // retrieve cold bucket (first half)
-func (mw *MovingWindow) getCold() []*bucket {
-	if len(mw.buckets) < mw.num {
+func (mw *MovingWindow) getColdBucket() []*bucket {
+	if len(mw.buckets) <= mw.num {
 		return nil
 	} else {
-		return mw.buckets[0 : mw.num/2-1]
+		return mw.buckets[0 : len(mw.buckets)/2-1]
 	}
 }
 
 // retrieve hot bucket (second half)
-func (mw *MovingWindow) getActive() []*bucket {
-	if len(mw.buckets) < mw.num {
+func (mw *MovingWindow) getActiveBucket() []*bucket {
+	if len(mw.buckets) <= mw.num {
 		return mw.buckets
 	} else {
-		return mw.buckets[mw.num/2:]
+		return mw.buckets[len(mw.buckets)/2:]
 	}
 }
 
+func (mw *MovingWindow) getAll() []*bucket {
+	return mw.buckets
+}
+
+func (mw *MovingWindow) getActiveGroup() *Group {
+	res := &Group{
+		All: make([]*GroupInstance, 0, LambdaMaxDeployments),
+	}
+	for _, bucket := range mw.getActiveBucket() {
+		g := bucket.group
+		for i := 0; i < g.Len(); i++ {
+			mw.log.Debug("instance name %v", g.All[i].Name())
+			res.All = append(res.All, g.All[i])
+		}
+	}
+	return res
+}
+
 func (mw *MovingWindow) touch(meta *Meta) {
+	mw.log.Debug("in touch %v", meta.Placement)
 	// brand new meta(-1) or already existed
 	if meta.placerMeta.bucketIdx == -1 {
 		mw.buckets[mw.cursor].m.Set(meta.Key, meta)

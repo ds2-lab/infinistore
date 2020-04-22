@@ -18,9 +18,10 @@ import (
 )
 
 type Proxy struct {
-	log    logger.ILogger
-	group  *Group
-	window *MovingWindow
+	log          logger.ILogger
+	group        *Group
+	movingWindow *MovingWindow
+	placer       *Placer
 
 	scaler *Scaler
 
@@ -37,38 +38,20 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group:  group,
-		window: NewMovingWindow(10, 1),
-		//placer: NewLruPlacer(NewMataStore(), group),
-		scaler: NewScaler(NewLruPlacer(NewMataStore(), group)),
-		ready:  make(chan struct{}),
+		group:        group,
+		movingWindow: NewMovingWindow(10, 1),
+		placer:       NewPlacer(NewMataStore()),
+		scaler:       NewScaler(NewPlacer(NewMataStore())),
+		ready:        make(chan struct{}),
 	}
-	//for i := range p.group.All {
-	//	name := LambdaPrefix
-	//	if replica {
-	//		p.log.Info("[Registering lambda store replica %d.]", i)
-	//		name = LambdaStoreName
-	//	} else {
-	//		p.log.Info("[Registering lambda store %s%d]", name, i)
-	//	}
-	//	node := scheduler.GetForGroup(p.group, i, "")
-	//	node.Meta.Capacity = InstanceCapacity
-	//	node.Meta.IncreaseSize(InstanceOverhead)
-	//
-	//	// Initialize instance, this is not necessary if the start time of the instance is acceptable.
-	//	go func() {
-	//		node.WarmUp()
-	//		if atomic.AddInt32(&p.initialized, 1) == int32(p.group.Len()) {
-	//			p.log.Info("[Proxy is ready]")
-	//			close(p.ready)
-	//		}
-	//	}()
-	//
-	//	// Begin handle requests
-	//	go node.HandleRequests()
-	//}
-	p.group = p.window.start(p.Ready())
-	//close(p.ready)
+
+	p.movingWindow.proxy = p
+	p.placer.proxy = p
+	p.scaler.proxy = p
+
+	p.group = p.movingWindow.start(p.Ready())
+	go p.movingWindow.Rolling()
+
 	// init placer
 	//p.scaler.placer.Init()
 
@@ -140,12 +123,12 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
-	prepared := p.scaler.placer.NewMeta(
+	prepared := p.placer.NewMeta(
 		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
-	p.log.Debug("key is %v, lambdaId is", prepared.Key, lambdaId)
+	p.log.Debug("key is %v, lambdaId is %v", prepared.Key, lambdaId)
 	// redirect to do load balance
-	meta, _ := p.scaler.placer.GetOrInsert(key, prepared)
+	meta, _ := p.placer.GetOrInsert(key, prepared)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -202,7 +185,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	//	return
 	//}
 
-	meta, ok := p.scaler.placer.Get(key, int(dChunkId))
+	meta, ok := p.placer.Get(key, int(dChunkId))
 	p.log.Debug("ok ? %v", ok)
 	if !ok {
 		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
@@ -259,6 +242,11 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 }
 
 func (p *Proxy) CollectData() {
+
+	for _, ins := range p.group.All {
+		p.log.Debug("active instance in proxy ", ins.Name())
+	}
+
 	for i, _ := range p.group.All {
 		global.DataCollected.Add(1)
 		// send data command

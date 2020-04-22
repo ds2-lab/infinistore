@@ -25,7 +25,7 @@ type Meta struct {
 	Balanced int32
 	slice    Slice
 	//placerMeta *PlacerMeta
-	placerMeta *LruPlacerMeta
+	placerMeta *PlacerMeta
 	lastChunk  int
 	mu         sync.Mutex
 }
