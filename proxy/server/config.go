@@ -17,8 +17,8 @@ const (
 
 const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Proxy2Node"
-const InstanceCapacity = 1536 * 1000000 // MB
-const InstanceOverhead = 100 * 1000000  // MB
+const InstanceCapacity = 1000  // MB
+const InstanceOverhead = 100   // MB
 const Threshold = 0.8
 
 var ActiveInstance int

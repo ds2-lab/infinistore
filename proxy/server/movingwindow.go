@@ -41,8 +41,8 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 func (mw *MovingWindow) start(ready chan struct{}) *Group {
 	bucket := bucketStart(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
-	mw.getActiveGroup()
-	ActiveInstance += bucket.group.Len()
+	//mw.getActiveGroup()
+	mw.proxy.groupAll = mw.getAllGroup()
 	return bucket.group
 }
 
@@ -59,7 +59,8 @@ func (mw *MovingWindow) Rolling() {
 				mw.log.Debug("trim bucket")
 				mw.buckets = mw.buckets[1:]
 			}
-			mw.proxy.group = mw.getActiveGroup()
+			mw.proxy.group = mw.getAllGroup()
+			//mw.proxy.groupAll = mw.getAllGroup()
 			mw.cursor = len(mw.buckets) - 1
 
 		}
@@ -85,13 +86,19 @@ func (mw *MovingWindow) getActiveBucket() []*bucket {
 	}
 }
 
-func (mw *MovingWindow) getAll() []*bucket {
+func (mw *MovingWindow) getAllBuckets() []*bucket {
 	return mw.buckets
 }
 
+func (mw *MovingWindow) getCurrentBucket() *bucket {
+	return mw.buckets[len(mw.buckets)-1]
+}
+
+// active group means active bucket under N(2) hour window
 func (mw *MovingWindow) getActiveGroup() *Group {
 	res := &Group{
-		All: make([]*GroupInstance, 0, LambdaMaxDeployments),
+		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
+		size: 0,
 	}
 	for _, bucket := range mw.getActiveBucket() {
 		g := bucket.group
@@ -100,7 +107,29 @@ func (mw *MovingWindow) getActiveGroup() *Group {
 			res.All = append(res.All, g.All[i])
 		}
 	}
+	res.size = len(res.All)
 	return res
+}
+
+func (mw *MovingWindow) getAllGroup() *Group {
+	res := &Group{
+		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
+		size: 0,
+	}
+	for _, bucket := range mw.getAllBuckets() {
+		g := bucket.group
+		for i := 0; i < g.Len(); i++ {
+			mw.log.Debug("instance name %v", g.All[i].Name())
+			res.All = append(res.All, g.All[i])
+		}
+	}
+	res.size = len(res.All)
+	return res
+}
+
+func (mw *MovingWindow) getInstanceId(id int) int {
+	idx := mw.getCurrentBucket().from + id
+	return idx
 }
 
 func (mw *MovingWindow) touch(meta *Meta) {
@@ -120,7 +149,7 @@ func (mw *MovingWindow) touch(meta *Meta) {
 	}
 
 	meta.placerMeta.bucketIdx = mw.cursor
-	meta.placerMeta.ts = time.Now().UnixNano()
+	//meta.placerMeta.ts = time.Now().UnixNano()
 }
 
 //func (mw *MovingWindow) updateBucket(meta *Meta, lastChunk int) {

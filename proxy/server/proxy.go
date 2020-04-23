@@ -20,6 +20,7 @@ import (
 type Proxy struct {
 	log          logger.ILogger
 	group        *Group
+	groupAll     *Group
 	movingWindow *MovingWindow
 	placer       *Placer
 
@@ -32,16 +33,18 @@ type Proxy struct {
 // initial lambda group
 func New(replica bool) *Proxy {
 	group := NewGroup(NumLambdaClusters) // use Cluster number to initial group
+	//groupAll := NewGroup(NumLambdaClusters) // use Cluster number to initial group
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group:        group,
+		group: group,
+		//groupAll:     groupAll,
 		movingWindow: NewMovingWindow(10, 1),
 		placer:       NewPlacer(NewMataStore()),
-		scaler:       NewScaler(NewPlacer(NewMataStore())),
+		scaler:       NewScaler(),
 		ready:        make(chan struct{}),
 	}
 
@@ -50,14 +53,11 @@ func New(replica bool) *Proxy {
 	p.scaler.proxy = p
 
 	p.group = p.movingWindow.start(p.Ready())
+
+	// start moving window rolling
 	go p.movingWindow.Rolling()
-
-	// init placer
-	//p.scaler.placer.Init()
-
 	// start auto scaler
-	//p.log.Debug("AutoScaler daemon start...")
-	//go p.scaler.Daemon()
+	go p.scaler.Daemon()
 
 	return p
 }

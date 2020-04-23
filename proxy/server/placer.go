@@ -2,6 +2,7 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/wangaoone/LambdaObjectstore/proxy/global"
@@ -12,15 +13,14 @@ const (
 )
 
 type PlacerMeta struct {
-	bucketIdx  int
-	instanceId int32
-	ts         int64
+	bucketIdx int
+	counter   int32
 }
 
 func newPlacerMeta() *PlacerMeta {
 	return &PlacerMeta{
-		bucketIdx:  -1,
-		instanceId: 0,
+		bucketIdx: -1,
+		counter:   0,
 	}
 
 }
@@ -29,9 +29,8 @@ type Placer struct {
 	proxy     *Proxy
 	log       logger.ILogger
 	metaStore *MetaStore
-	//group     *Group
-	//window *MovingWindow
-	mu sync.RWMutex
+	scaling   bool
+	mu        sync.RWMutex
 }
 
 func NewPlacer(store *MetaStore) *Placer {
@@ -47,11 +46,16 @@ func NewPlacer(store *MetaStore) *Placer {
 }
 
 func (l *Placer) AvgSize() int {
+	l.log.Debug("group len %v", l.proxy.group.Len())
 	sum := 0
 	for i := 0; i < l.proxy.group.Len(); i++ {
 		sum += int(l.proxy.group.Instance(i).Meta.Size())
 	}
+	l.log.Debug("avg size is", sum/l.proxy.group.Len())
 	return sum / l.proxy.group.Len()
+	//for i := 0; i < l.proxy.group.Len(); i++ {
+	//	l.log.Debug("instance and sizeinstance and size is %v %v", l.proxy.group.Instance(i).Name(), int(l.proxy.group.Instance(i).Meta.Size()))
+	//}
 }
 
 func (l *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, lambdaId int, chunkSize int64) *Meta {
@@ -66,6 +70,8 @@ func (l *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, 
 func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	//lambdaId from client
 	chunkId := newMeta.lastChunk
+	lambdaId := newMeta.Placement[chunkId]
+
 	meta, got, _ := l.metaStore.GetOrInsert(key, newMeta)
 
 	if got {
@@ -78,27 +84,55 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	defer l.mu.Unlock()
 
 	// scaler check
-	//if l.AvgSize() > InstanceCapacity*Threshold {
+	//if l.AvgSize() > InstanceCapacity*Threshold && l.scaling == false {
 	//	l.log.Debug("large than instance average size")
-	//	//TODO:  lambda instances scale out
+	//	l.scaling = true
+	//	l.proxy.scaler.Signal <- struct{}{}
 	//}
+
+	//l.AvgSize()
 
 	if meta.placerMeta == nil {
 		meta.placerMeta = newPlacerMeta()
 	}
 
-	// Check availability
-	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, meta.placerMeta.instanceId)
-	meta.Placement[chunkId] = int(meta.placerMeta.instanceId)
+	// Check placement
+	offset := l.proxy.movingWindow.getCurrentBucket().pointer
 
-	if int(meta.placerMeta.instanceId) == meta.NumChunks-1 {
+	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId) + offset
+	l.log.Debug("chunk id is %v, instance Id is %v, offset is %v", chunkId, instanceId, offset)
+
+	// place
+	meta.Placement[chunkId] = instanceId
+	l.updateInstanceSize(instanceId, meta.ChunkSize)
+
+	// use last arrived chunk to touch meta
+	l.touch(meta)
+
+	l.log.Debug("placement is %v", meta.Placement)
+	return meta, got
+}
+
+func (l *Placer) Get(key string, chunk int) (*Meta, bool) {
+	meta, ok := l.metaStore.Get(key)
+	if !ok {
+		return nil, ok
+	}
+	// use last arrived chunk to touch meta
+	l.touch(meta)
+	return meta, ok
+}
+
+func (l *Placer) touch(meta *Meta) {
+	if int(atomic.AddInt32(&meta.placerMeta.counter, 1)) == meta.NumChunks {
 		l.log.Debug("before touch")
 		l.proxy.movingWindow.touch(meta)
+		meta.placerMeta.counter = 0
 	}
+}
 
-	meta.placerMeta.instanceId += 1
-
-	return meta, got
+func (l *Placer) updateInstanceSize(idx int, block int64) {
+	l.proxy.group.Instance(idx).Meta.IncreaseSize(block)
 }
 
 //func (l *Placer) NextAvailable(meta *Meta) {
@@ -146,34 +180,4 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 //
 //	meta.placerMeta.confirmed = true
 //
-//}
-
-func (l *Placer) Get(key string, chunk int) (*Meta, bool) {
-	meta, ok := l.metaStore.Get(key)
-	if !ok {
-		return nil, ok
-	}
-	return meta, ok
-}
-
-//func (l *Placer) updateInstanceSize(evictList []*Meta, m *Meta) {
-//	last := evictList[len(evictList)-1]
-//	l.log.Debug("last in evict list is %v", last.Key)
-//	for i := 0; i < len(last.Placement); i++ {
-//		l.group.Instance(last.Placement[i]).Meta.IncreaseSize(m.ChunkSize - last.ChunkSize)
-//	}
-//	l.log.Debug("len of evict list is", len(evictList))
-//	if len(evictList) > 1 {
-//		l.log.Debug("evict list length larger than 1")
-//		for j := 0; j < len(evictList)-1; j++ {
-//			e := evictList[j]
-//			//delta := m.ChunkSize - e.ChunkSize
-//			for i := 0; i < len(e.Placement); i++ {
-//				l.group.Instance(e.Placement[i]).Meta.DecreaseSize(e.ChunkSize)
-//			}
-//		}
-//		return
-//	}
-//
-//	return
 //}

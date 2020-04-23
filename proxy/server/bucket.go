@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/wangaoone/LambdaObjectstore/common/logger"
 	"github.com/wangaoone/LambdaObjectstore/proxy/global"
@@ -27,8 +26,8 @@ type bucket struct {
 	group       *Group
 	initialized int32
 	ready       chan struct{}
-
-	start int64
+	pointer     int
+	from        int
 }
 
 func bucketStart(id int, ready chan struct{}) *bucket {
@@ -41,8 +40,8 @@ func bucketStart(id int, ready chan struct{}) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.start = time.Now().UnixNano()
-
+	bucket.pointer = 0
+	bucket.from = 0
 	// initial corresponding group
 	bucket.group = NewGroup(NumLambdaClusters)
 
@@ -81,8 +80,7 @@ func NewBucket(id int) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.start = time.Now().UnixNano()
-
+	bucket.pointer = 0
 	// initial corresponding group
 	bucket.group = NewGroup(NumLambdaClusters)
 
@@ -105,7 +103,7 @@ func NewBucket(id int) *bucket {
 		go node.HandleRequests()
 
 	}
-
+	bucket.from = id * len(bucket.group.All)
 	return bucket
 }
 
