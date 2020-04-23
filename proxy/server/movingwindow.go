@@ -42,7 +42,7 @@ func (mw *MovingWindow) start(ready chan struct{}) *Group {
 	bucket := bucketStart(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
 	//mw.getActiveGroup()
-	mw.proxy.groupAll = mw.getAllGroup()
+	mw.proxy.group = mw.getAllGroup()
 	return bucket.group
 }
 
@@ -51,7 +51,7 @@ func (mw *MovingWindow) Rolling() {
 	idx := 1
 	for {
 		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(30 * time.Hour)
 		select {
 		case <-ticker.C:
 			mw.buckets = append(mw.buckets, NewBucket(idx))
@@ -118,8 +118,7 @@ func (mw *MovingWindow) getAllGroup() *Group {
 	}
 	for _, bucket := range mw.getAllBuckets() {
 		g := bucket.group
-		for i := 0; i < g.Len(); i++ {
-			mw.log.Debug("instance name %v", g.All[i].Name())
+		for i := 0; i < len(g.All); i++ {
 			res.All = append(res.All, g.All[i])
 		}
 	}

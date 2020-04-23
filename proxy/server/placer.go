@@ -6,6 +6,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
 )
 
 const (
@@ -45,19 +46,6 @@ func NewPlacer(store *MetaStore) *Placer {
 	return lruPlacer
 }
 
-func (l *Placer) AvgSize() int {
-	l.log.Debug("group len %v", l.proxy.group.Len())
-	sum := 0
-	for i := 0; i < l.proxy.group.Len(); i++ {
-		sum += int(l.proxy.group.Instance(i).Meta.Size())
-	}
-	l.log.Debug("avg size is", sum/l.proxy.group.Len())
-	return sum / l.proxy.group.Len()
-	//for i := 0; i < l.proxy.group.Len(); i++ {
-	//	l.log.Debug("instance and sizeinstance and size is %v %v", l.proxy.group.Instance(i).Name(), int(l.proxy.group.Instance(i).Meta.Size()))
-	//}
-}
-
 func (l *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, lambdaId int, chunkSize int64) *Meta {
 	l.log.Debug("key and chunkId is %v,%v", key, chunkId)
 	meta := NewMeta(key, numChunks, chunkSize)
@@ -84,12 +72,11 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	defer l.mu.Unlock()
 
 	// scaler check
-	//if l.AvgSize() > InstanceCapacity*Threshold && l.scaling == false {
-	//	l.log.Debug("large than instance average size")
-	//	l.scaling = true
-	//	l.proxy.scaler.Signal <- struct{}{}
-	//}
-
+	if l.AvgSize() > InstanceCapacity*Threshold && l.scaling == false {
+		l.log.Debug("large than instance average size")
+		l.scaling = true
+		l.proxy.scaler.Signal <- struct{}{}
+	}
 	//l.AvgSize()
 
 	if meta.placerMeta == nil {
@@ -97,10 +84,10 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	}
 
 	// Check placement
-	offset := l.proxy.movingWindow.getCurrentBucket().pointer
+	//offset := l.proxy.movingWindow.getCurrentBucket().offset
 
-	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId) + offset
-	l.log.Debug("chunk id is %v, instance Id is %v, offset is %v", chunkId, instanceId, offset)
+	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId)
+	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 
 	// place
 	meta.Placement[chunkId] = instanceId
@@ -131,8 +118,30 @@ func (l *Placer) touch(meta *Meta) {
 	}
 }
 
+func (l *Placer) AvgSize() int {
+	sum := 0
+	currentBucket := l.proxy.movingWindow.getCurrentBucket()
+
+	// only check size on small set of instances
+	for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
+		sum += int(currentBucket.group.Instance(i).Meta.Size())
+	}
+
+	return sum / NumLambdaClusters
+}
+
 func (l *Placer) updateInstanceSize(idx int, block int64) {
-	l.proxy.group.Instance(idx).Meta.IncreaseSize(block)
+	l.temp(idx)
+	l.log.Debug("before update size")
+	l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).IncreaseSize(block)
+	l.log.Debug("after update size")
+}
+
+func (l *Placer) temp(idx int) {
+	for i := range l.proxy.group.All {
+		l.log.Debug("name %v, size %v", l.proxy.group.All[i].Name(), l.proxy.group.All[i].LambdaDeployment.(*lambdastore.Instance).Size())
+	}
+	//l.log.Debug("name %v, size %v", l.proxy.group.All[idx].Name(), l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).Size())
 }
 
 //func (l *Placer) NextAvailable(meta *Meta) {

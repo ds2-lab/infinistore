@@ -10,15 +10,15 @@ const LambdaMaxDeployments = 400
 const NumLambdaClusters = 5
 
 const (
-	STEP               = 5               // number of step
+	STEP               = 5                // number of step
 	INTERVAL           = 25 * time.Second // minute
 	InstanceWarmTimout = 1 * time.Minute
 )
 
 const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Proxy2Node"
-const InstanceCapacity = 1000  // MB
-const InstanceOverhead = 100   // MB
+const InstanceCapacity = 1000 * 10 // MB
+const InstanceOverhead = 100 * 10  // MB
 const Threshold = 0.8
 
 var ActiveInstance int

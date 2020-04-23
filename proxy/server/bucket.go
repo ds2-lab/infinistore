@@ -26,7 +26,7 @@ type bucket struct {
 	group       *Group
 	initialized int32
 	ready       chan struct{}
-	pointer     int
+	offset      int
 	from        int
 }
 
@@ -40,7 +40,7 @@ func bucketStart(id int, ready chan struct{}) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.pointer = 0
+	//bucket.offset = 0
 	bucket.from = 0
 	// initial corresponding group
 	bucket.group = NewGroup(NumLambdaClusters)
@@ -80,12 +80,11 @@ func NewBucket(id int) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.pointer = 0
+	//bucket.offset = 0
 	// initial corresponding group
 	bucket.group = NewGroup(NumLambdaClusters)
 
 	for i := range bucket.group.All {
-		bucket.log.Debug("i is %v", i)
 		node := scheduler.GetForGroup(bucket.group, i, "")
 		node.Meta.Capacity = InstanceCapacity
 		node.Meta.IncreaseSize(InstanceOverhead)
@@ -117,4 +116,11 @@ func (b *bucket) Size() int {
 
 func (b *bucket) close() {
 	bucketPool.Put(b)
+}
+
+func (b *bucket) scale(group *Group) {
+	for i := range group.All {
+		b.group.All = append(b.group.All, group.All[i])
+	}
+	b.from += len(group.All)
 }

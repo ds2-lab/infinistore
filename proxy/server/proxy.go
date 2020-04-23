@@ -20,7 +20,7 @@ import (
 type Proxy struct {
 	log          logger.ILogger
 	group        *Group
-	groupAll     *Group
+	//groupAll     *Group
 	movingWindow *MovingWindow
 	placer       *Placer
 

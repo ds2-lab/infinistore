@@ -13,7 +13,6 @@ type Scaler struct {
 	Signal  chan struct{}
 	ready   chan struct{}
 	counter int32
-	step    int
 }
 
 func NewScaler() *Scaler {
@@ -26,7 +25,6 @@ func NewScaler() *Scaler {
 		Signal:  make(chan struct{}, 1),
 		ready:   make(chan struct{}),
 		counter: 0,
-		step:    5,
 	}
 	return s
 }
@@ -38,36 +36,39 @@ func (s *Scaler) Daemon() {
 		select {
 		// receive scaling out signal
 		case <-s.Signal:
+			bucket := s.proxy.movingWindow.getCurrentBucket()
+			tmpGroup := NewGroup(NumLambdaClusters)
 			//TODO: receive scaling out signal, enlarge group capacity
-			for i := 0; i < s.step; i++ {
-
-				name := LambdaPrefix
-				s.log.Debug("[Scaling lambda instance %v%v]", name, i)
-				node := scheduler.GetForGroup(s.proxy.group, i, "out")
+			for i := range tmpGroup.All {
+				node := scheduler.GetForGroup(tmpGroup, i, "")
 				node.Meta.Capacity = InstanceCapacity
 				node.Meta.IncreaseSize(InstanceOverhead)
+				//s.log.Debug("[scaling lambda instance %v, size %v]", node.Name(), node.Size())
 
 				go func() {
 					node.WarmUp()
-					if atomic.AddInt32(&s.counter, 1) == STEP {
+					if atomic.AddInt32(&s.counter, 1) == int32(len(tmpGroup.All)) {
 						s.log.Info("[scale out is ready]")
-						close(s.ready)
 					}
 				}()
 
 				// Begin handle requests
 				go node.HandleRequests()
-				//s.placer.Append(node)
 			}
-
-			// update current active lambda instance
-			ActiveInstance += STEP
 
 			// reset counter
 			s.counter = 0
 
 			// update bucket and placer info
-			s.proxy.movingWindow.getCurrentBucket().pointer += s.step
+
+			// append to current bucket group
+			bucket.scale(tmpGroup)
+
+			// move current bucket offset
+			//s.proxy.movingWindow.getCurrentBucket().offset += NumLambdaClusters
+
+			// update proxy group
+			s.proxy.group = s.proxy.movingWindow.getAllGroup()
 			s.proxy.placer.scaling = false
 		}
 	}
