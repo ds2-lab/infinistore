@@ -244,7 +244,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 func (p *Proxy) CollectData() {
 
 	for _, ins := range p.group.All {
-		p.log.Debug("active instance in proxy ", ins.Name())
+		p.log.Debug("active instance in proxy %v", ins.Name())
 	}
 
 	for i, _ := range p.group.All {
