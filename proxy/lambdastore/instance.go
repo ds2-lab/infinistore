@@ -171,6 +171,12 @@ func (ins *Instance) HandleRequests() {
 			// Drain priority channel first.
 			for len(ins.chanPriorCmd) > 0 {
 				ins.handleRequest(<-ins.chanPriorCmd)
+				// Check closure.
+				select {
+				case <-ins.closed:
+					return
+				default:
+				}
 			}
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
@@ -745,7 +751,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	}
 
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
-	ins.backups[bakId].C() <- req
+	ins.backups[bakId].chanPriorCmd <- req	 // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
 	return true
 }

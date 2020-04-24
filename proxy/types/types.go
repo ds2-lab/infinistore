@@ -8,9 +8,10 @@ var ErrNoSpareDeployment = errors.New("No spare deployment")
 
 type ClientReqCounter struct {
 	Cmd          string
-	DataShards   int
-	ParityShards int
-	Counter      int32
+	DataShards   int64
+	ParityShards int64
+	Returned     int64       // Returned counter from lambda.
+	Requests     []*Request
 }
 
 type Id struct {

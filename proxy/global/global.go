@@ -1,7 +1,6 @@
 package global
 
 import (
-	"github.com/cornelk/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"math/rand"
 	"sync"
@@ -15,7 +14,7 @@ var (
 	// Clients        = make([]chan interface{}, 1024*1024)
 	DataCollected    sync.WaitGroup
 	Log              logger.ILogger
-	ReqMap           = hashmap.New(1024)
+	ReqCoordinator   = NewRequestCoordinator(1024)
 	Migrator         types.MigrationScheduler
 	BasePort         = 6378
 	BaseMigratorPort = 6380

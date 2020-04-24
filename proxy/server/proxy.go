@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -186,7 +187,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
-	global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"get", int(dataChunks), int(parityChunks), 0})
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, dataChunks, parityChunks)
 
 	// key is "key"+"chunkId"
 	meta, ok := p.metaStore.Get(key, int(dChunkId))
@@ -202,13 +203,24 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
-	p.group.Instance(lambdaDest).C() <- &types.Request{
+	req := &types.Request{
 		Id:           types.Id{connId, reqId, chunkId},
 		InsId:        uint64(lambdaDest),
 		Cmd:          protocol.CMD_GET,
 		Key:          chunkKey,
 		ChanResponse: client.Responses(),
 		EnableCollector: true,
+	}
+	counter.Requests[dChunkId] = req
+	// Unlikely, just to be safe
+	if atomic.LoadInt64(&counter.Returned) >= counter.DataShards {
+		returned := atomic.AddInt64(&counter.Returned, 1)
+		req.Abandon()
+		if returned >= counter.DataShards + counter.ParityShards {
+			global.ReqCoordinator.Clear(reqId, counter)
+		}
+	} else {
+		p.group.Instance(lambdaDest).C() <- req
 	}
 }
 

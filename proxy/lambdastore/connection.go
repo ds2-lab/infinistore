@@ -281,7 +281,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter, ok := global.ReqMap.Get(reqId)
+	counter, ok := global.ReqCoordinator.Load(reqId)
 	if ok == false {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
@@ -296,35 +296,23 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
 
-	abandon := false
-	reqCounter := atomic.AddInt32(&(counter.(*types.ClientReqCounter).Counter), 1)
+	returned := atomic.AddInt64(&counter.Returned, 1)
 	// Check if chunks are enough? Shortcut response if YES.
-	if int(reqCounter) > counter.(*types.ClientReqCounter).DataShards {
-		abandon = true
+	if returned > counter.DataShards {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
-		req, ok := conn.SetResponse(rsp)
-		if ok && req.EnableCollector {
+		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
+		req, _ := conn.SetResponse(rsp)
+		if req != nil && req.EnableCollector {
 			err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 			if err != nil {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if int(reqCounter) == counter.(*types.ClientReqCounter).DataShards+counter.(*types.ClientReqCounter).ParityShards {
-			global.ReqMap.Del(reqId)
+		if returned >= counter.DataShards + counter.ParityShards {
+			global.ReqCoordinator.Clear(reqId, counter)
 		}
-	}
 
-	// Read value
-	// t9 := time.Now()
-	// bodyStream, err := conn.r.ReadBulk(nil)
-	// time9 := time.Since(t9)
-	// if err != nil {
-	// 	conn.log.Warn("Failed to read value of response: %v", err)
-	// 	// Abandon errant data
-	// 	res = nil
-	// }
-	// Skip on abandon
-	if abandon {
+		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
 		}
@@ -347,6 +335,15 @@ func (conn *Connection) getHandler(start time.Time) {
 		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 		if err != nil {
 			conn.log.Warn("LogProxy err %v", err)
+		}
+	}
+	// Abandon rest chunks.
+	if returned == counter.DataShards {
+		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
+		for _, req := range counter.Requests {
+			if req != nil && !req.IsResponded() {
+				req.Abandon()
+			}
 		}
 	}
 }
