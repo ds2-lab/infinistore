@@ -47,6 +47,7 @@ var (
 			return time.NewTimer(0)
 		},
 	}
+	DefaultPingPayload = []byte{}
 	AwsSession     = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
 		SharedConfigState: awsSession.SharedConfigEnable,
 	}))
@@ -58,7 +59,7 @@ type InstanceRegistry interface {
 
 type ValidateOption struct {
 	WarmUp      bool
-	Request     *types.Request
+	Command     types.Command
 }
 
 type Instance struct {
@@ -303,8 +304,16 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	ins.backingTotal = total
 	atomic.StoreUint32(&ins.backing, BACKING_ENABLED)
 
-	// Trigger backups to initiate parallel recovery
-	go ins.WarmUp()
+	// Manually trigger ping with payload to initiate parallel recovery
+	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total)
+	if err != nil {
+		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
+	} else {
+		ins.chanPriorCmd <- &types.Control{
+			Cmd: protocol.CMD_PING,
+			Payload: payload,
+		}
+	}
 	return true
 }
 
@@ -427,7 +436,12 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 			}
 
 			// Ping is issued to ensure awake
-			ins.cn.Ping()
+			if opt.Command != nil && opt.Command.String() == protocol.CMD_PING {
+				ins.log.Debug("Ping with payload")
+				ins.cn.Ping(opt.Command.(*types.Control).Payload)
+			} else {
+				ins.cn.Ping(DefaultPingPayload)
+			}
 
 			// Start timeout, ping may get stucked anytime.
 			timeout := timeouts.Get().(*time.Timer)
@@ -502,8 +516,8 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(global.AWSRegion)})
 
 	tips := &url.Values{}
-	if opt.Request != nil && opt.Request.Cmd == protocol.CMD_GET {
-		tips.Set(protocol.TIP_SERVING_KEY, opt.Request.Key)
+	if opt.Command != nil && opt.Command.String() == protocol.CMD_GET {
+		tips.Set(protocol.TIP_SERVING_KEY, opt.Command.GetRequest().Key)
 	}
 
 	var status protocol.Status
@@ -517,7 +531,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			*ins.Meta.ToProtocolMeta(ins.Id()),
 			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
 		}
-		if opt.Request != nil && opt.Request.Cmd == protocol.CMD_GET && opt.Request.InsId == ins.Id() {
+		if opt.Command != nil && opt.Command.String() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
 			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
 			status[0].Tip = tips.Encode()
 			tips = &url.Values{}
@@ -711,7 +725,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Check lambda status first
 		validateStart := time.Now()
 		// Once active connection is confirmed, keep awake on serving.
-		conn := ins.Validate(&ValidateOption{ Request: cmd.GetRequest() })
+		conn := ins.Validate(&ValidateOption{ Command: cmd })
 		validateDuration := time.Since(validateStart)
 
 		if conn == nil {
@@ -811,6 +825,9 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 		isDataRequest := false
 
 		switch cmd {
+		case protocol.CMD_PING:
+			// Simply ignore.
+			return nil
 		case protocol.CMD_DATA:
 			ctrl.PrepareForData(conn.w)
 			isDataRequest = true
