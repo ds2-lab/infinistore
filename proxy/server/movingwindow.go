@@ -51,16 +51,17 @@ func (mw *MovingWindow) Rolling() {
 	idx := 1
 	for {
 		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(30 * time.Hour)
+		ticker := time.NewTicker(30 * time.Second)
 		select {
 		case <-ticker.C:
 			mw.buckets = append(mw.buckets, NewBucket(idx))
-			if len(mw.buckets) > mw.num*2 {
-				mw.log.Debug("trim bucket")
-				mw.buckets = mw.buckets[1:]
-			}
+			//if len(mw.buckets) > mw.num*2 {
+			//	mw.log.Debug("trim bucket")
+			//	mw.buckets = mw.buckets[1:]
+			//}
 			mw.proxy.group = mw.getAllGroup()
 			//mw.proxy.groupAll = mw.getAllGroup()
+			mw.proxy.placer.from += NumLambdaClusters
 			mw.cursor = len(mw.buckets) - 1
 
 		}
@@ -103,7 +104,7 @@ func (mw *MovingWindow) getActiveGroup() *Group {
 	for _, bucket := range mw.getActiveBucket() {
 		g := bucket.group
 		for i := 0; i < g.Len(); i++ {
-			mw.log.Debug("instance name %v", g.All[i].Name())
+			mw.log.Debug("active instance name %v", g.All[i].Name())
 			res.All = append(res.All, g.All[i])
 		}
 	}
@@ -118,7 +119,9 @@ func (mw *MovingWindow) getAllGroup() *Group {
 	}
 	for _, bucket := range mw.getAllBuckets() {
 		g := bucket.group
+		mw.log.Debug("bucket id is %v", bucket.id)
 		for i := 0; i < len(g.All); i++ {
+			mw.log.Debug("active instance name %v", g.All[i].Name())
 			res.All = append(res.All, g.All[i])
 		}
 	}
@@ -126,8 +129,9 @@ func (mw *MovingWindow) getAllGroup() *Group {
 	return res
 }
 
-func (mw *MovingWindow) getInstanceId(id int) int {
-	idx := mw.getCurrentBucket().from + id
+func (mw *MovingWindow) getInstanceId(id int, from int) int {
+	//idx := mw.getCurrentBucket().from + id
+	idx := id + from
 	return idx
 }
 

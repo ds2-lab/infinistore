@@ -32,6 +32,7 @@ type Placer struct {
 	metaStore *MetaStore
 	scaling   bool
 	mu        sync.RWMutex
+	from      int
 }
 
 func NewPlacer(store *MetaStore) *Placer {
@@ -42,6 +43,8 @@ func NewPlacer(store *MetaStore) *Placer {
 			Color:  true,
 		},
 		metaStore: store,
+		//scaling:   false,
+		from: 0,
 	}
 	return lruPlacer
 }
@@ -86,7 +89,7 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	// Check placement
 	//offset := l.proxy.movingWindow.getCurrentBucket().offset
 
-	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId)
+	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, l.from)
 	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 
 	// place
@@ -123,7 +126,8 @@ func (l *Placer) AvgSize() int {
 	currentBucket := l.proxy.movingWindow.getCurrentBucket()
 
 	// only check size on small set of instances
-	for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
+	//for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
+	for i := l.from; i < NumLambdaClusters; i++ {
 		sum += int(currentBucket.group.Instance(i).Meta.Size())
 	}
 
@@ -131,10 +135,8 @@ func (l *Placer) AvgSize() int {
 }
 
 func (l *Placer) updateInstanceSize(idx int, block int64) {
-	l.temp(idx)
-	l.log.Debug("before update size")
+	//l.temp(idx)
 	l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).IncreaseSize(block)
-	l.log.Debug("after update size")
 }
 
 func (l *Placer) temp(idx int) {

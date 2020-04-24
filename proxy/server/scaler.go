@@ -66,6 +66,7 @@ func (s *Scaler) Daemon() {
 
 			// move current bucket offset
 			//s.proxy.movingWindow.getCurrentBucket().offset += NumLambdaClusters
+			s.proxy.placer.from += NumLambdaClusters
 
 			// update proxy group
 			s.proxy.group = s.proxy.movingWindow.getAllGroup()

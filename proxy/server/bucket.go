@@ -27,7 +27,8 @@ type bucket struct {
 	initialized int32
 	ready       chan struct{}
 	offset      int
-	from        int
+	// from
+	from int
 }
 
 func bucketStart(id int, ready chan struct{}) *bucket {
@@ -41,7 +42,7 @@ func bucketStart(id int, ready chan struct{}) *bucket {
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
 	//bucket.offset = 0
-	bucket.from = 0
+	//bucket.from = 0
 	// initial corresponding group
 	bucket.group = NewGroup(NumLambdaClusters)
 
@@ -102,7 +103,9 @@ func NewBucket(id int) *bucket {
 		go node.HandleRequests()
 
 	}
-	bucket.from = id * len(bucket.group.All)
+
+	// todo: change "FROM"
+	//bucket.from = id * len(bucket.group.All)
 	return bucket
 }
 
@@ -119,8 +122,10 @@ func (b *bucket) close() {
 }
 
 func (b *bucket) scale(group *Group) {
-	for i := range group.All {
+	b.log.Debug("scale bucket idx is %v", b.id)
+
+	for i := 0; i < len(group.All); i++ {
 		b.group.All = append(b.group.All, group.All[i])
 	}
-	b.from += len(group.All)
+	//b.from += len(group.All)
 }
