@@ -5,6 +5,8 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 type Request struct {
@@ -95,6 +97,10 @@ func (req *Request) Flush() error {
 	return nil
 }
 
+func (req *Request) IsResponded() bool {
+	return atomic.LoadUint32(&req.responded) > 0
+}
+
 func (req *Request) IsResponse(rsp *Response) bool {
 	return req.Cmd == rsp.Cmd &&
 		req.Id.ReqId == rsp.Id.ReqId &&
@@ -113,4 +119,12 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 	}
 
 	return true
+}
+
+// Only appliable to GET so far.
+func (req *Request) Abandon() bool {
+	if req.Cmd != protocol.CMD_GET {
+		return false
+	}
+	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
 }

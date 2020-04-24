@@ -38,6 +38,9 @@ const (
 	CHUNK_KEY = "%schunks/%s"
 	LINEAGE_KEY = "%s%s/lineage-%d"
 	SNAPSHOT_KEY = "%s%s/snapshot-%d.gz"
+
+	RECOVERING_MAIN uint32 = 0x01
+	RECOVERING_BACKUP uint32 = 0x02
 )
 
 var (
@@ -67,6 +70,7 @@ type Storage struct {
 	diffrank   LineageDifferenceRank
 	getSafe    csync.WaitGroup
 	setSafe    csync.WaitGroup
+	safenote   uint32                   // Flag what's going on
 	chanOps    chan *types.OpWrapper    // NOTE: implement an unbounded channel if neccessary.
 	signalTracker chan *types.CommitOption
 	committed  chan *types.CommitOption
@@ -128,14 +132,30 @@ func (s *Storage) get(key string) (*types.Chunk, bool) {
 
 // Storage Implementation
 func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
-	s.getSafe.Wait()
+	var doubleCheck bool
 
+	// Before getting safely, try what is available so far.
 	chunk, ok := s.get(key)
 	if !ok {
-		// TODO: remove debug option
-		if s.log.GetLevel() == logger.LOG_LEVEL_ALL && s.backupMeta != nil {
-			s.isRecoverable(key, s.backupMeta, true)
+		// Most likely, this is because an imcomplete lineage.
+		doubleCheck = true
+	} else {
+		note := atomic.LoadUint32(&s.safenote)
+		if ((!chunk.Backup && (note & RECOVERING_MAIN) > 0) ||
+				(chunk.Backup && (note & RECOVERING_BACKUP) > 0)) {
+			// Corresponding lineage is recovering.
+			doubleCheck = true
 		}
+		// else: We are ok to continue.
+	}
+
+	if doubleCheck {
+		s.getSafe.Wait()
+		chunk, ok = s.get(key)
+	}
+
+	// Now we're safe to proceed.
+	if !ok {
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
 	} else if atomic.LoadUint32(&chunk.Recovering) == types.CHUNK_OK {
@@ -614,7 +634,7 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 	}
 
 	// Flag get as unsafe
-	s.delayGet()
+	s.delayGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
 	chanErr := make(chan error, 1)
 	go s.doRecover(old, meta, chanErr)
 
@@ -803,14 +823,14 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 		s.log.Error("No term is recovered for node %d.", meta.Meta.Id)
 
 		close(chanErr)
-		s.resetGet()
+		s.resetGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
 		return
 	}
 
 	// Replay lineage
 	tbds := s.doReplayLineage(meta, terms, numOps)
 	// Now get is safe
-	s.resetGet()
+	s.resetGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
 
 	// s.log.Debug("tbds %d: %v", meta.Meta.Id, tbds)
 	// for i, t := range tbds {
@@ -1211,12 +1231,21 @@ func (s *Storage) resetSet() {
 	s.setSafe.Done()
 }
 
-func (s *Storage) delayGet() {
+func (s *Storage) delayGet(flag uint32) {
+	old := atomic.LoadUint32(&s.safenote)
+	for !atomic.CompareAndSwapUint32(&s.safenote, old, old | flag) {
+		old = atomic.LoadUint32(&s.safenote)
+	}
 	s.getSafe.Add(1)
+
 }
 
-func (s *Storage) resetGet() {
+func (s *Storage) resetGet(flag uint32) {
 	s.getSafe.Done()
+	old := atomic.LoadUint32(&s.safenote)
+	for !atomic.CompareAndSwapUint32(&s.safenote, old, old &^ flag) {
+		old = atomic.LoadUint32(&s.safenote)
+	}
 }
 
 func (S *Storage) functionName(id uint64) string {
