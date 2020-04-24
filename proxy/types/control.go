@@ -11,6 +11,7 @@ type Control struct {
 	Addr       string
 	Deployment string
 	Id         uint64
+	Payload    []byte
 	*Request
 	w          *resp.RequestWriter
 }

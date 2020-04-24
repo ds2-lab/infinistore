@@ -174,8 +174,9 @@ func (conn *Connection) ServeLambda() {
 	}
 }
 
-func (conn *Connection) Ping() {
+func (conn *Connection) Ping(payload []byte) {
 	conn.w.WriteCmdString("ping")
+	conn.w.WriteBulk(payload)
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush pipeline error(ping): %v", err)

@@ -1,6 +1,9 @@
 package lambdastore
 
 import (
+	"github.com/kelindar/binary"
+	"net/url"
+	"strconv"
 	"sync/atomic"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -65,19 +68,6 @@ func (m *Meta) DecreaseSize(dec int64) uint64 {
 	return atomic.AddUint64(&m.size, ^uint64(dec-1))
 }
 
-func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
-	return &protocol.Meta {
-		Id:              id,
-		Term:            m.Term,
-		Updates:         m.Updates,
-		DiffRank:        m.DiffRank,
-		Hash:            m.Hash,
-		SnapshotTerm:    m.SnapshotTerm,
-		SnapshotUpdates: m.SnapshotUpdates,
-		SnapshotSize:    m.SnapshotSize,
-	}
-}
-
 func (m *Meta) FromProtocolMeta(meta *protocol.Meta) bool {
 	if meta.Term < m.Term {
 		return false
@@ -91,4 +81,27 @@ func (m *Meta) FromProtocolMeta(meta *protocol.Meta) bool {
 	m.SnapshotUpdates = meta.SnapshotUpdates
 	m.SnapshotSize = meta.SnapshotSize
 	return true
+}
+
+func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
+	return &protocol.Meta {
+		Id:              id,
+		Term:            m.Term,
+		Updates:         m.Updates,
+		DiffRank:        m.DiffRank,
+		Hash:            m.Hash,
+		SnapshotTerm:    m.SnapshotTerm,
+		SnapshotUpdates: m.SnapshotUpdates,
+		SnapshotSize:    m.SnapshotSize,
+	}
+}
+
+func (m *Meta) ToCmdPayload(id uint64, key int, total int) ([]byte, error) {
+	meta := m.ToProtocolMeta(id)
+	tips := &url.Values{}
+	tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(key))
+	tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(total))
+	meta.Tip = tips.Encode()
+
+	return binary.Marshal(meta)
 }

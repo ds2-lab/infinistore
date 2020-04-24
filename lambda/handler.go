@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -763,6 +764,9 @@ func main() {
 	})
 
 	srv.HandleFunc("ping", func(w resp.ResponseWriter, c *resp.Command) {
+		// Drain payload anyway.
+		payload := c.Arg(0).Bytes()
+
 		session := lambdaLife.GetSession()
 		if session == nil {
 			// Possibilities are ping may comes after HandleRequest returned
@@ -777,6 +781,37 @@ func main() {
 		log.Debug("PING")
 		issuePong()
 		pong(w)
+
+		// Deal with payload
+		if len(payload) > 0 {
+			session.Timeout.Busy()
+
+			var pmeta protocol.Meta
+			if err := binary.Unmarshal(payload, &pmeta); err != nil {
+				log.Warn("Error on parse payload of the ping: %v", err)
+			} else if lineage == nil {
+				log.Warn("Recovery is requested but lineage is not available.")
+			} else {
+				// For now, only backup request supported.
+				meta, err := types.LineageMetaFromProtocol(&pmeta)
+				if err != nil {
+					log.Warn("Error on get meta: %v", err)
+				}
+
+				consistent, err := lineage.IsConsistent(meta)
+				if err != nil {
+					log.Warn("Error on check consistency: %v", err)
+				}
+
+				if !consistent {
+					_, chanErr := lineage.Recover(meta)
+					go func() {
+						waitForRecovery(chanErr)
+						session.Timeout.DoneBusy()
+					}()
+				}
+			}
+		}
 	})
 
 	srv.HandleFunc("migrate", func(w resp.ResponseWriter, c *resp.Command) {
