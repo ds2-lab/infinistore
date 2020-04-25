@@ -174,7 +174,8 @@ func (conn *Connection) ServeLambda() {
 }
 
 func (conn *Connection) Ping(payload []byte) {
-	conn.w.WriteCmdString("ping")
+	conn.w.WriteMultiBulkSize(2)
+	conn.w.WriteBulkString(protocol.CMD_PING)
 	conn.w.WriteBulk(payload)
 	err := conn.w.Flush()
 	if err != nil {
@@ -182,15 +183,16 @@ func (conn *Connection) Ping(payload []byte) {
 	}
 }
 
-func (conn *Connection) GetRequest(rsp *types.Response) *types.Request {
+func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
 	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected return from the Lambda: %v", rsp)
-		return nil
+		conn.log.Error("Unexpected response: %v", rsp)
+		return nil, false
 	}
 	for req := range conn.chanWait {
 		if req.IsResponse(rsp) {
-			conn.log.Debug("request matched: %v", req.Id)
-			return req
+			conn.log.Debug("response matched: %v", req.Id)
+
+			return req, req.SetResponse(rsp)
 		}
 		conn.log.Warn("passing req: %v, got %v", req, rsp)
 		req.SetResponse(ErrMissingResponse)
@@ -199,15 +201,7 @@ func (conn *Connection) GetRequest(rsp *types.Response) *types.Request {
 			break
 		}
 	}
-	return nil
-}
-
-func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
-	if req := conn.GetRequest(rsp); req != nil {
-		return req, req.SetResponse(rsp)
-	} else {
-		return nil, false
-	}
+	return nil, false
 }
 
 func (conn *Connection) SetErrorResponse(err error) {

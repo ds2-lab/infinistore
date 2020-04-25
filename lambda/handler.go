@@ -541,7 +541,7 @@ func byeHandler(conn net.Conn) error {
 
 func main() {
 	// Define handlers
-	srv.HandleFunc("get", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -608,7 +608,7 @@ func main() {
 		}
 	})
 
-	srv.HandleStreamFunc("set", func(w resp.ResponseWriter, c *resp.CommandStream) {
+	srv.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -675,7 +675,7 @@ func main() {
 		collector.Send(&types.DataEntry{types.OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), session.Id})
 	})
 
-	srv.HandleFunc("del", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -735,7 +735,7 @@ func main() {
 		}
 	})
 
-	srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In DATA handler")
@@ -763,7 +763,7 @@ func main() {
 		store = (*storage.Storage)(nil)
 	})
 
-	srv.HandleFunc("ping", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
 		// Drain payload anyway.
 		payload := c.Arg(0).Bytes()
 
@@ -814,7 +814,7 @@ func main() {
 		}
 	})
 
-	srv.HandleFunc("migrate", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In MIGRATE handler")
@@ -875,7 +875,7 @@ func main() {
 		}(session)
 	})
 
-	srv.HandleFunc("mhello", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_MHELLO, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		if session.Migrator == nil {
 			log.Error("Migration is not initiated.")

@@ -83,6 +83,7 @@ const (
 	CMD_RECOVERED = "recovered"
 	CMD_INITMIGRATE = "initMigrate"
 	CMD_MIGRATE = "migrate"
+	CMD_MHELLO = "mhello"
 	CMD_DATA = "data"
 	CMD_BYE = "bye"
 
