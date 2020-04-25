@@ -122,6 +122,7 @@ func (req *Request) IsResponse(rsp *Response) bool {
 }
 
 func (req *Request) SetResponse(rsp interface{}) bool {
+	req.MarkReturned()
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return false
 	}
@@ -140,6 +141,5 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
-	req.MarkReturned()
 	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
 }
