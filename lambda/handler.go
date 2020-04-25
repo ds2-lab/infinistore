@@ -94,21 +94,24 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
 	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
-	// Reset if necessary.
-	// This is essential for debugging, and useful if deployment pool is not large enough.
-	lifetime.RebornIfDead()
+	// Initialize session.
+	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
 	session := lambdaLife.GetOrCreateSession()
 	session.Sid = input.Sid
 	session.Id = getAwsReqId(ctx)
 	session.Input = &input
 	defer lambdaLife.ClearSession()
 
-	session.Timeout.SetLogger(log)
+	// Setup timeout.
 	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
 	deadline, _ := ctx.Deadline()
 	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline)) / float64(time.Second))) * time.Second
+	session.Timeout.SetLogger(log)
 	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
+
 	issuePong()     // Ensure pong will only be issued once on invocation
+	// Setup of the session is done.
+	session.Setup.Done()
 
 	// Update global parameters
 	collector.Prefix = input.Prefix
@@ -379,14 +382,16 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	return
 }
 
-func issuePong() {
+func issuePong() bool {
 	mu.Lock()
 	defer mu.Unlock()
 
 	select {
 	case pongLimiter <- struct{}{}:
+		return true
 	default:
 		// if limiter is full, move on
+		return false
 	}
 }
 
@@ -415,6 +420,8 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 	default:
 		return nil
 	}
+
+	log.Debug("POND")
 
 	info := int64(storeId)
 	flag := int64(0)
@@ -769,7 +776,7 @@ func main() {
 
 		session := lambdaLife.GetSession()
 		if session == nil {
-			// Possibilities are ping may comes after HandleRequest returned
+			// Possibilities are ping may comes after HandleRequest returned or before session started.
 			log.Debug("PING ignored: session ended.")
 			return
 		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND) && !session.IsMigrating() {
@@ -778,8 +785,16 @@ func main() {
 			return
 		}
 
+		// Ensure the session is setup.
+		session.Setup.Wait()
+		if grant := issuePong(); !grant {
+			// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
+			// which means this PING is a legacy from last invocation.
+			log.Debug("PING ignored: request to issue a POND is denied.")
+			return
+		}
+
 		log.Debug("PING")
-		issuePong()
 		pong(w)
 
 		// Deal with payload
