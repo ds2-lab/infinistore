@@ -116,6 +116,8 @@ func (cli *Client) Send(cmd string, stream resp.AllReadCloser, args ...string) (
 	}
 	if stream != nil {
 		if err := cli.w.CopyBulk(stream, stream.Len()); err != nil {
+			// On error, we need to drain the source.
+			stream.Close()
 			return nil, err
 		}
 	}

@@ -95,6 +95,8 @@ func (req *Request) Flush() error {
 	if req.BodyStream != nil {
 		req.streamingStarted = true
 		if err := w.CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
+			// On error, we need to drain the source.
+			req.BodyStream.Close()
 			return err
 		}
 		return w.Flush()

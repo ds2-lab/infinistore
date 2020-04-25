@@ -41,6 +41,8 @@ func (rsp *Response) Flush() error {
 
 	if rsp.BodyStream != nil {
 		if err := w.CopyBulk(rsp.BodyStream, rsp.BodyStream.Len()); err != nil {
+			// On error, we need to drain the source.
+			rsp.BodyStream.Close()
 			return err
 		}
 	}

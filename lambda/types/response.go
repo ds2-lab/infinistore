@@ -60,6 +60,8 @@ func (r *Response) Flush() error {
 		}
 	} else if r.BodyStream != nil {
 		if err := r.CopyBulk(r.BodyStream, r.BodyStream.Len()); err != nil {
+			// On error, we need to drain the source.
+			r.BodyStream.Close()
 			return err
 		}
 	}
