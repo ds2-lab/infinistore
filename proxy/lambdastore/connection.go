@@ -174,7 +174,8 @@ func (conn *Connection) ServeLambda() {
 }
 
 func (conn *Connection) Ping(payload []byte) {
-	conn.w.WriteCmdString("ping")
+	conn.w.WriteMultiBulkSize(2)
+	conn.w.WriteBulkString(protocol.CMD_PING)
 	conn.w.WriteBulk(payload)
 	err := conn.w.Flush()
 	if err != nil {
