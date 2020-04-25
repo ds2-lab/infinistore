@@ -10,7 +10,6 @@ import (
 	"math"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
@@ -183,16 +182,15 @@ func (conn *Connection) Ping(payload []byte) {
 	}
 }
 
-func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
+func (conn *Connection) GetRequest(rsp *types.Response) *types.Request {
 	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected response: %v", rsp)
-		return nil, false
+		conn.log.Error("Unexpected return from the Lambda: %v", rsp)
+		return nil
 	}
 	for req := range conn.chanWait {
 		if req.IsResponse(rsp) {
-			conn.log.Debug("response matched: %v", req.Id)
-
-			return req, req.SetResponse(rsp)
+			conn.log.Debug("request matched: %v", req.Id)
+			return req
 		}
 		conn.log.Warn("passing req: %v, got %v", req, rsp)
 		req.SetResponse(ErrMissingResponse)
@@ -201,7 +199,15 @@ func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) 
 			break
 		}
 	}
-	return nil, false
+	return nil
+}
+
+func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
+	if req := conn.GetRequest(rsp); req != nil {
+		return req, req.SetResponse(rsp)
+	} else {
+		return nil, false
+	}
 }
 
 func (conn *Connection) SetErrorResponse(err error) {
@@ -296,10 +302,11 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
+	chunk, _ := strconv.Atoi(chunkId)
 
-	returned := atomic.AddInt64(&counter.Returned, 1)
+	returned := counter.AddReturned(chunk)
 	// Check if chunks are enough? Shortcut response if YES.
-	if returned > counter.DataShards {
+	if counter.IsLate(returned) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		req, _ := conn.SetResponse(rsp)
@@ -309,7 +316,7 @@ func (conn *Connection) getHandler(start time.Time) {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if returned >= counter.DataShards + counter.ParityShards {
+		if counter.IsAllReturned(returned) {
 			global.ReqCoordinator.Clear(reqId, counter)
 		}
 
@@ -339,10 +346,11 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 	// Abandon rest chunks.
-	if returned == counter.DataShards {
+	if counter.IsFulfilled(returned) {
 		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
 		for _, req := range counter.Requests {
-			if req != nil && !req.IsResponded() {
+			if req != nil && !req.IsReturnd() {
+				// For returned requests, it can be faster one or late one, their connection will decide.
 				req.Abandon()
 			}
 		}

@@ -9,6 +9,12 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
+const (
+	REQUEST_INVOKED = 0
+	REQUEST_RETURNED = 1
+	REQUEST_RESPONDED = 2
+)
+
 type Request struct {
 	Id           Id
 	InsId        uint64   // Instance the request targeted.
@@ -20,7 +26,7 @@ type Request struct {
 	EnableCollector bool
 
 	w                *resp.RequestWriter
-	responded        uint32
+	status        uint32
 	streamingStarted bool
 }
 
@@ -97,8 +103,16 @@ func (req *Request) Flush() error {
 	return nil
 }
 
+func (req *Request) IsReturnd() bool {
+	return atomic.LoadUint32(&req.status) >= REQUEST_RETURNED
+}
+
 func (req *Request) IsResponded() bool {
-	return atomic.LoadUint32(&req.responded) > 0
+	return atomic.LoadUint32(&req.status) >= REQUEST_RESPONDED
+}
+
+func (req *Request) MarkReturned() {
+	atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RETURNED)
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {
@@ -108,7 +122,7 @@ func (req *Request) IsResponse(rsp *Response) bool {
 }
 
 func (req *Request) SetResponse(rsp interface{}) bool {
-	if !atomic.CompareAndSwapUint32(&req.responded, 0, 1) {
+	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return false
 	}
 	if req.ChanResponse != nil {
@@ -126,5 +140,6 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
+	req.MarkReturned()
 	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
 }

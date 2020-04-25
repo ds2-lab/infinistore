@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -213,10 +212,10 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	counter.Requests[dChunkId] = req
 	// Unlikely, just to be safe
-	if atomic.LoadInt64(&counter.Returned) >= counter.DataShards {
-		returned := atomic.AddInt64(&counter.Returned, 1)
+	if counter.IsFulfilled(counter.Returned()) {
+		returned := counter.AddReturned(int(dChunkId))
 		req.Abandon()
-		if returned >= counter.DataShards + counter.ParityShards {
+		if counter.IsAllReturned(returned) {
 			global.ReqCoordinator.Clear(reqId, counter)
 		}
 	} else {
