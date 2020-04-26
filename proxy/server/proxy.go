@@ -126,7 +126,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		p.log.Error("Error on get value reader: %v", err)
 		return
 	}
-	bodyStream.(resp.Holdable).Hold()
+	bodyStream.(resp.Holdable).Hold()   // Hold to prevent being closed
 
 	// Start counting time.
 	if err := collector.Collect(collector.LogStart, "set", reqId, chunkId, time.Now().UnixNano()); err != nil {
@@ -165,7 +165,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		Cmd:          protocol.CMD_SET,
 		Key:          chunkKey,
 		BodyStream:   bodyStream,
-		ChanResponse: client.Responses(),
+		Client:       client,
 		EnableCollector: true,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
@@ -207,7 +207,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		InsId:        uint64(lambdaDest),
 		Cmd:          protocol.CMD_GET,
 		Key:          chunkKey,
-		ChanResponse: client.Responses(),
+		Client:       client,
 		EnableCollector: true,
 	}
 	counter.Requests[dChunkId] = req

@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
@@ -22,7 +23,7 @@ type Request struct {
 	Key          string
 	Body         []byte
 	BodyStream   resp.AllReadCloser
-	ChanResponse chan interface{}
+	Client       *redeo.Client
 	EnableCollector bool
 
 	w                *resp.RequestWriter
@@ -95,8 +96,10 @@ func (req *Request) Flush() error {
 	if req.BodyStream != nil {
 		req.streamingStarted = true
 		if err := w.CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
-			// On error, we need to drain the source.
-			req.BodyStream.Close()
+			// On error, we need to unhold the stream, and allow Close to perform.
+			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
+				holdable.Unhold()
+			}
 			return err
 		}
 		return w.Flush()
@@ -128,14 +131,15 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return false
 	}
-	if req.ChanResponse != nil {
-		req.ChanResponse <- &ProxyResponse{ rsp, req }
+	if req.Client != nil {
+		ret := req.Client.AddResponses(&ProxyResponse{ rsp, req })
 
 		// Release reference so chan can be garbage collected.
-		req.ChanResponse = nil
+		req.Client = nil
+		return ret == nil
 	}
 
-	return true
+	return false
 }
 
 // Only appliable to GET so far.
