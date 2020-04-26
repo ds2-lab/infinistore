@@ -40,7 +40,7 @@ func (s *Scaler) Daemon() {
 			tmpGroup := NewGroup(NumLambdaClusters)
 			//TODO: receive scaling out signal, enlarge group capacity
 			for i := range tmpGroup.All {
-				node := scheduler.GetForGroup(tmpGroup, i, "")
+				node := scheduler.GetForGroup(tmpGroup, i)
 				node.Meta.Capacity = InstanceCapacity
 				node.Meta.IncreaseSize(InstanceOverhead)
 				//s.log.Debug("[scaling lambda instance %v, size %v]", node.Name(), node.Size())

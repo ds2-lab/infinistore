@@ -42,15 +42,10 @@ func newScheduler() *Scheduler {
 	return NewScheduler(NumLambdaClusters, LambdaMaxDeployments)
 }
 
-func (s *Scheduler) GetForGroup(g *Group, idx int, scale string) *lambdastore.Instance {
+func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {
 	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.pool))
 	s.actives.Set(ins.Id(), ins)
-	switch scale {
-	case "out":
-		g.Append(ins)
-	default:
-		g.Set(ins)
-	}
+	g.Set(ins)
 	return ins.LambdaDeployment.(*lambdastore.Instance)
 }
 

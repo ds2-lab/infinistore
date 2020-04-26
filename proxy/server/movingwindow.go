@@ -31,7 +31,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		},
 		window:    window,
 		interval:  interval,
-		num:       2,
+		num:       2, // number of active buckets
 		buckets:   make([]*bucket, 0, num*2),
 		startTime: time.Now(),
 		cursor:    0,
@@ -39,7 +39,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 }
 
 func (mw *MovingWindow) start(ready chan struct{}) *Group {
-	bucket := bucketStart(0, ready)
+	bucket := newBucket(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
 	//mw.getActiveGroup()
 	mw.proxy.group = mw.getAllGroup()
@@ -47,21 +47,19 @@ func (mw *MovingWindow) start(ready chan struct{}) *Group {
 }
 
 func (mw *MovingWindow) Rolling() {
-	mw.log.Debug("in rolling")
 	idx := 1
 	for {
 		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(300 * time.Second)
 		select {
 		case <-ticker.C:
-			mw.buckets = append(mw.buckets, NewBucket(idx))
+			mw.buckets = append(mw.buckets, newBucket(idx))
 			//if len(mw.buckets) > mw.num*2 {
 			//	mw.log.Debug("trim bucket")
 			//	mw.buckets = mw.buckets[1:]
 			//}
 			mw.proxy.group = mw.getAllGroup()
 			//mw.proxy.groupAll = mw.getAllGroup()
-			mw.proxy.placer.from += NumLambdaClusters
 			mw.cursor = len(mw.buckets) - 1
 
 		}
