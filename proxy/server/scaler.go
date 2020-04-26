@@ -36,6 +36,8 @@ func (s *Scaler) Daemon() {
 		select {
 		// receive scaling out signal
 		case <-s.Signal:
+
+			// get current bucket
 			bucket := s.proxy.movingWindow.getCurrentBucket()
 			tmpGroup := NewGroup(NumLambdaClusters)
 			//TODO: receive scaling out signal, enlarge group capacity
@@ -62,15 +64,12 @@ func (s *Scaler) Daemon() {
 			// update bucket and placer info
 
 			// append to current bucket group
-			bucket.scale(tmpGroup)
+			bucket.append(tmpGroup)
 
-			// move current bucket offset
-			//s.proxy.movingWindow.getCurrentBucket().offset += NumLambdaClusters
+			// update proxy group from cursor
 			s.proxy.placer.from += NumLambdaClusters
-
-			// update proxy group
-			s.proxy.group = s.proxy.movingWindow.getAllGroup()
 			s.proxy.placer.scaling = false
+			s.log.Debug("scale out finish")
 		}
 	}
 }

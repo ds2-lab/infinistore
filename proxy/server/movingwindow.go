@@ -22,7 +22,7 @@ type MovingWindow struct {
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
 	// number of active time bucket
-	num := window / interval
+	//num := window / interval
 	return &MovingWindow{
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
@@ -32,7 +32,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		window:    window,
 		interval:  interval,
 		num:       2, // number of active buckets
-		buckets:   make([]*bucket, 0, num*2),
+		buckets:   make([]*bucket, 0, 9999),
 		startTime: time.Now(),
 		cursor:    0,
 	}
@@ -41,8 +41,8 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 func (mw *MovingWindow) start(ready chan struct{}) *Group {
 	bucket := newBucket(0, ready)
 	mw.buckets = append(mw.buckets, bucket)
-	//mw.getActiveGroup()
-	mw.proxy.group = mw.getAllGroup()
+	//mw.proxy.group = mw.getAllGroup()
+	mw.append(bucket)
 	return bucket.group
 }
 
@@ -50,18 +50,21 @@ func (mw *MovingWindow) Rolling() {
 	idx := 1
 	for {
 		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(300 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		select {
 		case <-ticker.C:
-			mw.buckets = append(mw.buckets, newBucket(idx))
+			bucket := newBucket(idx)
+			mw.buckets = append(mw.buckets, bucket)
 			//if len(mw.buckets) > mw.num*2 {
 			//	mw.log.Debug("trim bucket")
 			//	mw.buckets = mw.buckets[1:]
 			//}
-			mw.proxy.group = mw.getAllGroup()
+			mw.append(bucket)
 			//mw.proxy.groupAll = mw.getAllGroup()
+			mw.proxy.placer.from += NumLambdaClusters
 			mw.cursor = len(mw.buckets) - 1
 
+			mw.log.Debug("current placer from is %v, step is %v", mw.proxy.placer.from, NumLambdaClusters)
 		}
 		idx += 1
 	}
@@ -102,7 +105,6 @@ func (mw *MovingWindow) getActiveGroup() *Group {
 	for _, bucket := range mw.getActiveBucket() {
 		g := bucket.group
 		for i := 0; i < g.Len(); i++ {
-			mw.log.Debug("active instance name %v", g.All[i].Name())
 			res.All = append(res.All, g.All[i])
 		}
 	}
@@ -110,23 +112,30 @@ func (mw *MovingWindow) getActiveGroup() *Group {
 	return res
 }
 
-func (mw *MovingWindow) getAllGroup() *Group {
-	res := &Group{
-		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
-		size: 0,
-	}
-	for _, bucket := range mw.getAllBuckets() {
-		g := bucket.group
-		mw.log.Debug("bucket id is %v", bucket.id)
-		for i := 0; i < len(g.All); i++ {
-			mw.log.Debug("active instance name %v", g.All[i].Name())
-			res.All = append(res.All, g.All[i])
-		}
-	}
-	res.size = len(res.All)
-	return res
-}
+//func (mw *MovingWindow) getAllGroup() *Group {
+//	res := &Group{
+//		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
+//		size: 0,
+//	}
+//	for _, bucket := range mw.getAllBuckets() {
+//		g := bucket.group
+//		mw.log.Debug("bucket id is %v", bucket.id)
+//		for i := 0; i < len(g.All); i++ {
+//			mw.log.Debug("active instance name %v", g.All[i].Name())
+//			res.All = append(res.All, g.All[i])
+//		}
+//	}
+//	res.size = len(res.All)
+//	return res
+//}
 
+func (mw *MovingWindow) append(bucket *bucket) {
+	g := bucket.group
+	for i := 0; i < len(g.All); i++ {
+		mw.proxy.group.All = append(mw.proxy.group.All, g.All[i])
+		mw.log.Debug("active instance name %v", g.All[i].Name())
+	}
+}
 func (mw *MovingWindow) getInstanceId(id int, from int) int {
 	//idx := mw.getCurrentBucket().from + id
 	idx := id + from
