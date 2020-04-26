@@ -571,6 +571,9 @@ func main() {
 		//}
 		t2 := time.Now()
 		chunkId, stream, ret := store.GetStream(key)
+		if stream != nil {
+			defer stream.Close()
+		}
 		d2 := time.Since(t2)
 
 		if ret.Error() == nil {

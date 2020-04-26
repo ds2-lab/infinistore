@@ -60,8 +60,10 @@ func (r *Response) Flush() error {
 		}
 	} else if r.BodyStream != nil {
 		if err := r.CopyBulk(r.BodyStream, r.BodyStream.Len()); err != nil {
-			// On error, we need to drain the source.
-			r.BodyStream.Close()
+			// On error, we need to unhold the stream, and allow Close to perform.
+			if holdable, ok := r.BodyStream.(resp.Holdable); ok {
+				holdable.Unhold()
+			}
 			return err
 		}
 	}
