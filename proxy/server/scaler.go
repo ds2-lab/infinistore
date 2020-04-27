@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
 type Scaler struct {
@@ -32,7 +32,7 @@ func NewScaler() *Scaler {
 // check the cluster usage information periodically
 func (s *Scaler) Daemon() {
 	for {
-		s.log.Debug("in scaler Daemon, Group len is %v, active instance is %v", s.proxy.group.Len(), ActiveInstance)
+		s.log.Debug("in scaler Daemon, Group len is %v", s.proxy.group.Len())
 		select {
 		// receive scaling out signal
 		case <-s.Signal:

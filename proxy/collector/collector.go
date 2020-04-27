@@ -9,7 +9,7 @@ import (
 
 	"github.com/ScottMansfield/nanolog"
 
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
 var (

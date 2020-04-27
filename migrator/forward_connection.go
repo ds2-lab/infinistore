@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 // forwardConnection - Manages a forwardConnection connection, piping data between local and remote.

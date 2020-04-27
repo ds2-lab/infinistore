@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/cornelk/hashmap"
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 // ErrServerClosed is returned by the Server after a call to Shutdown or Close.

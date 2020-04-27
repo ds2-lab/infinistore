@@ -4,16 +4,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"math"
+	"net"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
@@ -241,7 +243,7 @@ func (conn *Connection) pongHandler() {
 	id, _ := conn.r.ReadInt()
 	sid, _ := conn.r.ReadBulkString()
 	flag, _ := conn.r.ReadInt()
-	recovery := flag & 0x01 > 0
+	recovery := flag&0x01 > 0
 
 	if conn.instance != nil {
 		conn.instance.flagValidated(conn, sid, recovery)

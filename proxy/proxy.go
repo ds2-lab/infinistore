@@ -10,10 +10,10 @@ import (
 	"syscall"
 
 	"github.com/mason-leap-lab/redeo"
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/server"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/server"
 )
 
 var (

@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	//	"github.com/google/uuid"
+	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
@@ -43,13 +43,12 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		<<<<<<< HEAD
 		group: group,
 		//groupAll:     groupAll,
 		movingWindow: NewMovingWindow(10, 1),
 		placer:       NewPlacer(NewMataStore()),
 		scaler:       NewScaler(),
-		ready:        make(chan struct{}),
+		//ready:        make(chan struct{}),
 	}
 
 	p.movingWindow.proxy = p

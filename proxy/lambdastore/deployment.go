@@ -3,8 +3,8 @@ package lambdastore
 import (
 	"fmt"
 
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/types"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Deployment struct {

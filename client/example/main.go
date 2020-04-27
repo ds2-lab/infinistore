@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"strings"
 
-	"github.com/wangaoone/LambdaObjectstore/client"
+	"github.com/mason-leap-lab/infinicache/client"
 )
 
 var (

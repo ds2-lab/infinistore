@@ -6,10 +6,10 @@ import (
 
 	"github.com/cornelk/hashmap"
 
-	"github.com/wangaoone/LambdaObjectstore/migrator"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
-	"github.com/wangaoone/LambdaObjectstore/proxy/types"
+	"github.com/mason-leap-lab/infinicache/migrator"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const DEP_STATUS_POOLED = 0

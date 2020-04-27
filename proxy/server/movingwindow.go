@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
 // reuse window and interval should be MINUTES
