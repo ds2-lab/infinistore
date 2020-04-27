@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -29,9 +30,9 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		window:    window,
-		interval:  interval,
-		num:       2, // number of active buckets
+		window:   window,
+		interval: interval,
+		//num:       2, // number of active buckets
 		buckets:   make([]*bucket, 0, 9999),
 		startTime: time.Now(),
 		cursor:    0,
@@ -61,10 +62,11 @@ func (mw *MovingWindow) Rolling() {
 			//}
 			mw.append(bucket)
 			//mw.proxy.groupAll = mw.getAllGroup()
-			mw.proxy.placer.from += NumLambdaClusters
+			atomic.AddInt32(&mw.proxy.placer.from, NumLambdaClusters)
+			//mw.proxy.placer.from += NumLambdaClusters
 			mw.cursor = len(mw.buckets) - 1
 
-			mw.log.Debug("current placer from is %v, step is %v", mw.proxy.placer.from, NumLambdaClusters)
+			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.from), NumLambdaClusters)
 		}
 		idx += 1
 	}

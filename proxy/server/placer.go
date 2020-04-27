@@ -32,7 +32,7 @@ type Placer struct {
 	metaStore *MetaStore
 	scaling   bool
 	mu        sync.RWMutex
-	from      int
+	from      int32
 }
 
 func NewPlacer(store *MetaStore) *Placer {
@@ -80,7 +80,6 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 		l.scaling = true
 		l.proxy.scaler.Signal <- struct{}{}
 	}
-	//l.AvgSize()
 
 	if meta.placerMeta == nil {
 		meta.placerMeta = newPlacerMeta()
@@ -88,8 +87,8 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 
 	// Check placement
 	//offset := l.proxy.movingWindow.getCurrentBucket().offset
-
-	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, l.from)
+	currentFrom := atomic.LoadInt32(&l.from)
+	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, int(currentFrom))
 	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 
 	// place
@@ -99,7 +98,7 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	// use last arrived chunk to touch meta
 	l.touch(meta)
 
-	l.log.Debug("placement is %v", meta.Placement)
+	//l.log.Debug("placement is %v", meta.Placement)
 	return meta, got
 }
 
@@ -123,12 +122,14 @@ func (l *Placer) touch(meta *Meta) {
 
 func (l *Placer) AvgSize() int {
 	sum := 0
-	currentBucket := l.proxy.movingWindow.getCurrentBucket()
+	//currentBucket := l.proxy.movingWindow.getCurrentBucket()
+	currentFrom := int(atomic.LoadInt32(&l.from))
 
 	// only check size on small set of instances
 	//for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
-	for i := l.from; i < NumLambdaClusters; i++ {
-		sum += int(currentBucket.group.Instance(i).Meta.Size())
+	for i := currentFrom; i < NumLambdaClusters; i++ {
+		//sum += int(currentBucket.group.Instance(i).Meta.Size())
+		sum += int(l.proxy.group.Instance(i).Meta.Size())
 	}
 
 	return sum / NumLambdaClusters
@@ -143,52 +144,4 @@ func (l *Placer) temp(idx int) {
 	for i := range l.proxy.group.All {
 		l.log.Debug("name %v, size %v", l.proxy.group.All[i].Name(), l.proxy.group.All[i].LambdaDeployment.(*lambdastore.Instance).Size())
 	}
-	//l.log.Debug("name %v, size %v", l.proxy.group.All[idx].Name(), l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).Size())
 }
-
-//func (l *Placer) NextAvailable(meta *Meta) {
-//	//if atomic.LoadInt32(&meta.placerMeta.confirmed) == 1 {
-//	//	l.log.Debug("other goroutine already evicted")
-//	//	// return existed meta value to proxy
-//	//	// TODO
-//	//	return
-//	//}
-//	//atomic.AddInt32(&meta.placerMeta.confirmed, 1)
-//
-//	l.log.Debug("in NextAvailable %v", meta.placerMeta.confirmed)
-//	// confirm == true, other goroutine already update the placement
-//	if meta.placerMeta.confirmed == true {
-//		l.log.Debug("already updated %v", meta.Placement)
-//		return
-//	}
-//
-//	for {
-//		// get oldest meta
-//		// meta size smaller than evict size, enough
-//		l.log.Debug("meta smaller or equal than evict")
-//		break
-//	}
-//	//for i := 0; i < len(evict.(*Meta).Placement); i++ {
-//	//	delta := meta.ChunkSize - evictSize
-//	//	if l.group.Instance(evict.(*Meta).Placement[i]).IncreaseSize(delta) < InstanceCapacity*Threshold {
-//	//		meta.placerMeta.numConfirmed += 1
-//	//	} else {
-//	//
-//	//	}
-//	//}
-//	//if meta.placerMeta.numConfirmed == meta.NumChunks {
-//	//	enough = true
-//	//}
-//	//}
-//	//l.log.Debug("after infinite loop")
-//	//l.log.Debug("evict list is %v", l.dumpList(evictList))
-//
-//	// copy last evict obj placement to meta
-//	//meta.Placement = evictList[len(evictList)-1].Placement
-//	//l.log.Debug("meta placement updated %v", meta.Placement)
-//	//update instance size
-//	//l.updateInstanceSize(evictList, meta)
-//
-//	meta.placerMeta.confirmed = true
-//
-//}

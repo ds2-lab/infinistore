@@ -26,9 +26,6 @@ type bucket struct {
 	group       *Group
 	initialized int32
 	ready       chan struct{}
-	offset      int
-	// from
-	from int
 }
 
 func newBucket(id int, args ...interface{}) *bucket {
@@ -90,6 +87,5 @@ func (b *bucket) append(group *Group) {
 	for i := 0; i < len(group.All); i++ {
 		b.group.All = append(b.group.All, group.All[i])
 	}
-	b.log.Debug(" scale bucket idx is %v, current len is ", b.id, len(b.group.All))
-	//b.from += len(group.All)
+	b.log.Debug(" scale out, current bucket group len is %v", len(b.group.All))
 }

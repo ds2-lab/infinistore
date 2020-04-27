@@ -40,7 +40,7 @@ func (s *Scaler) Daemon() {
 			// get current bucket
 			bucket := s.proxy.movingWindow.getCurrentBucket()
 			tmpGroup := NewGroup(NumLambdaClusters)
-			//TODO: receive scaling out signal, enlarge group capacity
+
 			for i := range tmpGroup.All {
 				node := scheduler.GetForGroup(tmpGroup, i)
 				node.Meta.Capacity = InstanceCapacity
@@ -63,11 +63,13 @@ func (s *Scaler) Daemon() {
 
 			// update bucket and placer info
 
-			// append to current bucket group
+			// append tmpGroup to current bucket group
 			bucket.append(tmpGroup)
 
-			// update proxy group from cursor
-			s.proxy.placer.from += NumLambdaClusters
+			// update proxy group FROM cursor
+			atomic.AddInt32(&s.proxy.placer.from, NumLambdaClusters)
+
+			//scale out phase finished
 			s.proxy.placer.scaling = false
 			s.log.Debug("scale out finish")
 		}
