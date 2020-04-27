@@ -21,7 +21,6 @@ var (
 	ServerIp         string
 	Prefix           string
 	Flags            uint64
-	AWSRegion        string
 )
 
 func init() {

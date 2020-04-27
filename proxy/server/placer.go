@@ -46,7 +46,7 @@ func (pm *PlacerMeta) doPostProcess() {
 	pm.evicts = nil
 }
 
-func (pm *PlacerMeta) confirm(chunk int) {
+func (pm *PlacerMeta) confirm(chunk int64) {
 	if !pm.confirmed[chunk] {
 		pm.confirmed[chunk] = true
 		pm.numConfirmed++
@@ -88,8 +88,8 @@ func NewPlacer(store *MetaStore, group *Group) *Placer {
 	return placer
 }
 
-func (p *Placer) NewMeta(key string, sliceSize int, numChunks int, chunk int, lambdaId int, chunkSize int64) *Meta {
-	meta := NewMeta(key, numChunks, chunkSize)
+func (p *Placer) NewMeta(key string, size, dChunks, pChunks, chunk, chunkSize int64, lambdaId, sliceSize int) *Meta {
+	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	p.group.InitMeta(meta, sliceSize)
 	meta.Placement[chunk] = lambdaId
 	meta.lastChunk = chunk

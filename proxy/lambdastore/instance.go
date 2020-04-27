@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -38,8 +39,7 @@ const (
 
 var (
 	Registry       InstanceRegistry
-	TimeoutNever   = make(<-chan time.Time)
-	WarmTimout     = 1 * time.Minute
+	WarmTimout     = config.InstanceWarmTimout
 	ConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	RequestTimeout = 1 * time.Second
 	timeouts       = sync.Pool{
@@ -513,7 +513,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
-	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(global.AWSRegion)})
+	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
 
 	tips := &url.Values{}
 	if opt.Command != nil && opt.Command.String() == protocol.CMD_GET {

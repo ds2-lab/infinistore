@@ -15,6 +15,7 @@ import (
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -32,7 +33,7 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(NumLambdaClusters)
+	group := NewGroup(config.NumLambdaClusters)
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
@@ -44,16 +45,16 @@ func New(replica bool) *Proxy {
 	}
 
 	for i := range p.group.All {
-		name := LambdaPrefix
+		name := config.LambdaPrefix
 		if replica {
 			p.log.Info("[Registering lambda store replica %d.]", i)
-			name = LambdaStoreName
+			name = config.LambdaStoreName
 		} else {
 			p.log.Info("[Registering lambda store %s%d]", name, i)
 		}
 		node := scheduler.GetForGroup(p.group, i)
-		node.Meta.Capacity = InstanceCapacity
-		node.Meta.IncreaseSize(InstanceOverhead)
+		node.Meta.Capacity = config.InstanceCapacity
+		node.Meta.IncreaseSize(config.InstanceOverhead)
 	}
 	// Something can only be done after all nodes initialized.
 	for i := range p.group.All {
@@ -111,15 +112,14 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// Get args
 	key, _ := c.NextArg().String()
+	reqId, _ := c.NextArg().String()
+	size, _ := c.NextArg().Int()
 	dChunkId, _ := c.NextArg().Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
-	lambdaId, _ := c.NextArg().Int()
-	randBase, _ := c.NextArg().Int()
-	reqId, _ := c.NextArg().String()
-	// _, _ = c.NextArg().Int()
-	// _, _ = c.NextArg().Int()
 	dataChunks, _ := c.NextArg().Int()
 	parityChunks, _ := c.NextArg().Int()
+	lambdaId, _ := c.NextArg().Int()
+	randBase, _ := c.NextArg().Int()
 
 	bodyStream, err := c.Next()
 	if err != nil {
@@ -133,13 +133,9 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
-	// We don't use this for now
-	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
-
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.metaStore.NewMeta(
-		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
-
+		key, size, dataChunks, parityChunks, dChunkId, int64(bodyStream.Len()), int(lambdaId), int(randBase))
 	meta, _, postProcess := p.metaStore.GetOrInsert(key, prepared)
 	if meta.Deleted {
 		// Object may be evicted in somecase:
@@ -175,18 +171,14 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
 	key := c.Arg(0).String()
+	reqId := c.Arg(2).String()
 	dChunkId, _ := c.Arg(1).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
-	reqId := c.Arg(2).String()
-	dataChunks, _ := c.Arg(3).Int()
-	parityChunks, _ := c.Arg(4).Int()
 
 	// Start couting time.
 	if err := collector.Collect(collector.LogStart, "get", reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
-
-	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, dataChunks, parityChunks)
 
 	// key is "key"+"chunkId"
 	meta, ok := p.metaStore.Get(key, int(dChunkId))
@@ -199,6 +191,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
@@ -273,7 +266,7 @@ func (p *Proxy) CollectData() {
 }
 
 func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
-	numBaks := BackupsPerInstance
+	numBaks := config.BackupsPerInstance
 	numTotal := numBaks * 2
 	distance := g.Len() / (numTotal + 1)     // main + double backup candidates
 	if distance == 0 {
