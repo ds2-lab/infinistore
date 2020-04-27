@@ -41,6 +41,10 @@ func (rsp *Response) Flush() error {
 
 	if rsp.BodyStream != nil {
 		if err := w.CopyBulk(rsp.BodyStream, rsp.BodyStream.Len()); err != nil {
+			// On error, we need to unhold the stream, and allow Close to perform.
+			if holdable, ok := rsp.BodyStream.(resp.Holdable); ok {
+				holdable.Unhold()
+			}
 			return err
 		}
 	}

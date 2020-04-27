@@ -11,8 +11,17 @@ type Control struct {
 	Addr       string
 	Deployment string
 	Id         uint64
+	Payload    []byte
 	*Request
 	w          *resp.RequestWriter
+}
+
+func (req *Control) String() string {
+	return req.Cmd
+}
+
+func (req *Control) GetRequest() *Request {
+	return req.Request
 }
 
 func (req *Control) Retriable() bool {
@@ -43,4 +52,3 @@ func (ctrl *Control) Flush() (err error) {
 
 	return w.Flush()
 }
-

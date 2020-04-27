@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
 )
 
@@ -14,9 +15,12 @@ var (
 )
 
 type Session struct {
+	Sid       string
 	Id        string
+	Input     *protocol.InputEvent
 	Requests  int
-	Clear     sync.WaitGroup
+	Setup     sync.WaitGroup            // Used to wait for setup on invocation
+	CleanUp   sync.WaitGroup            // Used to wait for cleanup on ending invocation
 	Migrator  *migrator.Client
 	Timeout   *Timeout
 	Connection net.Conn
@@ -31,6 +35,7 @@ func GetOrCreateSession() *Session {
 	if session == nil {
 		session = &Session{ done: make(chan struct{}) }
 		session.Timeout = NewTimeout(session, time.Duration(TICK_ERROR_EXTEND))
+		session.Setup.Add(1)
 	}
 	return session
 }

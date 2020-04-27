@@ -6,17 +6,17 @@ import (
 
 var ErrNoSpareDeployment = errors.New("No spare deployment")
 
-type ClientReqCounter struct {
-	Cmd          string
-	DataShards   int
-	ParityShards int
-	Counter      int32
-}
-
 type Id struct {
 	ConnId  int
 	ReqId   string
 	ChunkId string
+}
+
+type Command interface {
+	String() string
+	GetRequest() *Request
+	Retriable() bool
+	Flush() error
 }
 
 type LambdaDeployment interface {

@@ -3,20 +3,19 @@ package client
 import (
 	"bytes"
 	"errors"
-	"fmt"
+
+	"github.com/ScottMansfield/nanolog"
+	"github.com/cespare/xxhash"
+	"github.com/google/uuid"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/server"
+	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"math/rand"
 	"net"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/ScottMansfield/nanolog"
-	"github.com/cespare/xxhash"
-	"github.com/google/uuid"
-	"github.com/mason-leap-lab/redeo/resp"
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/server"
 )
 
 const (

@@ -5,15 +5,20 @@ import (
 	"fmt"
 	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
+	"sync"
 	"time"
 )
 
 const (
 	OP_SET         = 0
 	OP_GET         = 1
-	OP_DEL		   = 2
+	OP_DEL         = 2
 	OP_WARMUP      = 90
 	OP_MIGRATION   = 91
+
+	CHUNK_OK       = 0
+	CHUNK_RECOVERING = 1
+	CHUNK_LOCK     = 2
 )
 
 var (
@@ -22,30 +27,52 @@ var (
 )
 
 type Storage interface {
-	Get(string) (string, []byte, error)
-	GetStream(string) (string, resp.AllReadCloser, error)
-	Set(string, string, []byte) error
-	SetStream(string, string, resp.AllReadCloser) error
+	Init(uint64, bool) (Storage, error)
+	Get(string) (string, []byte, *OpRet)
+	GetStream(string) (string, resp.AllReadCloser, *OpRet)
+	Set(string, string, []byte) *OpRet
+	SetStream(string, string, resp.AllReadCloser) *OpRet
+	Del(string,string) *OpRet
 	Len() int
-	Del(string,string) error
 	Keys()  <-chan string
 }
 
 // For storage
 type Chunk struct {
 	Key      string
-	Id       string
+	Id       string     // Obsoleted, chunk id of the object
 	Body     []byte
+	Size     uint64
+	Term     uint64     // Lineage term of last write operation.
+	Deleted  bool
+	Recovering uint32   // Recovering
+	Notifier sync.WaitGroup // See benchmarks in github.com/mason-leap-lab/infinicache/common/sync
 	Accessed time.Time
+	Bucket   string
+	Backup   bool
 }
 
-func NewChunk(id string, body []byte) *Chunk {
-	return &Chunk{ Id: id, Body: body, Accessed: time.Now() }
+func NewChunk(key string, id string, body []byte) *Chunk {
+	return &Chunk{
+		Key: key,
+		Id: id,
+		Body: body,
+		Size: uint64(len(body)),
+		Accessed: time.Now(),
+	}
 }
 
 func (c *Chunk) Access() []byte {
 	c.Accessed = time.Now()
 	return c.Body
+}
+
+func (c *Chunk) Op() uint32 {
+	if c.Body == nil && c.Size > 0 {
+		return OP_DEL
+	} else {
+		return OP_SET
+	}
 }
 
 // For data collection

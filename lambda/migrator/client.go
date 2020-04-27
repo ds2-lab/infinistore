@@ -20,6 +20,8 @@ import (
 )
 
 var (
+	AWSRegion            string
+
 	log = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_INFO,
 	}
@@ -79,7 +81,7 @@ func (cli *Client) TriggerDestination(dest string, args interface{}) (err error)
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
-	client := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
+	client := lambda.New(sess, &aws.Config{Region: aws.String(AWSRegion)})
 	payload, _ := json.Marshal(args)
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String(dest),
@@ -114,6 +116,10 @@ func (cli *Client) Send(cmd string, stream resp.AllReadCloser, args ...string) (
 	}
 	if stream != nil {
 		if err := cli.w.CopyBulk(stream, stream.Len()); err != nil {
+			// On error, we need to unhold the stream, and allow the Close to be performed.
+			if holdable, ok := stream.(resp.Holdable); ok {
+				holdable.Unhold()
+			}
 			return nil, err
 		}
 	}
@@ -182,14 +188,14 @@ func (cli *Client) Migrate(reader resp.ResponseReader, store types.Storage) {
 			continue
 		}
 
-		chunk, err := store.(*StorageAdapter).Migrate(key)
-		if err == ErrSkip {
-			log.Debug("Migrating key %s: %v", key, err)
-		} else if err == ErrClosed {
+		chunk, ret := store.(*StorageAdapter).Migrate(key)
+		if ret.Error() == ErrSkip {
+			log.Debug("Migrating key %s: %v", key, ret.Error())
+		} else if ret.Error() == ErrClosed {
 			log.Warn("Migration connection closed unexpectedly: %v", store.(*StorageAdapter).lastError)
 			return
-		} else if err != nil {
-			log.Warn("Migrating key %s: %v", key, err)
+		} else if ret.Error() != nil {
+			log.Warn("Migrating key %s: %v", key, ret.Error())
 		} else {
 			log.Debug("Migrating key %s(chunk %s): success", key, chunk)
 		}

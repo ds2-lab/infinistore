@@ -3,10 +3,9 @@ package server
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
 
 	"github.com/cornelk/hashmap"
 )
@@ -25,13 +24,14 @@ type bucket struct {
 	m           hashmap.HashMap
 	group       *Group
 	initialized int32
-	ready       chan struct{}
+	//ready       chan struct{}
+	ready sync.WaitGroup
 }
 
 func newBucket(id int, args ...interface{}) *bucket {
 
 	// if this is the initial bucket
-	var ready chan struct{}
+	//var ready chan struct{}
 
 	bucket := bucketPool.Get().(*bucket)
 
@@ -51,28 +51,23 @@ func newBucket(id int, args ...interface{}) *bucket {
 		node.Meta.IncreaseSize(InstanceOverhead)
 		bucket.log.Debug("[adding lambda instance %v]", node.Name())
 
-		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
-		go func() {
-			node.WarmUp()
-			if atomic.AddInt32(&bucket.initialized, 1) == int32(bucket.group.Len()) {
-				bucket.log.Info("[Bucket %v is ready]", bucket.id)
-				if len(args) > 0 {
-					ready = args[0].(chan struct{})
-					close(ready)
-				}
-			}
-		}()
-
 		// Begin handle requests
 		go node.HandleRequests()
 
-	}
+		// Initialize instance, this is not necessary if the start time of the instance is acceptable.
+		bucket.ready.Add(1)
 
+		go func() {
+			node.WarmUp()
+			bucket.ready.Done()
+		}()
+	}
 	return bucket
 }
 
-func (b *bucket) Ready() chan struct{} {
-	return b.ready
+func (b *bucket) waitReady() {
+	b.ready.Wait()
+	b.log.Info("[Bucket %v is ready]", b.id)
 }
 
 func (b *bucket) Size() int {

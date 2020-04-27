@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"math"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/mason-leap-lab/redeo/resp"
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/types"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 var (
@@ -70,6 +69,9 @@ func (conn *Connection) Close() {
 }
 
 func (conn *Connection) close() {
+	if conn.instance != nil {
+		conn.instance.flagClosed(conn)
+	}
 	conn.Close()
 	conn.bye()
 	// Don't use c.Close(), it will stuck and wait for lambda.
@@ -142,19 +144,21 @@ func (conn *Connection) ServeLambda() {
 			}
 
 			switch cmd {
-			case "pong":
+			case protocol.CMD_POND:
 				conn.pongHandler()
-			case "get":
+			case protocol.CMD_RECOVERED:
+				conn.recoveredHandler()
+			case protocol.CMD_GET:
 				conn.getHandler(start)
-			case "set":
+			case protocol.CMD_SET:
 				conn.setHandler(start)
-			case "del":
+			case protocol.CMD_DEL:
 				conn.delHandler()
-			case "data":
+			case protocol.CMD_DATA:
 				conn.receiveData()
-			case "initMigrate":
+			case protocol.CMD_INITMIGRATE:
 				go conn.initMigrateHandler()
-			case "bye":
+			case protocol.CMD_BYE:
 				conn.bye()
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
@@ -167,8 +171,10 @@ func (conn *Connection) ServeLambda() {
 	}
 }
 
-func (conn *Connection) Ping() {
-	conn.w.WriteCmdString("ping")
+func (conn *Connection) Ping(payload []byte) {
+	conn.w.WriteMultiBulkSize(2)
+	conn.w.WriteBulkString(protocol.CMD_PING)
+	conn.w.WriteBulk(payload)
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush pipeline error(ping): %v", err)
@@ -231,22 +237,40 @@ func (conn *Connection) peekResponse() {
 func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda.")
 
-	// Read lambdaId
+	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
+	sid, _ := conn.r.ReadBulkString()
+	flag, _ := conn.r.ReadInt()
+	recovery := flag & 0x01 > 0
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn)
+		conn.instance.flagValidated(conn, sid, recovery)
 		return
 	}
 
 	// Lock up lambda instance
-	instance, exists := Registry.Instance(uint64(id))
+	instance, exists := Registry.Instance(uint64(math.Abs(float64(id))))
 	if !exists {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	instance.flagValidated(conn)
-	conn.log.Debug("PONG from lambda confirmed.")
+	if instance.flagValidated(conn, sid, recovery).instance != nil {
+		conn.log.Debug("PONG from lambda confirmed.")
+	} else {
+		conn.log.Warn("Discard rouge POND for %d.", id)
+		conn.close()
+	}
+}
+
+func (conn *Connection) recoveredHandler() {
+	conn.log.Debug("RECOVERED from lambda.")
+
+	if conn.instance == nil {
+		conn.log.Error("No instance set on recovered")
+		return
+	}
+
+	conn.instance.ResumeServing()
 }
 
 func (conn *Connection) getHandler(start time.Time) {
@@ -256,7 +280,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter, ok := global.ReqMap.Get(reqId)
+	counter, ok := global.ReqCoordinator.Load(reqId)
 	if ok == false {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
@@ -270,36 +294,25 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
+	chunk, _ := strconv.Atoi(chunkId)
 
-	abandon := false
-	reqCounter := atomic.AddInt32(&(counter.(*types.ClientReqCounter).Counter), 1)
+	returned := counter.AddReturned(chunk)
 	// Check if chunks are enough? Shortcut response if YES.
-	if int(reqCounter) > counter.(*types.ClientReqCounter).DataShards {
-		abandon = true
+	if counter.IsLate(returned) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
-		req, ok := conn.SetResponse(rsp)
-		if ok && req.EnableCollector {
+		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
+		req, _ := conn.SetResponse(rsp)
+		if req != nil && req.EnableCollector {
 			err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 			if err != nil {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if int(reqCounter) == counter.(*types.ClientReqCounter).DataShards+counter.(*types.ClientReqCounter).ParityShards {
-			global.ReqMap.Del(reqId)
+		if counter.IsAllReturned(returned) {
+			global.ReqCoordinator.Clear(reqId, counter)
 		}
-	}
 
-	// Read value
-	// t9 := time.Now()
-	// bodyStream, err := conn.r.ReadBulk(nil)
-	// time9 := time.Since(t9)
-	// if err != nil {
-	// 	conn.log.Warn("Failed to read value of response: %v", err)
-	// 	// Abandon errant data
-	// 	res = nil
-	// }
-	// Skip on abandon
-	if abandon {
+		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
 		}
@@ -322,6 +335,16 @@ func (conn *Connection) getHandler(start time.Time) {
 		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 		if err != nil {
 			conn.log.Warn("LogProxy err %v", err)
+		}
+	}
+	// Abandon rest chunks.
+	if counter.IsFulfilled(returned) {
+		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
+		for _, req := range counter.Requests {
+			if req != nil && !req.IsReturnd() {
+				// For returned requests, it can be faster one or late one, their connection will decide.
+				req.Abandon()
+			}
 		}
 	}
 }
@@ -378,6 +401,7 @@ func (conn *Connection) initMigrateHandler() {
 }
 
 func (conn *Connection) bye() {
+	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
 		conn.instance.bye(conn)
 	}

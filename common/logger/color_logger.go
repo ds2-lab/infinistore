@@ -29,7 +29,7 @@ func (logger *ColorLogger) Debug(format string, args ...interface{}) {
 	if logger.Level > LOG_LEVEL_ALL {
 		return
 	}
-	logger.log("", format, args...)
+	logger.log("grey", format, args...)
 }
 
 // Info - Log a general message

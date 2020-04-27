@@ -4,8 +4,10 @@ import (
 	"time"
 )
 
-// disable backup procedure
-const IMMORTAL = true
+
+var (
+	Immortal = true
+)
 
 type Lifetime struct {
 	birthtime time.Time
@@ -37,7 +39,7 @@ func (l *Lifetime) RebornIfDead() {
 }
 
 func (l *Lifetime) IsTimeUp() bool {
-	if IMMORTAL {
+	if Immortal {
 		return false
 	}
 	return int64(time.Since(l.birthtime)) >= int64(l.expected)

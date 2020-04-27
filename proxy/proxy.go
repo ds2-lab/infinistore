@@ -29,6 +29,10 @@ var (
 
 func init() {
 	global.Log = log
+	global.AWSRegion = server.AWSRegion
+	if server.ServerPublicIp != "" {
+		global.ServerIp = server.ServerPublicIp
+	}
 }
 
 func main() {
@@ -79,7 +83,7 @@ func main() {
 
 	// initiate lambda store proxy
 	go prxy.Serve(lambdaLis)
-	<-prxy.Ready()
+	prxy.WaitReady()
 
 	err = ioutil.WriteFile(filePath, []byte(fmt.Sprintf("%d", os.Getpid())), 0660)
 	if err != nil {

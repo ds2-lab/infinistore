@@ -13,15 +13,20 @@ import (
 )
 
 const (
+
+
+	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
 	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
+	// AWS region, change it if necessary.
+	REGION = "us-east-1"
 )
 
 var (
 	code    = flag.Bool("code", false, "update function code")
 	config  = flag.Bool("config", false, "update function config")
 	create  = flag.Bool("create", false, "create function")
-	timeout = flag.Int64("timeout", 100, "function timeout")
-	prefix  = flag.String("prefix", "Proxy1Node", "function name prefix")
+	timeout = flag.Int64("timeout", 60, "function timeout")
+	prefix  = flag.String("prefix", "CacheNode", "function name prefix")
 	vpc     = flag.Bool("vpc", false, "vpc config")
 	key     = flag.String("key", "lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
@@ -36,7 +41,7 @@ var (
 		aws.String("subnet-f432faca"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
+		aws.String("sg-your-security-group"),
 	}
 )
 
@@ -208,7 +213,7 @@ func main() {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
-	svc := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
+	svc := lambda.New(sess, &aws.Config{Region: aws.String(REGION)})
 	if *create {
 		for i := *from; i < *to; i++ {
 			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)
@@ -219,7 +224,7 @@ func main() {
 			fmt.Println(j)
 			var wg sync.WaitGroup
 			//for i := j*(*batch) + *from; i < (j+1)*(*batch); i++ {
-			for i := int64(0); i < *batch; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to ; i++ {
 				wg.Add(1)
 				go updateCode(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}
@@ -231,7 +236,7 @@ func main() {
 		for j := int64(0); j < group; j++ {
 			fmt.Println(j)
 			var wg sync.WaitGroup
-			for i := int64(0); i < *batch; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to; i++ {
 				wg.Add(1)
 				go updateConfig(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}

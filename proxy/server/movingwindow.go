@@ -39,11 +39,16 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 	}
 }
 
-func (mw *MovingWindow) start(ready chan struct{}) *Group {
-	bucket := newBucket(0, ready)
+func (mw *MovingWindow) waitReady() {
+	mw.getCurrentBucket().waitReady()
+}
+
+func (mw *MovingWindow) start() *Group {
+	bucket := newBucket(0)
 	mw.buckets = append(mw.buckets, bucket)
 	//mw.proxy.group = mw.getAllGroup()
 	mw.append(bucket)
+
 	return bucket.group
 }
 

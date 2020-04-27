@@ -1,25 +1,28 @@
 package server
 
 import (
+	"math/rand"
 	"net"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
+	//	"github.com/google/uuid"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-	"github.com/wangaoone/LambdaObjectstore/common/logger"
-	"github.com/wangaoone/LambdaObjectstore/proxy/collector"
-	"github.com/wangaoone/LambdaObjectstore/proxy/global"
-	"github.com/wangaoone/LambdaObjectstore/proxy/lambdastore"
-	"github.com/wangaoone/LambdaObjectstore/proxy/types"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Proxy struct {
-	log          logger.ILogger
-	group        *Group
+	log   logger.ILogger
+	group *Group
 	//groupAll     *Group
 	movingWindow *MovingWindow
 	placer       *Placer
@@ -27,7 +30,7 @@ type Proxy struct {
 	scaler *Scaler
 
 	initialized int32
-	ready       chan struct{}
+	ready       sync.WaitGroup
 }
 
 // initial lambda group
@@ -40,6 +43,7 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
+		<<<<<<< HEAD
 		group: group,
 		//groupAll:     groupAll,
 		movingWindow: NewMovingWindow(10, 1),
@@ -52,8 +56,17 @@ func New(replica bool) *Proxy {
 	p.placer.proxy = p
 	p.scaler.proxy = p
 
-	p.group = p.movingWindow.start(p.Ready())
+	// TODO: assign backup nodes
+	// Something can only be done after all nodes initialized.
+	for i := range p.group.All {
+		num, candidates := p.getBackupsForNode(p.group, i)
+		node := p.group.Instance(i)
+		node.AssignBackups(num, candidates)
+	}
 
+	p.group = p.movingWindow.start()
+
+	// TODO: merge to single go routine
 	// start moving window rolling
 	go p.movingWindow.Rolling()
 	// start auto scaler
@@ -74,8 +87,10 @@ func (p *Proxy) Serve(lis net.Listener) {
 	}
 }
 
-func (p *Proxy) Ready() chan struct{} {
-	return p.ready
+func (p *Proxy) WaitReady() {
+	//p.ready.Wait()
+	p.movingWindow.waitReady()
+	p.log.Info("[Proxy is ready]")
 }
 
 func (p *Proxy) Close(lis net.Listener) {
@@ -112,7 +127,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		p.log.Error("Error on get value reader: %v", err)
 		return
 	}
-	bodyStream.(resp.Holdable).Hold()
+	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 
 	// Start counting time.
 	if err := collector.Collect(collector.LogStart, "set", reqId, chunkId, time.Now().UnixNano()); err != nil {
@@ -149,10 +164,11 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	p.group.Instance(lambdaDest).C() <- &types.Request{
 		Id:              types.Id{connId, reqId, chunkId},
-		Cmd:             strings.ToLower(c.Name),
+		InsId:           uint64(lambdaDest),
+		Cmd:             protocol.CMD_SET,
 		Key:             chunkKey,
 		BodyStream:      bodyStream,
-		ChanResponse:    client.Responses(),
+		Client:          client,
 		EnableCollector: true,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
@@ -173,7 +189,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
-	global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"get", int(dataChunks), int(parityChunks), 0})
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, dataChunks, parityChunks)
 
 	// key is "key"+"chunkId"
 	//meta, ok := p.metaStore.Get(key, int(dChunkId))
@@ -198,12 +214,25 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
-	p.group.Instance(lambdaDest).C() <- &types.Request{
+
+	req := &types.Request{
 		Id:              types.Id{connId, reqId, chunkId},
-		Cmd:             strings.ToLower(c.Name),
+		InsId:           uint64(lambdaDest),
+		Cmd:             protocol.CMD_GET,
 		Key:             chunkKey,
-		ChanResponse:    client.Responses(),
+		Client:          client,
 		EnableCollector: true,
+	}
+	counter.Requests[dChunkId] = req
+	// Unlikely, just to be safe
+	if counter.IsFulfilled(counter.Returned()) {
+		returned := counter.AddReturned(int(dChunkId))
+		req.Abandon()
+		if counter.IsAllReturned(returned) {
+			global.ReqCoordinator.Clear(reqId, counter)
+		}
+	} else {
+		p.group.Instance(lambdaDest).C() <- req
 	}
 }
 
@@ -212,16 +241,15 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	switch rsp := wrapper.Response.(type) {
 	case *types.Response:
 		t := time.Now()
-
 		rsp.PrepareFor(w)
 		d1 := time.Since(t)
-
 		t2 := time.Now()
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
 			p.log.Error("Error on flush response: %v", err)
 			return
 		}
+
 		d2 := time.Since(t2)
 		//p.log.Debug("Server AppendInt time is", time0,
 		//	"AppendBulk time is", time1,
@@ -242,7 +270,6 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 }
 
 func (p *Proxy) CollectData() {
-
 	for _, ins := range p.group.All {
 		p.log.Debug("active instance in proxy %v", ins.Name())
 	}
@@ -261,17 +288,32 @@ func (p *Proxy) CollectData() {
 	}
 }
 
-func (p *Proxy) dropEvicted(meta []*Meta) {
-	for m := 0; m < len(meta); m++ {
-		p.log.Debug("evict obj is %v", meta[m].Key)
-		reqId := uuid.New().String()
-		for i, lambdaId := range meta[m].Placement {
-			instance := p.group.Instance(lambdaId)
-			instance.C() <- &types.Request{
-				Id:  types.Id{0, reqId, strconv.Itoa(i)},
-				Cmd: "del",
-				Key: meta[m].ChunkKey(i),
-			}
+func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
+	numBaks := BackupsPerInstance
+	numTotal := numBaks * 2
+	distance := g.Len() / (numTotal + 1) // main + double backup candidates
+	if distance == 0 {
+		// In case 2 * total >= g.Len()
+		distance = 1
+		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len()-1, numBaks).(int) // Use all
+		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len()-1, numTotal).(int)
+	}
+	candidates := make([]*lambdastore.Instance, numTotal)
+	for j := 0; j < numTotal; j++ {
+		candidates[j] = g.Instance((i + j*distance + rand.Int()%distance + 1) % g.Len()) // Random to avoid the same backup set.
+	}
+	return numBaks, candidates
+}
+
+func (p *Proxy) dropEvicted(meta *Meta) {
+	reqId := uuid.New().String()
+	for i, lambdaId := range meta.Placement {
+		instance := p.group.Instance(lambdaId)
+		instance.C() <- &types.Request{
+			Id:    types.Id{0, reqId, strconv.Itoa(i)},
+			InsId: uint64(lambdaId),
+			Cmd:   protocol.CMD_DEL,
+			Key:   meta.ChunkKey(i),
 		}
 	}
 }
