@@ -2,16 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
 	//	"github.com/wangaoone/s3gof3r"
 	"io"
+	"math"
+	"math/rand"
 	"net"
+	"net/url"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -27,16 +34,19 @@ import (
 
 const (
 	EXPECTED_GOMAXPROCS = 2
-	LIFESPAN            = 5 * time.Minute
 )
 
 var (
+	DefaultStatus = protocol.Status{}
+	ContextKeyReady = "ready"
+
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
 
 	// Data storage
-	store   types.Storage = storage.New()
 	storeId uint64
+	store   types.Storage = (*storage.Storage)(nil)
+	lineage types.Lineage
 
 	// Proxy that links stores as a system
 	proxy     string // Passed from proxy dynamically.
@@ -44,7 +54,7 @@ var (
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
 	mu  sync.RWMutex
-	log = &logger.ColorLogger{Level: logger.LOG_LEVEL_WARN}
+	log = &logger.ColorLogger{ Level: logger.LOG_LEVEL_INFO, Color: false }
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
 	pongLimiter = make(chan struct{}, 1)
@@ -58,170 +68,279 @@ func init() {
 	} else {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
+
+	storage.AWSRegion = AWS_REGION
+
+	collector.AWSRegion = AWS_REGION
+	collector.S3Bucket = S3_COLLECTOR_BUCKET
+
+	migrator.AWSRegion = AWS_REGION
 }
 
 func getAwsReqId(ctx context.Context) string {
 	lc, ok := lambdacontext.FromContext(ctx)
-	if ok == false {
+	if !ok {
 		log.Debug("get lambda context failed %v", ok)
+	}
+	if lc == nil && DRY_RUN {
+		return "dryrun"
 	}
 	return lc.AwsRequestID
 }
 
-func HandleRequest(ctx context.Context, input protocol.InputEvent) error {
-	// gorouting start from 3
+func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
+	// Just once, persistent feature can not be changed anymore.
+	storage.Backups = input.Backups
+	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
+	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
-	// Reset if necessary.
-	// This is essential for debugging, and useful if deployment pool is not large enough.
-	lifetime.RebornIfDead()
+	// Initialize session.
+	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
 	session := lambdaLife.GetOrCreateSession()
+	session.Sid = input.Sid
 	session.Id = getAwsReqId(ctx)
+	session.Input = &input
 	defer lambdaLife.ClearSession()
 
+	// Setup timeout.
+	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
+	deadline, _ := ctx.Deadline()
+	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline)) / float64(time.Second))) * time.Second
 	session.Timeout.SetLogger(log)
-	if input.Timeout > 0 {
-		deadline, _ := ctx.Deadline()
-		session.Timeout.StartWithCalibration(deadline.Add(-time.Duration(input.Timeout) * time.Second))
-	} else {
-		session.Timeout.Start()
-	}
-	issuePong()
+	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
+
+	issuePong()     // Ensure pong will only be issued once on invocation
+	// Setup of the session is done.
+	session.Setup.Done()
 
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
+	store.(*storage.Storage).ConfigLogger(log.Level, log.Color)
+	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
 
 	// migration triggered lambda
-	if input.Cmd == "migrate" {
-		collector.Send(&types.DataEntry{Op: types.OP_MIGRATION, Session: session.Id})
-
-		if len(input.Addr) == 0 {
-			log.Error("No migrator set.")
-			return nil
-		}
-
-		mu.Lock()
-		if proxyConn != nil {
-			// The connection is not closed on last invocation, reset.
-			proxyConn.Close()
-			proxyConn = nil
-			lifetime.Reborn()
-		}
-		mu.Unlock()
-
-		// connect to migrator
-		session.Migrator = migrator.NewClient()
-		if err := session.Migrator.Connect(input.Addr); err != nil {
-			log.Error("Failed to connect migrator %s: %v", input.Addr, err)
-			return nil
-		}
-
-		// Send hello
-		reader, err := session.Migrator.Send("mhello", nil)
-		if err != nil {
-			log.Error("Failed to hello source on migrator: %v", err)
-			return nil
-		}
-
-		// Apply store adapter to coordinate migration and normal requests
-		adapter := session.Migrator.GetStoreAdapter(store)
-		store = adapter
-
-		// Reader will be avaiable after connecting and source being replaced
-		go func(s *lambdaLife.Session) {
-			// In-session gorouting
-			s.Timeout.Busy()
-			defer s.Timeout.DoneBusy()
-
-			s.Migrator.Migrate(reader, store)
-			s.Migrator = nil
-			store = adapter.Restore()
-		}(session)
+	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
+		return DefaultStatus, nil
 	}
 
+	// Check connection
 	mu.Lock()
 	session.Connection = proxyConn
 	mu.Unlock()
-
+	// Connect proxy and serve
 	if session.Connection == nil {
-		if len(input.Proxy) == 0 {
-			log.Error("No proxy set.")
-			return nil
+		if err := connect(&input, session); err != nil {
+			return DefaultStatus, err
 		}
-
-		storeId = input.Id
-		proxy = input.Proxy
-		log.Debug("Ready to connect %s, id %d", proxy, storeId)
-		var connErr error
-		session.Connection, connErr = net.Dial("tcp", proxy)
-		if connErr != nil {
-			log.Error("Failed to connect proxy %s: %v", proxy, connErr)
-			return connErr
-		}
-		mu.Lock()
-		proxyConn = session.Connection
-		mu.Unlock()
-		log.Info("Connection to %v established (%v)", proxyConn.RemoteAddr(), session.Timeout.Since())
-
-		go func(conn net.Conn) {
-			// Cross session gorouting
-			err := srv.ServeForeignClient(conn)
-			if err != nil && err != io.EOF {
-				log.Info("Connection closed: %v", err)
-			} else {
-				log.Info("Connection closed.")
-			}
-			conn.Close()
-
-			session := lambdaLife.GetOrCreateSession()
-			mu.Lock()
-			defer mu.Unlock()
-			if session.Connection == nil {
-				// Connection unset, but connection from previous invocation is lost.
-				proxyConn = nil
-				lifetime.Reborn()
-				return
-			} else if session.Connection != conn {
-				// Connection changed.
-				return
-			}
-
-			// Flag destination is ready or we are done.
-			proxyConn = nil
-			if session.Migrator != nil {
-				session.Migrator.SetReady()
-			} else {
-				lifetime.Rest()
-				session.Done()
-			}
-		}(session.Connection)
+		// Cross session gorouting
+		go serve(session.Connection)
 	}
+
+	// Extend timeout for expecting requests except invocation with cmd "warmup".
 	if input.Cmd == "warmup" {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
 		collector.Send(&types.DataEntry{Op: types.OP_WARMUP, Session: session.Id})
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
-	// append PONG back to proxy on being triggered
-	pongHandler(session.Connection)
 
-	// data gathering
+	var recoverErrs []chan error
+	var recoverFast bool
+	if lineage == nil {
+		// POND represents the node is ready to serve, no fast recovery required.
+		pongHandler(ctx, session.Connection, false)
+	} else {
+		log.Debug("Input meta: %v", input.Status)
+		if len(input.Status) == 0 {
+			return lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
+		} else if len(input.Status) == 1 {
+			// No backup info
+			lineage.ResetBackup()
+		}
+
+		// Preprocess protocol meta and check consistency
+		metas := make([]*types.LineageMeta, len(input.Status))
+		var err error
+		var inconsistency int
+		for i := 0; i < len(metas); i++ {
+			metas[i], err = types.LineageMetaFromProtocol(&input.Status[i])
+			if err != nil {
+				return lineage.Status().ProtocolStatus(), err
+			}
+
+			metas[i].Consistent, err = lineage.IsConsistent(metas[i])
+			if err != nil {
+				return lineage.Status().ProtocolStatus(), err
+			} else if !metas[i].Consistent {
+				inconsistency++
+			}
+		}
+
+		// Recover if inconsistent
+		if inconsistency == 0 {
+			// POND represents the node is ready to serve, no fast recovery required.
+			pongHandler(ctx, session.Connection, false)
+		} else {
+			session.Timeout.Busy()
+			recoverErrs = make([]chan error, 0, inconsistency)
+
+			// Meta 0 is always the main meta
+			if !metas[0].Consistent {
+				fast, chanErr := lineage.Recover(metas[0])
+				// POND represents the node is ready to serve, request fast recovery.
+				pongHandler(ctx, session.Connection, fast)
+				recoverErrs = append(recoverErrs, chanErr)
+				recoverFast = fast
+			} else {
+				pongHandler(ctx, session.Connection, false)
+			}
+
+			// Recovery backup
+			for i := 1; i < len(metas); i++ {
+				if !metas[i].Consistent {
+					_, chanErr := lineage.Recover(metas[i])
+					recoverErrs = append(recoverErrs, chanErr)
+				}
+			}
+		}
+
+		// Start tracking
+		lineage.TrackLineage()
+	}
+
+	// Start data collector
 	go collector.Collect(session)
 
-	// timeout control
-	Wait(session, lifetime)
+	// Wait until recovered to avoid timeout on recovery.
+	if recoverErrs != nil {
+		waitForRecovery(recoverErrs...)
+		// Signal proxy the recover procedure is done.
+		if recoverFast {
+			recoveredHandler(ctx, session.Connection)
+		}
+		session.Timeout.DoneBusy()
+	}
 
-	log.Debug("All routing cleared(%d) at %v", runtime.NumGoroutine(), session.Timeout.Since())
+	// Adaptive timeout control
+	meta := wait(session, lifetime).ProtocolStatus()
+	log.Debug("Output meta: %v", meta)
+	log.Debug("All routing cleared(%d) at %v, interrupted: %v",
+		runtime.NumGoroutine(), session.Timeout.Since(), session.Timeout.Interrupted())
+	return meta, nil
+}
+
+func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
+	if len(input.Proxy) == 0 {
+		if DRY_RUN {
+			return nil
+		}
+		return errors.New("no proxy specified")
+	}
+
+	storeId = input.Id
+	proxy = input.Proxy
+	log.Debug("Ready to connect %s, id %d", proxy, storeId)
+
+	var connErr error
+	session.Connection, connErr = net.Dial("tcp", proxy)
+	if connErr != nil {
+		log.Error("Failed to connect proxy %s: %v", proxy, connErr)
+		return connErr
+	}
+
+	mu.Lock()
+	proxyConn = session.Connection
+	mu.Unlock()
+	log.Info("Connection to %v established (%v)", proxyConn.RemoteAddr(), session.Timeout.Since())
 	return nil
 }
 
-func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
-	defer session.Clear.Wait()
+func serve(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+
+	// Cross session gorouting
+	err := srv.ServeForeignClient(conn)
+	if err != nil && err != io.EOF {
+		log.Info("Connection closed: %v", err)
+	} else {
+		err = nil
+		log.Info("Connection closed.")
+	}
+	conn.Close()
+
+	// Handle closed connection differently based on whether it is a legacy connection or not.
+	session := lambdaLife.GetOrCreateSession()
+	mu.Lock()
+	defer mu.Unlock()
+	if session.Connection == nil {
+		// Legacy connection and the connection of current session has not be initialized:
+		//   Reset proxyConn and lifetime.
+		proxyConn = nil
+		lifetime.Reborn()
+		return
+	} else if session.Connection != conn {
+		// Legacy connection and the connection of current session is initialized:
+		//   Do nothing.
+		return
+	} else {
+		// The connection of current session is closed.
+		proxyConn = nil
+		if err != nil {
+			// Connection interrupted. do nothing and session will timeout.
+		} else if session.Migrator != nil {
+			// Signal migrator is ready and start migration.
+			session.Migrator.SetReady()
+			session.Timeout.EndInterruption()
+		} else {
+			// We are done.
+			lifetime.Rest()
+		}
+	}
+}
+
+func waitForRecovery(chs ...chan error) {
+	if len(chs) == 1 {
+		for err := range chs[0] {
+			log.Warn("Error on recovering: %v", err)
+		}
+		return
+	}
+
+	// For multiple channels
+	var wg sync.WaitGroup
+	for _, ch := range chs {
+		wg.Add(1)
+		go func() {
+			waitForRecovery(ch)
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status types.LineageStatus) {
+	defer session.CleanUp.Wait()
+
+	var commitOpt *types.CommitOption
+	if lineage != nil {
+		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
+			// Commit and wait, error will be logged.
+			commitOpt, _ = lineage.Commit()
+			return true
+		}
+	}
 
 	select {
 	case <-session.WaitDone():
+		if lineage != nil {
+			log.Error("Seesion aborted faultly when persistence is enabled.")
+			status = lineage.Status()
+		}
 		return
 	case <-session.Timeout.C():
 		// There's no turning back.
@@ -247,31 +366,51 @@ func Wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) {
 			}
 			log.Debug("Migration initiated.")
 		} else {
+			// Finalize, this is quick usually.
+			if lineage != nil {
+				status = lineage.StopTracker(commitOpt)
+			}
 			byeHandler(session.Connection)
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return
 		}
 	}
+
+	// Unlikely to reach here
+	log.Error("Wait, where am I?")
+	return
 }
 
-func issuePong() {
+func issuePong() bool {
 	mu.Lock()
 	defer mu.Unlock()
 
 	select {
 	case pongLimiter <- struct{}{}:
+		return true
 	default:
 		// if limiter is full, move on
+		return false
 	}
 }
 
-func pongHandler(conn net.Conn) error {
+func pongHandler(ctx context.Context, conn net.Conn, recover bool) error {
+	if conn == nil && DRY_RUN {
+		log.Debug("Issue pong, request fast recovery: %v", recover)
+		ready := ctx.Value(&ContextKeyReady)
+		close(ready.(chan struct{}))
+		return nil
+	}
 	writer := resp.NewResponseWriter(conn)
-	return pong(writer)
+	return pongImpl(writer, recover)
 }
 
 func pong(w resp.ResponseWriter) error {
+	return pongImpl(w, false)
+}
+
+func pongImpl(w resp.ResponseWriter, recover bool) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -282,14 +421,84 @@ func pong(w resp.ResponseWriter) error {
 		return nil
 	}
 
+	log.Debug("POND")
+
+	info := int64(storeId)
+	flag := int64(0)
+	if recover {
+		flag += 0x01
+		log.Debug("Fast recovery requested.")
+	}
+
 	w.AppendBulkString("pong")
-	w.AppendInt(int64(storeId))
+	w.AppendInt(info)
+	w.AppendBulkString(lambdaLife.GetSession().Sid)
+	w.AppendInt(flag)
 	if err := w.Flush(); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err
 	}
 
 	return nil
+}
+
+func recoveredHandler(ctx context.Context, conn net.Conn) error {
+	w := resp.NewResponseWriter(conn)
+	w.AppendBulkString(protocol.CMD_RECOVERED)
+	if err := w.Flush(); err != nil {
+		log.Error("Error on RECOVERED flush: %v", err)
+		return err
+	}
+	return nil
+}
+
+func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) bool {
+	collector.Send(&types.DataEntry{ Op: types.OP_MIGRATION, Session: session.Id })
+
+	if len(session.Input.Addr) == 0 {
+		log.Error("No migrator set.")
+		return false
+	}
+
+	mu.Lock()
+	if proxyConn != nil {
+		// The connection is not closed on last invocation, reset.
+		proxyConn.Close()
+		proxyConn = nil
+		lifetime.Reborn()
+	}
+	mu.Unlock()
+
+	// connect to migrator
+	session.Migrator = migrator.NewClient()
+	if err := session.Migrator.Connect(input.Addr); err != nil {
+		log.Error("Failed to connect migrator %s: %v", input.Addr, err)
+		return false
+	}
+
+	// Send hello
+	reader, err := session.Migrator.Send("mhello", nil)
+	if err != nil {
+		log.Error("Failed to hello source on migrator: %v", err)
+		return false
+	}
+
+	// Apply store adapter to coordinate migration and normal requests
+	adapter := session.Migrator.GetStoreAdapter(store)
+	store = adapter
+
+	// Reader will be avaiable after connecting and source being replaced
+	go func(s *lambdaLife.Session) {
+		// In-session gorouting
+		s.Timeout.Busy()
+		defer s.Timeout.DoneBusy()
+
+		s.Migrator.Migrate(reader, store)
+		s.Migrator = nil
+		store = adapter.Restore()
+	}(session)
+
+	return true
 }
 
 func initMigrateHandler(conn net.Conn) error {
@@ -300,6 +509,10 @@ func initMigrateHandler(conn net.Conn) error {
 }
 
 func byeHandler(conn net.Conn) error {
+	if conn == nil && DRY_RUN {
+		log.Info("Bye")
+		return nil
+	}
 	writer := resp.NewResponseWriter(conn)
 	// init backup cmd
 	writer.AppendBulkString("bye")
@@ -335,7 +548,7 @@ func byeHandler(conn net.Conn) error {
 
 func main() {
 	// Define handlers
-	srv.HandleFunc("get", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -357,10 +570,13 @@ func main() {
 		//	log.Debug("not found")
 		//}
 		t2 := time.Now()
-		chunkId, stream, err := store.GetStream(key)
+		chunkId, stream, ret := store.GetStream(key)
+		if stream != nil {
+			defer stream.Close()
+		}
 		d2 := time.Since(t2)
 
-		if err == nil {
+		if ret.Error() == nil {
 			// construct lambda store response
 			response := &types.Response{
 				ResponseWriter: w,
@@ -386,11 +602,11 @@ func main() {
 			collector.Send(&types.DataEntry{types.OP_GET, "200", reqId, chunkId, d2, d3, dt, session.Id})
 		} else {
 			var respError *types.ResponseError
-			if err == types.ErrNotFound {
+			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, err)
+				respError = types.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, err)
+				respError = types.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to get %s: %v", key, respError)
@@ -402,7 +618,7 @@ func main() {
 		}
 	})
 
-	srv.HandleStreamFunc("set", func(w resp.ResponseWriter, c *resp.CommandStream) {
+	srv.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -410,7 +626,17 @@ func main() {
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
 
 		t := time.Now()
 		log.Debug("In SET handler")
@@ -428,21 +654,15 @@ func main() {
 			}
 			return
 		}
-		// val, err := valReader.ReadAll()
-		// if err != nil {
-		// 	log.Error("Error on get value: %v", err)
-		// 	w.AppendErrorf("Error on get value: %v", err)
-		// 	if err := w.Flush(); err != nil {
-		// 		log.Error("Error on flush(error 500): %v", err)
-		// 	}
-		// 	return
-		// }
-		err = store.SetStream(key, chunkId, valReader)
-		if err != nil {
-			log.Error("%v", err)
-			w.AppendErrorf("%v", err)
+
+		// Streaming set.
+		ret = store.SetStream(key, chunkId, valReader)
+		if ret.Error() != nil {
+			log.Error("%v", ret.Error())
+			w.AppendErrorf("%v", ret.Error())
 			if err := w.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
+				// Ignore
 			}
 			return
 		}
@@ -458,14 +678,14 @@ func main() {
 		response.Prepare()
 		if err := response.Flush(); err != nil {
 			log.Error("Error on set::flush(set key %s): %v", key, err)
-			return
+			// Ignore
 		}
 
 		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s", key, connId, chunkId)
 		collector.Send(&types.DataEntry{types.OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), session.Id})
 	})
 
-	srv.HandleFunc("del", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -473,7 +693,17 @@ func main() {
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
 
 		//t := time.Now()
 		log.Debug("In Del Handler")
@@ -483,8 +713,8 @@ func main() {
 		chunkId := c.Arg(2).String()
 		key := c.Arg(3).String()
 
-		err := store.Del(key, chunkId)
-		if err == nil {
+		ret = store.Del(key, chunkId)
+		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
 			response := &types.Response{
 				ResponseWriter: w,
@@ -500,11 +730,11 @@ func main() {
 			}
 		} else {
 			var respError *types.ResponseError
-			if err == types.ErrNotFound {
+			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, err)
+				respError = types.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, err)
+				respError = types.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to del %s: %v", key, respError)
@@ -513,9 +743,9 @@ func main() {
 				log.Error("Error on flush: %v", err)
 			}
 		}
-
 	})
-	srv.HandleFunc("data", func(w resp.ResponseWriter, c *resp.Command) {
+
+	srv.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In DATA handler")
@@ -540,13 +770,16 @@ func main() {
 		// No need to close server, it will serve the new connection next time.
 
 		// Reset store
-		store = storage.New()
+		store = (*storage.Storage)(nil)
 	})
 
-	srv.HandleFunc("ping", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
+		// Drain payload anyway.
+		payload := c.Arg(0).Bytes()
+
 		session := lambdaLife.GetSession()
 		if session == nil {
-			// Possibilities are ping may comes after HandleRequest returned
+			// Possibilities are ping may comes after HandleRequest returned or before session started.
 			log.Debug("PING ignored: session ended.")
 			return
 		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND) && !session.IsMigrating() {
@@ -555,12 +788,51 @@ func main() {
 			return
 		}
 
+		// Ensure the session is setup.
+		session.Setup.Wait()
+		if grant := issuePong(); !grant {
+			// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
+			// which means this PING is a legacy from last invocation.
+			log.Debug("PING ignored: request to issue a POND is denied.")
+			return
+		}
+
 		log.Debug("PING")
-		issuePong()
 		pong(w)
+
+		// Deal with payload
+		if len(payload) > 0 {
+			session.Timeout.Busy()
+
+			var pmeta protocol.Meta
+			if err := binary.Unmarshal(payload, &pmeta); err != nil {
+				log.Warn("Error on parse payload of the ping: %v", err)
+			} else if lineage == nil {
+				log.Warn("Recovery is requested but lineage is not available.")
+			} else {
+				// For now, only backup request supported.
+				meta, err := types.LineageMetaFromProtocol(&pmeta)
+				if err != nil {
+					log.Warn("Error on get meta: %v", err)
+				}
+
+				consistent, err := lineage.IsConsistent(meta)
+				if err != nil {
+					log.Warn("Error on check consistency: %v", err)
+				}
+
+				if !consistent {
+					_, chanErr := lineage.Recover(meta)
+					go func() {
+						waitForRecovery(chanErr)
+						session.Timeout.DoneBusy()
+					}()
+				}
+			}
+		}
 	})
 
-	srv.HandleFunc("migrate", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In MIGRATE handler")
@@ -621,7 +893,7 @@ func main() {
 		}(session)
 	})
 
-	srv.HandleFunc("mhello", func(w resp.ResponseWriter, c *resp.Command) {
+	srv.HandleFunc(protocol.CMD_MHELLO, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		if session.Migrator == nil {
 			log.Error("Migration is not initiated.")
@@ -641,8 +913,8 @@ func main() {
 		delList := make([]string, 0, 2 * store.Len())
 		getList := delList[store.Len():store.Len()]
 		for key := range store.Keys() {
-			_, _, err := store.Get(key)
-			if err == types.ErrNotFound {
+			_, _, ret := store.Get(key)
+			if ret.Error() == types.ErrNotFound {
 				delList = append(delList, key)
 			} else {
 				getList = append(getList, key)
@@ -661,6 +933,111 @@ func main() {
 			return
 		}
 	})
+
+	if DRY_RUN {
+		var printInfo bool
+		flag.BoolVar(&printInfo, "h", false, "Help info?")
+
+		flag.BoolVar(&DRY_RUN, "dryrun", false, "Dryrun on local.")
+
+		var input protocol.InputEvent
+		input.Sid = "dummysid"
+		input.Status = make(protocol.Status, 1)
+		// input.Status = append(input.Status, protocol.Meta{
+		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
+		// })
+		flag.StringVar(&input.Cmd, "cmd", "warmup", "Command to trigger")
+		flag.Uint64Var(&input.Id, "id", 1, "Node id")
+		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")
+		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
+		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
+		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior")
+		flag.Uint64Var(&input.Status[0].Term, "term", 1, "Lineage.Term")
+		flag.Uint64Var(&input.Status[0].Updates, "updates", 0, "Lineage.Updates")
+		flag.Float64Var(&input.Status[0].DiffRank, "diffrank", 0, "Difference rank")
+		flag.StringVar(&input.Status[0].Hash, "hash", "", "Lineage.Hash")
+		flag.Uint64Var(&input.Status[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
+		flag.Uint64Var(&input.Status[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
+		flag.Uint64Var(&input.Status[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
+		flag.StringVar(&input.Status[len(input.Status) - 1].Tip, "tip", "", "Tips in http query format")
+
+		// More args
+		timeout := flag.Int("timeout", 900, "Execution timeout")
+		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
+		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
+		concurrency := flag.Int("c", 5, "Concurrency of recovery")
+		buckets := flag.Int("b", 1, "Number of buckets used to persist.")
+
+		flag.Parse()
+
+		if printInfo {
+			fmt.Fprintf(os.Stderr, "Usage: ./lambda -dryrun [options]\n")
+			fmt.Fprintf(os.Stderr, "Available options:\n")
+			flag.PrintDefaults()
+			os.Exit(0)
+		}
+
+		input.Status[0].Id = input.Id
+		tips, err := url.ParseQuery(input.Status[len(input.Status) - 1].Tip)
+		if err != nil {
+			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status) - 1].Tip, err)
+		}
+
+		if DRY_RUN {
+			d := time.Now().Add(time.Duration(*timeout) * time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(), d)
+
+			// Even though ctx will be expired, it is good practice to call its
+			// cancellation function in any case. Failure to do so may keep the
+			// context and its parent alive longer than necessary.
+			defer cancel()
+
+			start := time.Now()
+			log.Color = true
+			log.Verbose = true
+			storage.Concurrency = *concurrency
+			storage.Buckets = *buckets
+
+			ready := make(chan struct{})
+			ctx = context.WithValue(ctx, &ContextKeyReady, ready)
+			go func() {
+				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
+				log.Info("Start dummy node: %s", lambdacontext.FunctionName)
+				output, err := HandleRequest(ctx, input)
+				if err != nil {
+					log.Error("Error: %v", err)
+				} else {
+					log.Info("Output: %v", output)
+				}
+				cancel()
+			}()
+
+			// Simulate data operation
+			<-ready
+			session := lambdaLife.GetOrCreateSession()
+			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
+			session.Timeout.Busy()
+			if tips.Get(protocol.TIP_SERVING_KEY) != "" {
+				if _, _, ret := store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
+					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
+				} else {
+					log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
+				}
+			}
+			for i := 0; i < *numToInsert; i++ {
+				val := make([]byte, *sizeToInsert)
+				rand.Read(val)
+				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank) + i), "0", val); ret.Error() != nil {
+					log.Error("Error on set obj-%d: %v", i, ret.Error())
+				}
+			}
+			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
+
+			<-ctx.Done()
+			log.Trace("Bill duration for dryrun: %v", time.Since(start))
+			return
+		}	// else: continue to try lambda.Start
+	}
 
 	// log.Debug("Routings on launching: %d", runtime.NumGoroutine())
 	lambda.Start(HandleRequest)
