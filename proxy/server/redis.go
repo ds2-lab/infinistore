@@ -24,6 +24,7 @@ var (
 )
 
 func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapter {
+	shortcut := protocol.InitShortcut(d + p)
 	cli := client.NewClient(d, p, 32)
 	addresses := config.ProxyList
 	localhost := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
@@ -40,7 +41,7 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 	cli.Dial(addresses)
 
 	adapter := &RedisAdapter{
-		shortcut: protocol.InitShortcut(d + p),
+		shortcut: shortcut,
 		client: cli,
 		proxy: proxy,
 		log: &logger.ColorLogger{
