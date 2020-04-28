@@ -71,6 +71,7 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
+	a.log.Debug("Set %s - OK", key)
 	w.AppendInlineString("OK")
 	w.Flush()
 }
