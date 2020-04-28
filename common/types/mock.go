@@ -20,7 +20,6 @@ func InitShortcut(n int) ShortcutConnection {
 
 func (s ShortcutConnection) Close() {
 	for i := 0; i < len(s); i++ {
-		s[i].Server.Close()
-		s[i].Client.Close()
+		s[i].Close()
 	}
 }

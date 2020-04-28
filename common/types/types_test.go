@@ -9,7 +9,7 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
-func TestWaitGroup(t *testing.T) {
+func TestTypes(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Types")
 }

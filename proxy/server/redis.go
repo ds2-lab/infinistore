@@ -24,6 +24,7 @@ var (
 )
 
 func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapter {
+	shortcut := protocol.InitShortcut(d + p)
 	cli := client.NewClient(d, p, 32)
 	addresses := config.ProxyList
 	localhost := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
@@ -40,7 +41,7 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 	cli.Dial(addresses)
 
 	adapter := &RedisAdapter{
-		shortcut: protocol.InitShortcut(d + p),
+		shortcut: shortcut,
 		client: cli,
 		proxy: proxy,
 		log: &logger.ColorLogger{
@@ -53,7 +54,7 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 	srv.HandleFunc(protocol.CMD_SET, adapter.handleSet)
 	srv.HandleFunc(protocol.CMD_GET, adapter.handleGet)
 	for i := 0; i < len(adapter.shortcut); i++ {
-		go srv.ServeForeignClient(adapter.shortcut[i].Server)
+		go srv.ServeForeignClient(adapter.shortcut[i].Server, false)
 	}
 
 	return adapter
@@ -65,11 +66,13 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	body := c.Arg(1).Bytes()
 
 	if _, ok := a.client.EcSet(key, body); !ok {
+		a.log.Warn("Set %s - Failed", key)
 		w.AppendErrorf("Failed to set %s.", key)
 		w.Flush()
 		return
 	}
 
+	a.log.Debug("Set %s - OK", key)
 	w.AppendInlineString("OK")
 	w.Flush()
 }
