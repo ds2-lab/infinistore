@@ -225,7 +225,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	w := cn.W
-	w.WriteMultiBulkSize(9)
+	w.WriteMultiBulkSize(10)
 	w.WriteBulkString(protocol.CMD_SET_CHUNK)
 	w.WriteBulkString(key)
 	w.WriteBulkString(reqId)
