@@ -5,6 +5,7 @@ import(
 	"fmt"
 	"github.com/cornelk/hashmap"
 
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -31,13 +32,13 @@ func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
-		s.pool <- lambdastore.NewDeployment(LambdaPrefix, uint64(i), false)
+		s.pool <- lambdastore.NewDeployment(config.LambdaPrefix, uint64(i), false)
 	}
 	return s
 }
 
 func newScheduler() *Scheduler {
-	return NewScheduler(NumLambdaClusters, LambdaMaxDeployments)
+	return NewScheduler(config.NumLambdaClusters, config.LambdaMaxDeployments)
 }
 
 func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {

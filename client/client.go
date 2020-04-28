@@ -7,6 +7,12 @@ import (
 	"github.com/seiflotfy/cuckoofilter"
 	"net"
 	"time"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+)
+
+const (
+	BUILDIN_PROXY = "buildin"
 )
 
 type Conn struct {
@@ -99,9 +105,12 @@ func (c *Client) initDial(address string) (err error) {
 	// initialize parallel connections under address
 	tmp := make([]*Conn, c.Shards)
 	c.Conns[address] = tmp
-	var i int
-	for i = 0; i < c.Shards; i++ {
-		err = c.connect(address, i)
+	connect := c.connect
+	if address == BUILDIN_PROXY {
+		connect = c.connectShortcut
+	}
+	for i := 0; i < c.Shards; i++ {
+		err = connect(address, i)
 		if err != nil {
 			break
 		}
@@ -123,6 +132,15 @@ func (c *Client) connect(address string, i int) error {
 		conn: cn,
 		W:    NewRequestWriter(cn),
 		R:    NewResponseReader(cn),
+	}
+	return nil
+}
+
+func (c *Client) connectShortcut(address string, i int) error {
+	c.Conns[address][i] = &Conn{
+		conn: protocol.Shortcut[i].Client,
+		W:    NewRequestWriter(protocol.Shortcut[i].Client),
+		R:    NewResponseReader(protocol.Shortcut[i].Client),
 	}
 	return nil
 }
