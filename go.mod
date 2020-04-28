@@ -16,7 +16,7 @@ require (
 	github.com/klauspost/cpuid v1.2.3 // indirect
 	github.com/klauspost/reedsolomon v1.9.3
 	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mason-leap-lab/redeo v1.1.0
+	github.com/mason-leap-lab/redeo v1.1.1
 	github.com/mattn/go-colorable v0.1.4 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b
 	github.com/onsi/ginkgo v1.12.0
