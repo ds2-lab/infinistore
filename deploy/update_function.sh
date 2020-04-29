@@ -1,21 +1,21 @@
 #!/bin/bash
 
-PWD=`dirname $0`
-PREFIX="Proxy2Node"
-KEY="handler"
+BASE=`pwd`/`dirname $0`
+PREFIX="CacheNode"
+KEY="lambda"
 cluster=400
 mem=1536
 
-S3="ao.lambda.code"
+S3="mason-leap-lab.infinicache"
 
-echo "compiling lambda code..."
-GOOS=linux go build $PWD/../lambda/$KEY.go
-echo "compress file..."
+cd $BASE/../lambda
+echo "Compiling lambda code..."
+GOOS=linux go build
+echo "Compressing file..."
 zip $KEY $KEY
-echo "updating lambda code.."
-
-echo "putting code zip to s3"
+echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
-go run $PWD/deploy_function.go -S3 ${S3} -code -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
+echo "Updating lambda functions.."
+go run $BASE/deploy_function.go -S3 ${S3} -code -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
 rm $KEY*
