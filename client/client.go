@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"github.com/buraksezer/consistent"
 	"github.com/klauspost/reedsolomon"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -11,14 +12,18 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
-const (
-	BUILDIN_PROXY = "buildin"
-)
-
 type Conn struct {
 	conn net.Conn
 	W    *resp.RequestWriter
 	R    resp.ResponseReader
+}
+
+func NewConn(cn net.Conn) *Conn {
+	return &Conn{
+		conn: cn,
+		W:    NewRequestWriter(cn),
+		R:    NewResponseReader(cn),
+	}
 }
 
 func (c *Conn) Close() {
@@ -66,25 +71,15 @@ func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
 
 func (c *Client) Dial(addrArr []string) bool {
 	//t0 := time.Now()
-	members := []consistent.Member{}
-	for _, host := range addrArr {
-		member := Member(host)
-		members = append(members, member)
-	}
-	//cfg := consistent.Config{
-	//	PartitionCount:    271,
-	//	ReplicationFactor: 20,
-	//	Load:              1.25,
-	//	Hasher:            hasher{},
-	//}
 	cfg := consistent.Config{
 		PartitionCount:    271,
 		ReplicationFactor: 20,
 		Load:              1.25,
 		Hasher:            hasher{},
 	}
-	c.Ring = consistent.New(members, cfg)
-	for _, addr := range addrArr {
+	members := make([]consistent.Member, len(addrArr))
+	for i, addr := range addrArr {
+		members[i] = Member(addr)
 		log.Debug("Dialing %s...", addr)
 		if err := c.initDial(addr); err != nil {
 			log.Error("Fail to dial %s: %v", addr, err)
@@ -92,6 +87,7 @@ func (c *Client) Dial(addrArr []string) bool {
 			return false
 		}
 	}
+	c.Ring = consistent.New(members, cfg)
 	//time0 := time.Since(t0)
 	//fmt.Println("Dial all goroutines are done!")
 	//if err := nanolog.Log(LogClient, "Dial", time0.String()); err != nil {
@@ -103,46 +99,40 @@ func (c *Client) Dial(addrArr []string) bool {
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
 func (c *Client) initDial(address string) (err error) {
 	// initialize parallel connections under address
-	tmp := make([]*Conn, c.Shards)
-	c.Conns[address] = tmp
 	connect := c.connect
-	if address == BUILDIN_PROXY {
+	if protocol.Shortcut.Validate(address) {
 		connect = c.connectShortcut
 	}
-	for i := 0; i < c.Shards; i++ {
-		err = connect(address, i)
-		if err != nil {
-			break
-		}
-	}
+	c.Conns[address], err = connect(address, c.Shards)
 	if err == nil {
 		// initialize the cuckoo filter under address
 		c.MappingTable[address] = cuckoo.NewFilter(1000000)
 	}
-
 	return
 }
 
-func (c *Client) connect(address string, i int) error {
-	cn, err := net.Dial("tcp", address)
-	if err != nil {
-		return err
+func (c *Client) connect(address string, n int) ([]*Conn, error) {
+	conns := make([]*Conn, n)
+	for i := 0; i < n; i++ {
+		cn, err := net.Dial("tcp", address)
+		if err != nil {
+			return conns, err
+		}
+		conns[i] = NewConn(cn)
 	}
-	c.Conns[address][i] = &Conn{
-		conn: cn,
-		W:    NewRequestWriter(cn),
-		R:    NewResponseReader(cn),
-	}
-	return nil
+	return conns, nil
 }
 
-func (c *Client) connectShortcut(address string, i int) error {
-	c.Conns[address][i] = &Conn{
-		conn: protocol.Shortcut[i].Client,
-		W:    NewRequestWriter(protocol.Shortcut[i].Client),
-		R:    NewResponseReader(protocol.Shortcut[i].Client),
+func (c *Client) connectShortcut(address string, n int) ([]*Conn, error) {
+	shortcuts, ok := protocol.Shortcut.Dial(address)
+	if !ok {
+		return nil, errors.New("oops, check the RedisAdapter")
 	}
-	return nil
+	conns := make([]*Conn, n)
+	for i := 0; i < n && i < len(shortcuts); i++ {
+		conns[i] = NewConn(shortcuts[i].Client)
+	}
+	return conns, nil
 }
 
 func (c *Client) disconnect(address string, i int) {
@@ -152,12 +142,15 @@ func (c *Client) disconnect(address string, i int) {
 	}
 }
 
-func (c *Client) validate(address string, i int) error {
+func (c *Client) validate(address string, i int) (err error) {
 	if c.Conns[address][i] == nil {
-		return c.connect(address, i)
+		var conn net.Conn
+		conn, err = net.Dial("tcp", address)
+		if err == nil {
+			c.Conns[address][i] = NewConn(conn)
+		}
 	}
-
-	return nil
+	return
 }
 
 func (c *Client) Close() {
