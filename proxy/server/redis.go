@@ -7,16 +7,19 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/client"
+	infinicache "github.com/mason-leap-lab/infinicache/client"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
 type RedisAdapter struct {
-	shortcut protocol.ShortcutConnection
-	client   *client.Client
-	proxy    *Proxy
-	log      logger.ILogger
+	server       *redeo.Server
+	proxy        *Proxy
+	d            int
+	p            int
+	addresses    []string
+	local        int
+	log          logger.ILogger
 }
 
 var (
@@ -24,26 +27,27 @@ var (
 )
 
 func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapter {
-	shortcut := protocol.InitShortcut(d + p)
-	cli := client.NewClient(d, p, 32)
 	addresses := config.ProxyList
 	localhost := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
-	included := false
+	included := -1
 	for i, address := range addresses {
 		if address == localhost {
-			addresses[i] = client.BUILDIN_PROXY    // Use mock connection.
-			included = true
+			included = i
+			break
 		}
 	}
-	if !included {
-		addresses = append(addresses, client.BUILDIN_PROXY)
+	if included < 0 && len(addresses) > 0 {
+		included = len(addresses)
+		addresses = append(addresses, "address template")
 	}
-	cli.Dial(addresses)
 
 	adapter := &RedisAdapter{
-		shortcut: shortcut,
-		client: cli,
+		server: srv,
 		proxy: proxy,
+		d: d,
+		p: p,
+		addresses: addresses,
+		local: included,
 		log: &logger.ColorLogger{
 			Prefix: "RedisAdapter ",
 			Level:  global.Log.GetLevel(),
@@ -53,19 +57,18 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 
 	srv.HandleFunc(protocol.CMD_SET, adapter.handleSet)
 	srv.HandleFunc(protocol.CMD_GET, adapter.handleGet)
-	for i := 0; i < len(adapter.shortcut); i++ {
-		go srv.ServeForeignClient(adapter.shortcut[i].Server, false)
-	}
 
 	return adapter
 }
 
 // from client
 func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
+	client := a.getClient(redeo.GetClient(c.Context()))
+
 	key := c.Arg(0).String()
 	body := c.Arg(1).Bytes()
 
-	if _, ok := a.client.EcSet(key, body); !ok {
+	if _, ok := client.EcSet(key, body); !ok {
 		a.log.Warn("Set %s - Failed", key)
 		w.AppendErrorf("Failed to set %s.", key)
 		w.Flush()
@@ -78,6 +81,8 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
+	client := a.getClient(redeo.GetClient(c.Context()))
+
 	key := c.Arg(0).String()
 
 	meta, ok := a.proxy.metaStore.Get(key, 0)
@@ -88,7 +93,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
-	if _, reader, ok := a.client.EcGet(key, int(meta.Size)); !ok {
+	if _, reader, ok := client.EcGet(key, int(meta.Size)); !ok {
 		w.AppendNil()
 		w.Flush()
 	} else {
@@ -99,6 +104,34 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 }
 
+func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
+	shortcut := protocol.Shortcut.Prepare(int(redeoClient.ID()), a.d + a.p)
+	if shortcut.Client == nil {
+		var addresses []string
+		if len(a.addresses) == 0 {
+			addresses = []string{ shortcut.Address }
+		} else {
+			addresses = make([]string, len(a.addresses))
+			copy(addresses, a.addresses)
+			addresses[a.local] = shortcut.Address
+		}
+
+		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
+		client.Dial(addresses)
+		shortcut.Client = client
+		for _, conn := range shortcut.Conns {
+			go a.server.ServeForeignClient(conn.Server, false)
+		}
+		go func() {
+			redeoClient.WaitClose()
+			client.Close()
+			shortcut.Client = nil
+			protocol.Shortcut.Invalidate(shortcut)
+		}()
+	}
+	return shortcut.Client.(*infinicache.Client)
+}
+
 func (a *RedisAdapter) Close() {
-	a.shortcut.Close()
+	// Nothing
 }
