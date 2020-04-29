@@ -27,6 +27,8 @@ var (
 )
 
 func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapter {
+	protocol.InitShortcut()
+	
 	addresses := config.ProxyList
 	localhost := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
 	included := -1
