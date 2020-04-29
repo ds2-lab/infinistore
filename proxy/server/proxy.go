@@ -220,12 +220,10 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	counter.Requests[dChunkId] = req
 	// Unlikely, just to be safe
-	if counter.IsFulfilled(counter.Returned()) {
-		returned := counter.AddReturned(int(dChunkId))
+	if counter.IsFulfilled() {
+		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
-		if counter.IsAllReturned(returned) {
-			global.ReqCoordinator.Clear(reqId, counter)
-		}
+		counter.ReleaseIfAllReturned(status)
 	} else {
 		p.group.Instance(lambdaDest).C() <- req
 	}

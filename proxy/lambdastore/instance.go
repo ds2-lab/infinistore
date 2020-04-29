@@ -30,6 +30,10 @@ const (
 	INSTANCE_SLEEP = 0
 	INSTANCE_AWAKE = 1
 	INSTANCE_MAYBE = 2
+	LIFECYCLE_ACTIVE = 0             // Instance is actively serving main repository and backup
+	LIFECYCLE_BACKING_ONLY = 1       // Instance is expiring and serving backup only, warmup should be degraded.
+	LIFECYCLE_RECLAIMED = 2          // Instance has been reclaimed.
+	LIFECYCLE_EXPIRED = 3            // Instance is expired, no invocation will be made, and it is safe to recycle.
 	MAX_RETRY      = 3
 	TEMP_MAP_SIZE  = 10
 	BACKING_DISABLED = 0
@@ -69,8 +73,9 @@ type Instance struct {
 	cn            *Connection
 	chanCmd       chan types.Command
 	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	awake         int
-	awakeLock     sync.Mutex
+	awake         uint32
+	lifecycle     uint32
+	// awakeLock     sync.Mutex
 	chanValidated chan struct{}
 	lastValidated *Connection
 	mu            sync.Mutex
@@ -89,6 +94,7 @@ type Instance struct {
 	backingIns    *Instance
 	backingId     int               // Identifier for backup, ranging from [0, # of backups)
 	backingTotal  int               // Total # of backups ready for backing instance.
+	doneBacking   sync.WaitGroup
 }
 
 func NewInstanceFromDeployment(dp *Deployment) *Instance {
@@ -284,8 +290,14 @@ func (ins *Instance) IsRecovering() bool {
 // Check if the instance is available for serving as a backup for specified instance.
 // Return false if the instance is backing another instance.
 func (ins *Instance) ReserveBacking() bool {
-	return atomic.LoadUint32(&ins.recovering) == 0 &&
+	ins.doneBacking.Add(1) // Avoid being expired.
+	success := atomic.LoadUint32(&ins.recovering) == 0 &&
+		atomic.LoadUint32(&ins.lifecycle) != LIFECYCLE_EXPIRED
 		atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
+	if !success {
+		ins.doneBacking.Done()
+	}
+	return success
 }
 
 // Start serving as the backup for specified instance.
@@ -324,6 +336,7 @@ func (ins *Instance) StopBacking(bakIns *Instance) {
 	}
 	ins.mu.Lock()
 	atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
+	ins.doneBacking.Done()
 	ins.mu.Unlock()
 }
 
@@ -366,6 +379,15 @@ func (ins *Instance) Migrate() error {
 		Id:         dply.Id(),
 	}
 	return nil
+}
+
+func (ins *Instance) Degrade() {
+	atomic.CompareAndSwapUint32(&ins.lifecycle, LIFECYCLE_ACTIVE, LIFECYCLE_BACKING_ONLY)
+}
+
+func (ins *Instance) Expire() {
+	ins.doneBacking.Wait()
+	atomic.StoreUint32(&ins.lifecycle, LIFECYCLE_EXPIRED)
 }
 
 func (ins *Instance) Close() {
@@ -432,7 +454,7 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 			if triggered {
 				return ins.validated()
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
-				return ins.flagValidated(ins.cn, "", false) // No new session involved.
+				return ins.flagValidated(ins.cn, "", 0) // No new session involved.
 			}
 
 			// Ping is issued to ensure awake
@@ -472,10 +494,10 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 }
 
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
+	// ins.awakeLock.Lock()
+	// defer ins.awakeLock.Unlock()
 
-	if ins.awake == INSTANCE_AWAKE {
+	if atomic.LoadUint32(&ins.awake) == INSTANCE_AWAKE {
 		return false
 	}
 
@@ -494,11 +516,12 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	for {
 		if !ins.IsValidating() {
 			// Don't overwrite the MAYBE status.
-			ins.awakeLock.Lock()
-			if ins.awake != INSTANCE_MAYBE {
-				ins.awake = INSTANCE_SLEEP
-			}
-			ins.awakeLock.Unlock()
+			atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_AWAKE, INSTANCE_SLEEP)
+			// ins.awakeLock.Lock()
+			// if ins.awake != INSTANCE_MAYBE {
+			// 	ins.awake = INSTANCE_SLEEP
+			// }
+			// ins.awakeLock.Unlock()
 			return
 		}
 
@@ -541,13 +564,17 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(ins.backingTotal))
 		status[1].Tip = tips.Encode()
 	}
+	var localFlags uint64
+	if atomic.LoadUint32(&ins.lifecycle) != LIFECYCLE_ACTIVE {
+		localFlags |= protocol.FLAG_BACKING_ONLY
+	}
 	event := &protocol.InputEvent{
 		Sid:    ins.initSession(),
 		Id:     ins.Id(),
 		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix: global.Prefix,
 		Log:    global.Log.GetLevel(),
-		Flags:  global.Flags,
+		Flags:  global.Flags | localFlags,
 		Backups:len(ins.candidates),
 		Status: status,
 	}
@@ -582,13 +609,13 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
 			if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
-				ins.awakeLock.Lock()
-				if ins.awake == INSTANCE_AWAKE {
+				// ins.awakeLock.Lock()
+				if atomic.LoadUint32(&ins.awake) == INSTANCE_AWAKE {
 					ins.Meta.Stale = false
 				} else {
 					uptodate = false
 				}
-				ins.awakeLock.Unlock()
+				// ins.awakeLock.Unlock()
 			}
 
 			if uptodate {
@@ -602,7 +629,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 }
 
-func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequired bool) *Connection {
+func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
@@ -629,24 +656,33 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 				// 1. Migration
 				// 2. Accidential concurrent triggering, usually after lambda returning and before it get reclaimed.
 				// In either case, the status is awake and it indicate the status of the old instance, it is not reliable.
-				ins.awakeLock.Lock()
-				ins.awake = INSTANCE_MAYBE
-				ins.awakeLock.Unlock()
+				// ins.awakeLock.Lock()
+				atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
+				// ins.awakeLock.Unlock()
+			} else {
+				ins.log.Warn("I can't believe this, you find a misplaced instance: %d", oldConn.instance.Id())
 			}
 		} else {
-			ins.awakeLock.Lock()
-			ins.awake = INSTANCE_AWAKE
-			ins.awakeLock.Unlock()
+			// ins.awakeLock.Lock()
+			atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
+			// ins.awakeLock.Unlock()
 		}
-	} else if ins.awake != INSTANCE_MAYBE { // For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
-		ins.awakeLock.Lock()
-		ins.awake = INSTANCE_AWAKE
-		ins.awakeLock.Unlock()
+	} else {
+		// For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
+		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEP, INSTANCE_AWAKE)
+		// ins.awakeLock.Lock()
+		// if ins.awake != INSTANCE_MAYBE {
+		// 	ins.awake = INSTANCE_AWAKE
+		// }
+		// ins.awakeLock.Unlock()
 	}
 
-	if recoveryRequired {
+	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
+	if flags & protocol.PONG_RECOVERY > 0 {
 		ins.log.Debug("Parallel recovery requested.")
 		ins.startRecoveryLocked()
+	} else if flags & protocol.PONG_RECLAIMED > 0 {
+		atomic.CompareAndSwapUint32(&ins.lifecycle, LIFECYCLE_BACKING_ONLY, LIFECYCLE_RECLAIMED)
 	}
 	return ins.flagValidatedLocked(conn)
 }
@@ -659,13 +695,16 @@ func (ins *Instance) bye(conn *Connection) {
 		return
 	}
 
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
-	if ins.awake == INSTANCE_MAYBE {
-		ins.awake = INSTANCE_SLEEP
-	} else {
-		ins.log.Debug("Bye ignored, waiting for return of synchronous invocation.")
+	// ins.awakeLock.Lock()
+	// defer ins.awakeLock.Unlock()
+	if !atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_MAYBE, INSTANCE_SLEEP) {
+		ins.log.Debug("Bye ignored, waiting for the return of synchronous invocation.")
 	}
+	// if ins.awake == INSTANCE_MAYBE {
+	// 	ins.awake = INSTANCE_SLEEP
+	// } else {
+	// 	ins.log.Debug("Bye ignored, waiting for return of synchronous invocation.")
+	// }
 }
 
 func (ins *Instance) flagValidatedLocked(conn *Connection) *Connection {
@@ -701,9 +740,9 @@ func (ins *Instance) flagClosed(conn *Connection) {
 
 	ins.cn = nil
 
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
-	ins.awake = INSTANCE_SLEEP
+	// ins.awakeLock.Lock()
+	// defer ins.awakeLock.Unlock()
+	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
@@ -770,7 +809,6 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	return true
 }
 
-
 func (ins *Instance) request(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
 	switch cmd.(type) {
 	case *types.Request:
@@ -792,6 +830,23 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_GET: /*get or one argument cmd*/
+			// If instance is expiring and reclaimed, only GET request is affected.
+			// And we now know it.
+			if atomic.LoadUint32(&ins.lifecycle) == LIFECYCLE_RECLAIMED {
+				// TODO: Handle reclaiming event
+				// Options here:
+				// 1. Recover to prevail node and reroute to the node.
+				// 2. Return 404 (current implementation)
+				counter, ok := global.ReqCoordinator.Load(req.Id.ReqId)
+				if ok == false {
+					ins.log.Warn("Request not found: %s", req.Id.ReqId)
+				} else {
+					chunkId, _ := strconv.Atoi(req.Id.ChunkId)
+					counter.ReleaseIfAllReturned(counter.AddReturned(chunkId))
+				}
+				req.Abandon()
+				return nil
+			}
 			req.PrepareForGet(conn.w)
 			// If parallel recovery is triggered, there is no need to forward the serving key.
 		case protocol.CMD_DEL:

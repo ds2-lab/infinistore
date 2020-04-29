@@ -8,6 +8,13 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
+const (
+	REQCNT_STATUS_SUCCEED  = 0x00010000
+	REQCNT_STATUS_RETURNED = 0x00000001
+	REQCNT_MASK_SUCCEED    = 0x11110000
+	REQCNT_MASK_RETURNED   = 0x00001111
+)
+
 var (
 	emptySlice = make([]*types.Request, 100)     // Large enough to cover most cases.
 )
@@ -29,13 +36,19 @@ func NewRequestCoordinator(size uintptr) *RequestCoordinator {
 func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64) *RequestCounter {
 	prepared := c.pool.Get().(*RequestCounter)
 	ret, ok := c.registry.GetOrInsert(reqId, prepared)
+	// There is potential problem with this late initialization approach!
+	// Since the counter will be used to coordinate async responses of the first batch of concurrent
+	// chunk requests, it is ok here.
+	// FIXME: Fix this if neccessary.
 	counter := ret.(*RequestCounter)
 	if !ok {
 		// New counter registered, initialize values.
 		counter.Cmd = cmd
 		counter.DataShards = d
 		counter.ParityShards = p
-		counter.returned = 0
+		counter.coordinator = c
+		counter.reqId = reqId
+		counter.status = 0
 		l := int(d + p)
 		if cap(counter.Requests) < l {
 			counter.Requests = make([]*types.Request, l)
@@ -62,8 +75,8 @@ func (c *RequestCoordinator) Load(reqId string) (*RequestCounter, bool) {
 	}
 }
 
-func (c *RequestCoordinator) Clear(reqId string, counter *RequestCounter) {
-	c.registry.Del(reqId)
+func (c *RequestCoordinator) Clear(counter *RequestCounter) {
+	c.registry.Del(counter.reqId)
 	c.pool.Put(counter)
 }
 
@@ -74,33 +87,70 @@ type RequestCounter struct {
 	ParityShards int64
 	Requests     []*types.Request
 
-	returned     int64       // Returned counter from lambda.
+	coordinator  *RequestCoordinator
+	reqId        string
+	status       int64       // int32(succeed) + int32(returned)
 }
 
 func newRequestCounter() interface{} {
 	return &RequestCounter{}
 }
 
-func (c *RequestCounter) AddReturned(chunk int) int64 {
-	returned := atomic.AddInt64(&c.returned, 1)
+func (c *RequestCounter) AddSucceeded(chunk int) int64 {
+	status := atomic.AddInt64(&c.status, REQCNT_STATUS_SUCCEED + REQCNT_STATUS_RETURNED)
 	if c.Requests[chunk] != nil {
 		c.Requests[chunk].MarkReturned()
 	}
-	return returned
+	return status
+}
+
+func (c *RequestCounter) AddReturned(chunk int) int64 {
+	status := atomic.AddInt64(&c.status, REQCNT_STATUS_RETURNED)
+	if c.Requests[chunk] != nil {
+		c.Requests[chunk].MarkReturned()
+	}
+	return status
+}
+
+func (c *RequestCounter) Status() int64 {
+	return atomic.LoadInt64(&c.status)
+}
+
+func (c *RequestCounter) Succeeded() int64 {
+	return atomic.LoadInt64(&c.status) & REQCNT_MASK_SUCCEED
 }
 
 func (c *RequestCounter) Returned() int64 {
-	return atomic.LoadInt64(&c.returned)
+	return atomic.LoadInt64(&c.status) & REQCNT_MASK_RETURNED
 }
 
-func (c *RequestCounter) IsFulfilled(returned int64) bool {
-	return returned >= c.DataShards
+func (c *RequestCounter) IsFulfilled(status ...int64) bool {
+	if len(status) == 0 {
+		return c.IsFulfilled(c.Status())
+	}
+	return status[0] & REQCNT_MASK_SUCCEED >= c.DataShards
 }
 
-func (c *RequestCounter) IsLate(returned int64) bool {
-	return returned > c.DataShards
+func (c *RequestCounter) IsLate(status ...int64) bool {
+	if len(status) == 0 {
+		return c.IsLate(c.Status())
+	}
+	return status[0] & REQCNT_MASK_SUCCEED > c.DataShards
 }
 
-func (c *RequestCounter) IsAllReturned(returned int64) bool {
-	return returned >= c.DataShards + c.ParityShards
+func (c *RequestCounter) IsAllReturned(status ...int64) bool {
+	if len(status) == 0 {
+		return c.IsAllReturned(c.Status())
+	}
+	return status[0] & REQCNT_MASK_RETURNED >= c.DataShards + c.ParityShards
+}
+
+func (c *RequestCounter) Release() {
+	c.coordinator.Clear(c)
+}
+
+func (c *RequestCounter) ReleaseIfAllReturned(status ...int64) {
+	if c.IsAllReturned(status...) {
+		c.Release()
+	}
 }

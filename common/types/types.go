@@ -22,6 +22,10 @@ func (i *InputEvent) IsPersistentEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
 }
 
+func (i *InputEvent) IsBackingOnly() bool {
+	return (i.Flags & FLAG_BACKING_ONLY) > 0
+}
+
 type Status []Meta
 
 type Meta struct {
@@ -73,6 +77,13 @@ const (
 	FLAG_WARMUP_REPLICA = 0x0030
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
+	// FLAG_EXPIRED Disable recovery for main repository
+	FLAG_BACKING_ONLY = 0x1000
+
+	// PONG_RECOVERY Pong with parallel recovery requested
+	PONG_RECOVERY = 0x0001
+	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
+	PONG_RECLAIMED = 0x0002
 
 	CMD_GET = "get"
 	CMD_GET_CHUNK = "get chunk"

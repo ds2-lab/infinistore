@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"strconv"
 	"sync"
@@ -242,21 +241,20 @@ func (conn *Connection) pongHandler() {
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, _ := conn.r.ReadInt()
 	sid, _ := conn.r.ReadBulkString()
-	flag, _ := conn.r.ReadInt()
-	recovery := flag&0x01 > 0
+	flags, _ := conn.r.ReadInt()
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn, sid, recovery)
+		conn.instance.flagValidated(conn, sid, flags)
 		return
 	}
 
 	// Lock up lambda instance
-	instance, exists := Registry.Instance(uint64(math.Abs(float64(id))))
+	instance, exists := Registry.Instance(uint64(id))
 	if !exists {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	if instance.flagValidated(conn, sid, recovery).instance != nil {
+	if instance.flagValidated(conn, sid, flags).instance != nil {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
 		conn.log.Warn("Discard rouge POND for %d.", id)
@@ -298,9 +296,9 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ChunkId = chunkId
 	chunk, _ := strconv.Atoi(chunkId)
 
-	returned := counter.AddReturned(chunk)
+	status := counter.AddSucceeded(chunk)
 	// Check if chunks are enough? Shortcut response if YES.
-	if counter.IsLate(returned) {
+	if counter.IsLate(status) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		req, _ := conn.SetResponse(rsp)
@@ -310,9 +308,7 @@ func (conn *Connection) getHandler(start time.Time) {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if counter.IsAllReturned(returned) {
-			global.ReqCoordinator.Clear(reqId, counter)
-		}
+		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
@@ -340,7 +336,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 	// Abandon rest chunks.
-	if counter.IsFulfilled(returned) {
+	if counter.IsFulfilled(status) && !counter.IsAllReturned() {   // IsAllReturned will load updated status.
 		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
 		for _, req := range counter.Requests {
 			if req != nil && !req.IsReturnd() {
