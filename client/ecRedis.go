@@ -3,12 +3,11 @@ package client
 import (
 	"bytes"
 	"errors"
-
+	"fmt"
 	"github.com/ScottMansfield/nanolog"
 	"github.com/cespare/xxhash"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/server"
 	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"math/rand"
@@ -16,12 +15,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
-)
 
-const (
-	// This setting will avoid network contention.
-	MaxLambdaStores int = server.NumLambdaClusters
-	Timeout             = 2 * time.Minute
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 var (
@@ -104,7 +99,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	for i := 0; i < ret.Len(); i++ {
 		//fmt.Println("shards", i, "is", shards[i])
 		wg.Add(1)
-		go c.set(host, key, shards[i], i, index[i], stats.ReqId, &wg, ret)
+		go c.set(host, key, stats.ReqId, len(val), i, shards[i], index[i], &wg, ret)
 	}
 	wg.Wait()
 	stats.ReqLatency = time.Since(stats.Begin)
@@ -153,7 +148,7 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.Re
 	ret := newEcRet(c.Shards)
 	for i := 0; i < ret.Len(); i++ {
 		wg.Add(1)
-		go c.get(host, key, i, stats.ReqId, &wg, ret)
+		go c.get(host, key, stats.ReqId, i, &wg, ret)
 	}
 	wg.Wait()
 	stats.RecLatency = time.Since(stats.Begin)
@@ -185,7 +180,7 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.Re
 
 	// Try recover
 	if len(failed) > 0 {
-		c.recover(host, key, uuid.New().String(), chunks, failed)
+		c.recover(host, key, uuid.New().String(), size, failed, chunks)
 	}
 
 	return stats.ReqId, reader, true
@@ -218,7 +213,7 @@ func (c *Client) setError(ret *ecRet, addr string, i int, err error) {
 	ret.SetError(i, err)
 }
 
-func (c *Client) set(addr string, key string, val []byte, i int, lambdaId int, reqId string, wg *sync.WaitGroup, ret *ecRet) {
+func (c *Client) set(addr string, key string, reqId string, size int, i int, val []byte, lambdaId int, wg *sync.WaitGroup, ret *ecRet) {
 	defer wg.Done()
 
 	if err := c.validate(addr, i); err != nil {
@@ -231,15 +226,16 @@ func (c *Client) set(addr string, key string, val []byte, i int, lambdaId int, r
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	w := cn.W
-	w.WriteMultiBulkSize(9)
-	w.WriteBulkString("set")
+	w.WriteMultiBulkSize(10)
+	w.WriteBulkString(protocol.CMD_SET_CHUNK)
 	w.WriteBulkString(key)
-	w.WriteBulkString(strconv.Itoa(i))
-	w.WriteBulkString(strconv.Itoa(lambdaId))
-	w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
 	w.WriteBulkString(reqId)
+	w.WriteBulkString(strconv.Itoa(size))
+	w.WriteBulkString(strconv.Itoa(i))
 	w.WriteBulkString(strconv.Itoa(c.DataShards))
 	w.WriteBulkString(strconv.Itoa(c.ParityShards))
+	w.WriteBulkString(strconv.Itoa(lambdaId))
+	w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
 
 	// Flush pipeline
 	//if err := c.W[i].Flush(); err != nil {
@@ -259,7 +255,7 @@ func (c *Client) set(addr string, key string, val []byte, i int, lambdaId int, r
 	c.rec("Set", addr, i, reqId, ret, nil)
 }
 
-func (c *Client) get(addr string, key string, i int, reqId string, wg *sync.WaitGroup, ret *ecRet) {
+func (c *Client) get(addr string, key string, reqId string, i int, wg *sync.WaitGroup, ret *ecRet) {
 	defer wg.Done()
 
 	if err := c.validate(addr, i); err != nil {
@@ -271,11 +267,10 @@ func (c *Client) get(addr string, key string, i int, reqId string, wg *sync.Wait
 	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
-	//tGet := time.Now()
-	//fmt.Println("Client send GET req timeStamp", tGet, "chunkId is", i)
-	cn.W.WriteCmdString(
-		"get", key, strconv.Itoa(i),
-		reqId, strconv.Itoa(c.DataShards), strconv.Itoa(c.ParityShards)) // cmd key chunkId reqId DataShards ParityShards
+	// tGet := time.Now()
+	// fmt.Println("Client send GET req timeStamp", tGet, "chunkId is", i)
+	// cmd key reqId chunkId
+	cn.W.WriteCmdString(protocol.CMD_GET_CHUNK, key, reqId, strconv.Itoa(i))
 
 	// Flush pipeline
 	//if err := c.W[i].Flush(); err != nil {
@@ -363,13 +358,13 @@ func (c *Client) rec(prompt string, addr string, i int, reqId string, ret *ecRet
 	ret.Set(i, val)
 }
 
-func (c *Client) recover(addr string, key string, reqId string, shards [][]byte, failed []int) {
+func (c *Client) recover(addr string, key string, reqId string, size int, failed []int, shards [][]byte) {
 	var wg sync.WaitGroup
 	ret := newEcRet(c.Shards)
 	for _, i := range failed {
 		wg.Add(1)
 		// lambdaId = 0, for lambdaID of a specified key is fixed on setting.
-		go c.set(addr, key, shards[i], i, 0, reqId, &wg, ret)
+		go c.set(addr, key, reqId, size, i, shards[i], 0, &wg, ret)
 	}
 	wg.Wait()
 

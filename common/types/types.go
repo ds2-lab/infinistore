@@ -75,7 +75,9 @@ const (
 	FLAG_ENABLE_PERSISTENT = 0x0100
 
 	CMD_GET = "get"
+	CMD_GET_CHUNK = "get chunk"
 	CMD_SET = "set"
+	CMD_SET_CHUNK = "set chunk"
 	CMD_DEL = "del"
 	CMD_WARMUP = "warmup"
 	CMD_PING = "ping"

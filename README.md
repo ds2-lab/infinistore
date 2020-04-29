@@ -121,7 +121,7 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   #### Proxy configuration
 
-  Edit `proxy/server/config.go`, change the aws region, cluster size, and prefix of the Lambda functions.
+  Edit `proxy/config/config.go`, change the aws region, cluster size, and prefix of the Lambda functions.
   ```go
   const AWSRegion = "us-east-1"
   const NumLambdaClusters = 400

@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
@@ -23,7 +24,6 @@ func newPlacerMeta() *PlacerMeta {
 		bucketIdx: -1,
 		counter:   0,
 	}
-
 }
 
 type Placer struct {
@@ -49,9 +49,9 @@ func NewPlacer(store *MetaStore) *Placer {
 	return lruPlacer
 }
 
-func (l *Placer) NewMeta(key string, sliceSize int, numChunks int, chunkId int, lambdaId int, chunkSize int64) *Meta {
+func (l *Placer) NewMeta(key string, size, dChunks, pChunks, chunkId, chunkSize int64, lambdaId, sliceSize int) *Meta {
 	l.log.Debug("key and chunkId is %v,%v", key, chunkId)
-	meta := NewMeta(key, numChunks, chunkSize)
+	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	//l.window.proxy.group.InitMeta(meta, sliceSize)
 	meta.Placement[chunkId] = lambdaId
 	meta.lastChunk = chunkId
@@ -75,7 +75,7 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	defer l.mu.Unlock()
 
 	// scaler check
-	if l.AvgSize() > InstanceCapacity*Threshold && l.scaling == false {
+	if l.AvgSize() > config.InstanceCapacity * config.Threshold && l.scaling == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
 		l.proxy.scaler.Signal <- struct{}{}
@@ -127,12 +127,12 @@ func (l *Placer) AvgSize() int {
 
 	// only check size on small set of instances
 	//for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
-	for i := currentFrom; i < NumLambdaClusters; i++ {
+	for i := currentFrom; i < config.NumLambdaClusters; i++ {
 		//sum += int(currentBucket.group.Instance(i).Meta.Size())
 		sum += int(l.proxy.group.Instance(i).Meta.Size())
 	}
 
-	return sum / NumLambdaClusters
+	return sum / config.NumLambdaClusters
 }
 
 func (l *Placer) updateInstanceSize(idx int, block int64) {

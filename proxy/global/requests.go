@@ -48,6 +48,8 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 			}
 			copy(counter.Requests, emptySlice[:l])
 		}
+	} else {
+		c.pool.Put(prepared)
 	}
 	return counter
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
@@ -67,11 +68,11 @@ func (mw *MovingWindow) Rolling() {
 			//}
 			mw.append(bucket)
 			//mw.proxy.groupAll = mw.getAllGroup()
-			atomic.AddInt32(&mw.proxy.placer.from, NumLambdaClusters)
+			atomic.AddInt32(&mw.proxy.placer.from, config.NumLambdaClusters)
 			//mw.proxy.placer.from += NumLambdaClusters
 			mw.cursor = len(mw.buckets) - 1
 
-			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.from), NumLambdaClusters)
+			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.from), config.NumLambdaClusters)
 		}
 		idx += 1
 	}
@@ -106,7 +107,7 @@ func (mw *MovingWindow) getCurrentBucket() *bucket {
 // active group means active bucket under N(2) hour window
 func (mw *MovingWindow) getActiveGroup() *Group {
 	res := &Group{
-		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
+		All:  make([]*GroupInstance, 0, config.LambdaMaxDeployments),
 		size: 0,
 	}
 	for _, bucket := range mw.getActiveBucket() {

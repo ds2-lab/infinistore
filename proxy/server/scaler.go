@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
@@ -39,12 +40,12 @@ func (s *Scaler) Daemon() {
 
 			// get current bucket
 			bucket := s.proxy.movingWindow.getCurrentBucket()
-			tmpGroup := NewGroup(NumLambdaClusters)
+			tmpGroup := NewGroup(config.NumLambdaClusters)
 
 			for i := range tmpGroup.All {
 				node := scheduler.GetForGroup(tmpGroup, i)
-				node.Meta.Capacity = InstanceCapacity
-				node.Meta.IncreaseSize(InstanceOverhead)
+				node.Meta.Capacity = config.InstanceCapacity
+				node.Meta.IncreaseSize(config.InstanceOverhead)
 				//s.log.Debug("[scaling lambda instance %v, size %v]", node.Name(), node.Size())
 
 				go func() {
@@ -67,7 +68,7 @@ func (s *Scaler) Daemon() {
 			bucket.append(tmpGroup)
 
 			// update proxy group FROM cursor
-			atomic.AddInt32(&s.proxy.placer.from, NumLambdaClusters)
+			atomic.AddInt32(&s.proxy.placer.from, config.NumLambdaClusters)
 
 			//scale out phase finished
 			s.proxy.placer.scaling = false

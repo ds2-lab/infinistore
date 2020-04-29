@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
@@ -23,7 +24,7 @@ type GroupInstance struct {
 
 func NewGroup(num int) *Group {
 	return &Group{
-		All:  make([]*GroupInstance, num, LambdaMaxDeployments),
+		All:  make([]*GroupInstance, num, config.LambdaMaxDeployments),
 		size: num,
 	}
 }

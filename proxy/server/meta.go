@@ -15,26 +15,31 @@ var (
 )
 
 type Meta struct {
-	Key       string
-	NumChunks int
+	Key          string
+	Size         int64
+	DChunks      int64
+	PChunks      int64
+	NumChunks    int
 	Placement
-	ChunkSize int64
-	Reset     bool
-	Deleted   bool
+	ChunkSize    int64
+	Reset        bool
+	Deleted      bool
 
-	Balanced int32
-	slice    Slice
-	//placerMeta *PlacerMeta
-	placerMeta *PlacerMeta
-	lastChunk  int
-	mu         sync.Mutex
+	Balanced    int32
+	slice       Slice
+	placerMeta  *PlacerMeta
+	lastChunk   int64
+	mu          sync.Mutex
 }
 
-func NewMeta(key string, numChunks int, chunkSize int64) *Meta {
+func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
 	meta := metaPool.Get().(*Meta)
 	meta.Key = key
-	meta.NumChunks = numChunks
-	meta.Placement = initPlacement(meta.Placement, numChunks)
+	meta.Size = size
+	meta.DChunks = d
+	meta.PChunks = p
+	meta.NumChunks = int(d + p)
+	meta.Placement = initPlacement(meta.Placement, meta.NumChunks)
 	meta.ChunkSize = chunkSize
 	meta.Deleted = false
 	meta.Balanced = 0
