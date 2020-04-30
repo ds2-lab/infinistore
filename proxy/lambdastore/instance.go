@@ -30,10 +30,10 @@ const (
 	INSTANCE_SLEEP = 0
 	INSTANCE_AWAKE = 1
 	INSTANCE_MAYBE = 2
-	LIFECYCLE_ACTIVE = 0             // Instance is actively serving main repository and backup
-	LIFECYCLE_BACKING_ONLY = 1       // Instance is expiring and serving backup only, warmup should be degraded.
-	LIFECYCLE_RECLAIMED = 2          // Instance has been reclaimed.
-	LIFECYCLE_EXPIRED = 3            // Instance is expired, no invocation will be made, and it is safe to recycle.
+	PHASE_ACTIVE = 0             // Instance is actively serving main repository and backup
+	PHASE_BACKING_ONLY = 1       // Instance is expiring and serving backup only, warmup should be degraded.
+	PHASE_RECLAIMED = 2          // Instance has been reclaimed.
+	PHASE_EXPIRED = 3            // Instance is expired, no invocation will be made, and it is safe to recycle.
 	MAX_RETRY      = 3
 	TEMP_MAP_SIZE  = 10
 	BACKING_DISABLED = 0
@@ -74,7 +74,7 @@ type Instance struct {
 	chanCmd       chan types.Command
 	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	awake         uint32
-	lifecycle     uint32
+	phase     uint32
 	// awakeLock     sync.Mutex
 	chanValidated chan struct{}
 	lastValidated *Connection
@@ -292,7 +292,7 @@ func (ins *Instance) IsRecovering() bool {
 func (ins *Instance) ReserveBacking() bool {
 	ins.doneBacking.Add(1) // Avoid being expired.
 	success := atomic.LoadUint32(&ins.recovering) == 0 &&
-		atomic.LoadUint32(&ins.lifecycle) != LIFECYCLE_EXPIRED
+		atomic.LoadUint32(&ins.phase) != PHASE_EXPIRED
 		atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
 	if !success {
 		ins.doneBacking.Done()
@@ -382,12 +382,20 @@ func (ins *Instance) Migrate() error {
 }
 
 func (ins *Instance) Degrade() {
-	atomic.CompareAndSwapUint32(&ins.lifecycle, LIFECYCLE_ACTIVE, LIFECYCLE_BACKING_ONLY)
+	atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY)
 }
 
 func (ins *Instance) Expire() {
 	ins.doneBacking.Wait()
-	atomic.StoreUint32(&ins.lifecycle, LIFECYCLE_EXPIRED)
+	atomic.StoreUint32(&ins.phase, PHASE_EXPIRED)
+}
+
+func (ins *Instance) Phase() uint32 {
+	return atomic.LoadUint32(&ins.phase)
+}
+
+func (ins *Instance) IsReclaimed() bool {
+	return atomic.LoadUint32(&ins.phase) >= PHASE_RECLAIMED
 }
 
 func (ins *Instance) Close() {
@@ -565,7 +573,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		status[1].Tip = tips.Encode()
 	}
 	var localFlags uint64
-	if atomic.LoadUint32(&ins.lifecycle) != LIFECYCLE_ACTIVE {
+	if atomic.LoadUint32(&ins.phase) != PHASE_ACTIVE {
 		localFlags |= protocol.FLAG_BACKING_ONLY
 	}
 	event := &protocol.InputEvent{
@@ -682,7 +690,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 		ins.log.Debug("Parallel recovery requested.")
 		ins.startRecoveryLocked()
 	} else if flags & protocol.PONG_RECLAIMED > 0 {
-		atomic.CompareAndSwapUint32(&ins.lifecycle, LIFECYCLE_BACKING_ONLY, LIFECYCLE_RECLAIMED)
+		atomic.CompareAndSwapUint32(&ins.phase, PHASE_BACKING_ONLY, PHASE_RECLAIMED)
 	}
 	return ins.flagValidatedLocked(conn)
 }
@@ -803,6 +811,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
+	// Backup request is not affected by phases.
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
 	ins.backups[bakId].chanPriorCmd <- req	 // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
@@ -830,9 +839,9 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_GET: /*get or one argument cmd*/
-			// If instance is expiring and reclaimed, only GET request is affected.
+			// If instance is expiring and reclaimed, only GET request for main repository is affected.
 			// And we now know it.
-			if atomic.LoadUint32(&ins.lifecycle) == LIFECYCLE_RECLAIMED {
+			if ins.IsReclaimed() && req.InsId == ins.Id() {
 				// TODO: Handle reclaiming event
 				// Options here:
 				// 1. Recover to prevail node and reroute to the node.

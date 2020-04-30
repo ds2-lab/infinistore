@@ -206,6 +206,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
+	instance := p.group.Instance(lambdaDest)
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
@@ -219,13 +220,14 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		EnableCollector: true,
 	}
 	counter.Requests[dChunkId] = req
+
 	// Unlikely, just to be safe
-	if counter.IsFulfilled() {
+	if counter.IsFulfilled() || instance.IsReclaimed() {
 		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
 		counter.ReleaseIfAllReturned(status)
 	} else {
-		p.group.Instance(lambdaDest).C() <- req
+		instance.C() <- req
 	}
 }
 
