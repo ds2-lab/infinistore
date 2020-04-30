@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
@@ -46,6 +47,7 @@ var (
 	// Data storage
 	storeId uint64
 	store   types.Storage = (*storage.Storage)(nil)
+	persist types.PersistentStorage
 	lineage types.Lineage
 
 	// Proxy that links stores as a system
@@ -93,6 +95,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	storage.Backups = input.Backups
 	store, _ = store.Init(input.Id, input.IsPersistentEnabled())    // NOTE: store may get reinitialized if id changes.
 	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+	persist = util.Ifelse(lineage == nil, nil, store.(*storage.Storage)).(types.PersistentStorage)
 
 	// Initialize session.
 	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
@@ -685,7 +688,7 @@ func main() {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &types.Response{
 			ResponseWriter: w,
-			Cmd:            "set",
+			Cmd:            c.Name,
 			ConnId:         connId,
 			ReqId:          reqId,
 			ChunkId:        chunkId,
@@ -698,6 +701,91 @@ func main() {
 
 		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s", key, connId, chunkId)
 		collector.Send(&types.DataEntry{types.OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), session.Id})
+	})
+
+	srv.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
+		session := lambdaLife.GetSession()
+		session.Timeout.Busy()
+		session.Requests++
+		extension := lambdaLife.TICK_ERROR
+		if session.Requests > 1 {
+			extension = lambdaLife.TICK
+		}
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
+
+		t := time.Now()
+		log.Debug("In RECOVER handler")
+
+		connId := c.Arg(0).String()
+		reqId := c.Arg(1).String()
+		chunkId := c.Arg(2).String()
+		key := c.Arg(3).String()
+		retCmd := c.Arg(4).String()
+
+		if persist == nil {
+			w.AppendErrorf("Recover is not supported")
+			if err := w.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
+		t2 := time.Now()
+
+		// Recover.
+		ret = persist.SetRecovery(key, chunkId)
+		if ret.Error() != nil {
+			log.Error("%v", ret.Error())
+			w.AppendErrorf("%v", ret.Error())
+			if err := w.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+				// Ignore
+			}
+			return
+		}
+
+		// Immediate get, unlikely to error, don't overwrite ret.
+		var stream resp.AllReadCloser
+		if retCmd == protocol.CMD_GET {
+			_, stream, _ = store.GetStream(key)
+			if stream != nil {
+				defer stream.Close()
+			}
+		}
+		d2 := time.Since(t2)
+
+		// write Key, clientId, chunkId, body back to proxy
+		response := &types.Response{
+			ResponseWriter: w,
+			Cmd:            retCmd,
+			ConnId:         connId,
+			ReqId:          reqId,
+			ChunkId:        chunkId,
+			BodyStream:     stream,
+		}
+		response.Prepare()
+
+		t3 := time.Now()
+		if err := response.Flush(); err != nil {
+			log.Error("Error on recover::flush(recover key %s): %v", key, err)
+			// Ignore
+		}
+		d3 := time.Since(t3)
+
+		dt := time.Since(t)
+		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
+		if retCmd == protocol.CMD_GET {
+			collector.Send(&types.DataEntry{types.OP_RECOVER, "200", reqId, chunkId, d2, d3, dt, session.Id})
+		}
 	})
 
 	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
