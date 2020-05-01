@@ -28,6 +28,10 @@ type Scheduler struct {
 	actives *hashmap.HashMap
 }
 
+func (s *Scheduler) Reroute(uint64) *lambdastore.Instance {
+	panic("implement me")
+}
+
 // numCluster = small number, numDeployment = large number
 func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 	s := &Scheduler{
