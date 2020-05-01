@@ -29,7 +29,7 @@ type bucket struct {
 
 	// pointer on group
 	start int32
-	rang  int32
+	end   int32
 }
 
 func newBucket(id int, args ...interface{}) *bucket {
@@ -43,7 +43,7 @@ func newBucket(id int, args ...interface{}) *bucket {
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
 
-	bucket.rang = config.NumLambdaClusters
+	bucket.end = config.NumLambdaClusters + bucket.start - 1
 	bucket.group = NewGroup(config.NumLambdaClusters)
 
 	for i := range bucket.group.All {
@@ -63,22 +63,6 @@ func newBucket(id int, args ...interface{}) *bucket {
 			bucket.ready.Done()
 		}()
 	}
-	return bucket
-}
-
-func newEmptyBucket(id int) *bucket {
-	bucket := bucketPool.Get().(*bucket)
-
-	bucket.log = &logger.ColorLogger{
-		Prefix: fmt.Sprintf("Bucket %d", id),
-		Level:  global.Log.GetLevel(),
-		Color:  true,
-	}
-	bucket.m = hashmap.HashMap{}
-	bucket.id = id
-	bucket.rang = config.NumLambdaClusters
-	bucket.group = NewGroup(config.NumLambdaClusters)
-
 	return bucket
 }
 

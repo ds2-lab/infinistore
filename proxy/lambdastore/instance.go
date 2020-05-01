@@ -4,14 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	awsSession "github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/cespare/xxhash"
-	"github.com/cornelk/hashmap"
-	"github.com/google/uuid"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -20,25 +12,34 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	awsSession "github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/cespare/xxhash"
+	"github.com/cornelk/hashmap"
+	"github.com/google/uuid"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
-	INSTANCE_SLEEP = 0
-	INSTANCE_AWAKE = 1
-	INSTANCE_MAYBE = 2
-	PHASE_ACTIVE = 0             // Instance is actively serving main repository and backup
-	PHASE_BACKING_ONLY = 1       // Instance is expiring and serving backup only, warmup should be degraded.
-	PHASE_RECLAIMED = 2          // Instance has been reclaimed.
-	PHASE_EXPIRED = 3            // Instance is expired, no invocation will be made, and it is safe to recycle.
-	MAX_RETRY      = 3
-	TEMP_MAP_SIZE  = 10
-	BACKING_DISABLED = 0
-	BACKING_RESERVED = 1
-	BACKING_ENABLED = 2
+	INSTANCE_SLEEP     = 0
+	INSTANCE_AWAKE     = 1
+	INSTANCE_MAYBE     = 2
+	PHASE_ACTIVE       = 0 // Instance is actively serving main repository and backup
+	PHASE_BACKING_ONLY = 1 // Instance is expiring and serving backup only, warmup should be degraded.
+	PHASE_RECLAIMED    = 2 // Instance has been reclaimed.
+	PHASE_EXPIRED      = 3 // Instance is expired, no invocation will be made, and it is safe to recycle.
+	MAX_RETRY          = 3
+	TEMP_MAP_SIZE      = 10
+	BACKING_DISABLED   = 0
+	BACKING_RESERVED   = 1
+	BACKING_ENABLED    = 2
 )
 
 var (
@@ -52,29 +53,30 @@ var (
 		},
 	}
 	DefaultPingPayload = []byte{}
-	AwsSession     = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
+	AwsSession         = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
 		SharedConfigState: awsSession.SharedConfigEnable,
 	}))
 )
 
 type InstanceRegistry interface {
 	Instance(uint64) (*Instance, bool)
+	Reroute(uint64) *Instance
 }
 
 type ValidateOption struct {
-	WarmUp      bool
-	Command     types.Command
+	WarmUp  bool
+	Command types.Command
 }
 
 type Instance struct {
 	*Deployment
 	Meta
 
-	cn            *Connection
-	chanCmd       chan types.Command
-	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	awake         uint32
-	phase     uint32
+	cn           *Connection
+	chanCmd      chan types.Command
+	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	awake        uint32
+	phase        uint32
 	// awakeLock     sync.Mutex
 	chanValidated chan struct{}
 	lastValidated *Connection
@@ -83,18 +85,18 @@ type Instance struct {
 	coolTimer     *time.Timer
 
 	// Connection management
-	sessions      *hashmap.HashMap
+	sessions *hashmap.HashMap
 
 	// Backup fields
-	candidates    []*Instance       // Must be initialized before invoke lambda. Stores pointers instead of ids for query, so legacy instances may be used.
-	backups       []*Instance       // Actual backups in use.
-	recovering    uint32            // # of backups in use, also if the recovering > 0, the instance is recovering.
-	writtens      *hashmap.HashMap  // Whitelist, write opertions will be added to it during parallel recovery.
-	backing       uint32            // backing status, 0 for non backing, 1 for reserved, 2 for backing.
-	backingIns    *Instance
-	backingId     int               // Identifier for backup, ranging from [0, # of backups)
-	backingTotal  int               // Total # of backups ready for backing instance.
-	doneBacking   sync.WaitGroup
+	candidates   []*Instance      // Must be initialized before invoke lambda. Stores pointers instead of ids for query, so legacy instances may be used.
+	backups      []*Instance      // Actual backups in use.
+	recovering   uint32           // # of backups in use, also if the recovering > 0, the instance is recovering.
+	writtens     *hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
+	backing      uint32           // backing status, 0 for non backing, 1 for reserved, 2 for backing.
+	backingIns   *Instance
+	backingId    int // Identifier for backup, ranging from [0, # of backups)
+	backingTotal int // Total # of backups ready for backing instance.
+	doneBacking  sync.WaitGroup
 }
 
 func NewInstanceFromDeployment(dp *Deployment) *Instance {
@@ -109,7 +111,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 
 	return &Instance{
 		Deployment:    dp,
-		Meta:          Meta{ Term: 1 }, // Term start with 1 to avoid uninitialized term ambigulous.
+		Meta:          Meta{Term: 1}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awake:         INSTANCE_SLEEP,
 		chanCmd:       make(chan types.Command, 1),
 		chanPriorCmd:  make(chan types.Command, 1),
@@ -137,7 +139,7 @@ func (ins *Instance) C() chan types.Command {
 }
 
 func (ins *Instance) WarmUp() {
-	ins.validate(&ValidateOption{ WarmUp: true })
+	ins.validate(&ValidateOption{WarmUp: true})
 	// Force reset
 	ins.resetCoolTimer()
 }
@@ -222,25 +224,25 @@ func (ins *Instance) startRecoveryLocked() int {
 	changes := 0
 	ins.backups = ins.backups[:0]
 	// Reserve backups so we can know how many backups are available
-	alters := cap(ins.backups)    // If failed to reserve a backup, select one start from alters.
-	offset := 0                   // Offset based on alters.
-	tested := make([]bool, len(ins.candidates) - alters) // Count start from alters
+	alters := cap(ins.backups)                         // If failed to reserve a backup, select one start from alters.
+	offset := 0                                        // Offset based on alters.
+	tested := make([]bool, len(ins.candidates)-alters) // Count start from alters
 	for i := 0; i < cap(ins.backups); i++ {
 		if ins.candidates[i].ReserveBacking() {
 			changes += ins.promoteCandidate(i, i)
 			continue
 		}
 		// Try alter + i to keep backingID stable.
-		if alters + i < len(ins.candidates) && !tested[i] && ins.candidates[alters + i].ReserveBacking() {
+		if alters+i < len(ins.candidates) && !tested[i] && ins.candidates[alters+i].ReserveBacking() {
 			// exchange candidates
-			changes += ins.promoteCandidate(i, alters + i)
+			changes += ins.promoteCandidate(i, alters+i)
 			continue
 		}
 		// Try find whatever possible
 		for ; offset < len(tested); offset++ {
-			if !tested[offset] && ins.candidates[alters + offset].ReserveBacking() {
+			if !tested[offset] && ins.candidates[alters+offset].ReserveBacking() {
 				tested[offset] = true
-				changes += ins.promoteCandidate(i, alters + offset)
+				changes += ins.promoteCandidate(i, alters+offset)
 				break
 			}
 		}
@@ -293,7 +295,7 @@ func (ins *Instance) ReserveBacking() bool {
 	ins.doneBacking.Add(1) // Avoid being expired.
 	success := atomic.LoadUint32(&ins.recovering) == 0 &&
 		atomic.LoadUint32(&ins.phase) != PHASE_EXPIRED
-		atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
+	atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
 	if !success {
 		ins.doneBacking.Done()
 	}
@@ -322,7 +324,7 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
 	} else {
 		ins.chanPriorCmd <- &types.Control{
-			Cmd: protocol.CMD_PING,
+			Cmd:     protocol.CMD_PING,
 			Payload: payload,
 		}
 	}
@@ -380,6 +382,12 @@ func (ins *Instance) Migrate() error {
 	}
 	return nil
 }
+
+// TODO: movingwindow set instance to degrade state
+
+// TODO: under degrade, lower warmup interval
+
+// TODO: if instance in reclaimed | no backing state -> no warmup perform
 
 func (ins *Instance) Degrade() {
 	atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY)
@@ -554,7 +562,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	var status protocol.Status
 	if !ins.IsBacking() {
 		// Main store only
-		status = protocol.Status{ *ins.Meta.ToProtocolMeta(ins.Id()) }
+		status = protocol.Status{*ins.Meta.ToProtocolMeta(ins.Id())}
 		status[0].Tip = tips.Encode()
 	} else {
 		// Main store + backing store
@@ -577,14 +585,14 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		localFlags |= protocol.FLAG_BACKING_ONLY
 	}
 	event := &protocol.InputEvent{
-		Sid:    ins.initSession(),
-		Id:     ins.Id(),
-		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
-		Prefix: global.Prefix,
-		Log:    global.Log.GetLevel(),
-		Flags:  global.Flags | localFlags,
-		Backups:len(ins.candidates),
-		Status: status,
+		Sid:     ins.initSession(),
+		Id:      ins.Id(),
+		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
+		Prefix:  global.Prefix,
+		Log:     global.Log.GetLevel(),
+		Flags:   global.Flags | localFlags,
+		Backups: len(ins.candidates),
+		Status:  status,
 	}
 	if opt.WarmUp {
 		event.Cmd = protocol.CMD_WARMUP
@@ -614,7 +622,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		} else if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
 		} else if len(outputStatus) > 0 {
-			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
+			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
 			if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
 				// ins.awakeLock.Lock()
@@ -686,10 +694,10 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 	}
 
 	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
-	if flags & protocol.PONG_RECOVERY > 0 {
+	if flags&protocol.PONG_RECOVERY > 0 {
 		ins.log.Debug("Parallel recovery requested.")
 		ins.startRecoveryLocked()
-	} else if flags & protocol.PONG_RECLAIMED > 0 {
+	} else if flags&protocol.PONG_RECLAIMED > 0 {
 		atomic.CompareAndSwapUint32(&ins.phase, PHASE_BACKING_ONLY, PHASE_RECLAIMED)
 	}
 	return ins.flagValidatedLocked(conn)
@@ -772,7 +780,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Check lambda status first
 		validateStart := time.Now()
 		// Once active connection is confirmed, keep awake on serving.
-		conn := ins.Validate(&ValidateOption{ Command: cmd })
+		conn := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
 		if conn == nil {
@@ -799,6 +807,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	ins.warmUp()
 }
 
+// TODO: add instance id
 func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	// Rerouted keys will not be rerouted.
 	// During parallel recovery, the instance can be backing another instance. (Backing before recovery triggered)
@@ -813,7 +822,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 
 	// Backup request is not affected by phases.
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
-	ins.backups[bakId].chanPriorCmd <- req	 // Rerouted request should not be queued again.
+	ins.backups[bakId].chanPriorCmd <- req // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
 	return true
 }
@@ -844,7 +853,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			if ins.IsReclaimed() && req.InsId == ins.Id() {
 				// TODO: Handle reclaiming event
 				// Options here:
-				// 1. Recover to prevail node and reroute to the node.
+				// 1. Recover to prevail node and reroute to the node. TODO: change CMD from GET to Recover, and add 1 arg retCMD
 				// 2. Return 404 (current implementation)
 				counter, ok := global.ReqCoordinator.Load(req.Id.ReqId)
 				if ok == false {
@@ -959,7 +968,7 @@ func (ins *Instance) promoteCandidate(dest int, src int) int {
 		// Exchange candidates to keep the next elections get a stable result
 		ins.candidates[dest], ins.candidates[src] = ins.candidates[src], ins.candidates[dest]
 	}
-	ins.backups = ins.backups[:dest + 1]
+	ins.backups = ins.backups[:dest+1]
 	change := ins.backups[dest] != nil && ins.backups[dest].Id() != ins.candidates[dest].Id()
 	ins.backups[dest] = ins.candidates[dest]
 	if change {

@@ -9,6 +9,8 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
+const activeNum = 12
+
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
 	proxy    *Proxy
@@ -34,9 +36,10 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
+		num:       activeNum,
 		window:    window,
 		interval:  interval,
-		buckets:   make([]*bucket, 0, 9999),
+		buckets:   make([]*bucket, 0, 500),
 		startTime: time.Now(),
 		cursor:    0,
 
@@ -109,7 +112,7 @@ func (mw *MovingWindow) Daemon() {
 
 			// append tmpGroup to current bucket group
 			bucket.append(tmpGroup)
-			bucket.rang += config.NumLambdaClusters
+			bucket.end += config.NumLambdaClusters
 
 			// append tmnGroup to proxy group
 			mw.appendToGroup(tmpGroup)
@@ -135,6 +138,7 @@ func (mw *MovingWindow) Daemon() {
 			// append to bucket list & append current bucket group to proxy group
 			mw.appendToGroup(bucket.group)
 			mw.buckets = append(mw.buckets, bucket)
+			mw.degrade()
 
 			// increase proxy group pointer and sync bucket start index
 			bucket.start = atomic.AddInt32(&mw.proxy.placer.pointer, config.NumLambdaClusters)
@@ -142,26 +146,9 @@ func (mw *MovingWindow) Daemon() {
 
 			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.pointer), config.NumLambdaClusters)
 
+
 		}
 		idx += 1
-	}
-}
-
-// retrieve cold bucket (first half)
-func (mw *MovingWindow) getColdBucket() []*bucket {
-	if len(mw.buckets) <= mw.num {
-		return nil
-	} else {
-		return mw.buckets[0 : len(mw.buckets)/2-1]
-	}
-}
-
-// retrieve hot bucket (second half)
-func (mw *MovingWindow) getActiveBucket() []*bucket {
-	if len(mw.buckets) <= mw.num {
-		return mw.buckets
-	} else {
-		return mw.buckets[len(mw.buckets)/2:]
 	}
 }
 
@@ -208,10 +195,47 @@ func (mw *MovingWindow) touch(meta *Meta) {
 func (mw *MovingWindow) avgSize(bucket *bucket) int {
 	sum := 0
 	start := bucket.start
+	end := bucket.end
 
-	for i := start; i < start+bucket.rang; i++ {
+	for i := start; i < end; i++ {
 		sum += int(mw.proxy.group.Instance(int(i)).Meta.Size())
 	}
 
-	return sum / int(bucket.rang)
+	return sum / int(end-start+1)
+}
+
+// TODO: degrade instance between
+//func (mw *MovingWindow) findInactive() []*bucket {
+//
+//}
+// retrieve hot bucket (second half)
+func (mw *MovingWindow) getActiveBucket() []*bucket {
+	if len(mw.buckets) <= activeNum {
+		return mw.buckets
+	} else {
+		return mw.buckets[len(mw.buckets)-activeNum:]
+	}
+}
+
+func (mw *MovingWindow) getColdBucket() []*bucket {
+	if len(mw.buckets) <= activeNum {
+		return nil
+	} else {
+		return mw.buckets[:len(mw.buckets)-activeNum]
+	}
+}
+
+func (mw *MovingWindow) getCold() *bucket {
+	if len(mw.buckets) <= activeNum {
+		return nil
+	} else {
+		return mw.buckets[len(mw.buckets)-activeNum-1]
+	}
+}
+
+func (mw *MovingWindow) degrade() {
+	b := mw.getCold()
+	for i := b.start; i < b.end; i++ {
+		mw.proxy.group.Instance(int(i)).Degrade()
+	}
 }

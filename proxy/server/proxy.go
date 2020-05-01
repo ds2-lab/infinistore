@@ -203,6 +203,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	counter.Requests[dChunkId] = req
 
 	// Unlikely, just to be safe
+	// TODO: reroute and update placement
 	if counter.IsFulfilled() || instance.IsReclaimed() {
 		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
@@ -211,6 +212,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		instance.C() <- req
 	}
 }
+
+
 
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	wrapper := r.(*types.ProxyResponse)
