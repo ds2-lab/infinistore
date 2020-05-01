@@ -32,7 +32,7 @@ type Placer struct {
 	metaStore *MetaStore
 	scaling   bool
 	mu        sync.RWMutex
-	from      int32
+	pointer   int32
 }
 
 func NewPlacer(store *MetaStore) *Placer {
@@ -43,8 +43,8 @@ func NewPlacer(store *MetaStore) *Placer {
 			Color:  true,
 		},
 		metaStore: store,
-		//scaling:   false,
-		from: 0,
+		scaling:   false,
+		pointer:   0,
 	}
 	return lruPlacer
 }
@@ -75,20 +75,19 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	defer l.mu.Unlock()
 
 	// scaler check
-	if l.AvgSize() > config.InstanceCapacity * config.Threshold && l.scaling == false {
+	if l.AvgSize() > config.InstanceCapacity*config.Threshold && l.scaling == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
-		l.proxy.scaler.Signal <- struct{}{}
+		l.proxy.movingWindow.scaler <- struct{}{}
 	}
 
 	if meta.placerMeta == nil {
 		meta.placerMeta = newPlacerMeta()
 	}
 
-	// Check placement
-	//offset := l.proxy.movingWindow.getCurrentBucket().offset
-	currentFrom := atomic.LoadInt32(&l.from)
-	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, int(currentFrom))
+	// get current pointer and instance ID
+	pointer := atomic.LoadInt32(&l.pointer)
+	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, int(pointer))
 	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 
 	// place
@@ -122,13 +121,10 @@ func (l *Placer) touch(meta *Meta) {
 
 func (l *Placer) AvgSize() int {
 	sum := 0
-	//currentBucket := l.proxy.movingWindow.getCurrentBucket()
-	currentFrom := int(atomic.LoadInt32(&l.from))
+	pointer := int(atomic.LoadInt32(&l.pointer))
 
 	// only check size on small set of instances
-	//for i := currentBucket.from; i < len(currentBucket.group.All); i++ {
-	for i := currentFrom; i < config.NumLambdaClusters; i++ {
-		//sum += int(currentBucket.group.Instance(i).Meta.Size())
+	for i := pointer; i < config.NumLambdaClusters; i++ {
 		sum += int(l.proxy.group.Instance(i).Meta.Size())
 	}
 
@@ -136,7 +132,6 @@ func (l *Placer) AvgSize() int {
 }
 
 func (l *Placer) updateInstanceSize(idx int, block int64) {
-	//l.temp(idx)
 	l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).IncreaseSize(block)
 }
 

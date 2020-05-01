@@ -3,17 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
+	"sync"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"math"
-	"sync"
-	"time"
 )
 
 const (
-
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
 	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
@@ -41,7 +41,7 @@ var (
 		aws.String("subnet-f432faca"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-your-security-group"),
+		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
 	}
 )
 
@@ -224,7 +224,7 @@ func main() {
 			fmt.Println(j)
 			var wg sync.WaitGroup
 			//for i := j*(*batch) + *from; i < (j+1)*(*batch); i++ {
-			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to ; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to; i++ {
 				wg.Add(1)
 				go updateCode(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}

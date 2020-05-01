@@ -4,11 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/ScottMansfield/nanolog"
-	"github.com/cespare/xxhash"
-	"github.com/google/uuid"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"math/rand"
 	"net"
@@ -16,7 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ScottMansfield/nanolog"
+	"github.com/cespare/xxhash"
+	"github.com/google/uuid"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (

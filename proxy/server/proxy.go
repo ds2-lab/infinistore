@@ -1,7 +1,6 @@
 package server
 
 import (
-	"math/rand"
 	"net"
 	"strconv"
 	"sync"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
@@ -22,13 +20,10 @@ import (
 )
 
 type Proxy struct {
-	log   logger.ILogger
-	group *Group
-	//groupAll     *Group
+	log          logger.ILogger
+	group        *Group
 	movingWindow *MovingWindow
 	placer       *Placer
-
-	scaler *Scaler
 
 	initialized int32
 	ready       sync.WaitGroup
@@ -43,33 +38,19 @@ func New(replica bool) *Proxy {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group: group,
-		//groupAll:     groupAll,
+		group:        group,
 		movingWindow: NewMovingWindow(10, 1),
 		placer:       NewPlacer(NewMataStore()),
-		scaler:       NewScaler(),
-		//ready:        make(chan struct{}),
 	}
 
 	p.movingWindow.proxy = p
 	p.placer.proxy = p
-	p.scaler.proxy = p
 
-	// TODO: assign backup nodes
-	// Something can only be done after all nodes initialized.
-	// for i := range p.group.All {
-	// 	num, candidates := p.getBackupsForNode(p.group, i)
-	// 	node := p.group.Instance(i)
-	// 	node.AssignBackups(num, candidates)
-	// }
-
+	// first group init
 	p.group = p.movingWindow.start()
 
-	// TODO: merge to single go routine
-	// start moving window rolling
-	go p.movingWindow.Rolling()
-	// start auto scaler
-	go p.scaler.Daemon()
+	// start moving-window and auto-scaling Daemon
+	go p.movingWindow.Daemon()
 
 	return p
 }
@@ -281,23 +262,6 @@ func (p *Proxy) CollectData() {
 	} else {
 		p.log.Info("Data collected.")
 	}
-}
-
-func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
-	numBaks := config.BackupsPerInstance
-	numTotal := numBaks * 2
-	distance := g.Len() / (numTotal + 1) // main + double backup candidates
-	if distance == 0 {
-		// In case 2 * total >= g.Len()
-		distance = 1
-		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len()-1, numBaks).(int) // Use all
-		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len()-1, numTotal).(int)
-	}
-	candidates := make([]*lambdastore.Instance, numTotal)
-	for j := 0; j < numTotal; j++ {
-		candidates[j] = g.Instance((i + j*distance + rand.Int()%distance + 1) % g.Len()) // Random to avoid the same backup set.
-	}
-	return numBaks, candidates
 }
 
 func (p *Proxy) dropEvicted(meta *Meta) {

@@ -25,15 +25,14 @@ type bucket struct {
 	m           hashmap.HashMap
 	group       *Group
 	initialized int32
-	//ready       chan struct{}
-	ready sync.WaitGroup
+	ready       sync.WaitGroup
+
+	// pointer on group
+	start int32
+	rang  int32
 }
 
 func newBucket(id int, args ...interface{}) *bucket {
-
-	// if this is the initial bucket
-	//var ready chan struct{}
-
 	bucket := bucketPool.Get().(*bucket)
 
 	bucket.log = &logger.ColorLogger{
@@ -43,7 +42,8 @@ func newBucket(id int, args ...interface{}) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	// initial corresponding group
+
+	bucket.rang = config.NumLambdaClusters
 	bucket.group = NewGroup(config.NumLambdaClusters)
 
 	for i := range bucket.group.All {
@@ -63,6 +63,22 @@ func newBucket(id int, args ...interface{}) *bucket {
 			bucket.ready.Done()
 		}()
 	}
+	return bucket
+}
+
+func newEmptyBucket(id int) *bucket {
+	bucket := bucketPool.Get().(*bucket)
+
+	bucket.log = &logger.ColorLogger{
+		Prefix: fmt.Sprintf("Bucket %d", id),
+		Level:  global.Log.GetLevel(),
+		Color:  true,
+	}
+	bucket.m = hashmap.HashMap{}
+	bucket.id = id
+	bucket.rang = config.NumLambdaClusters
+	bucket.group = NewGroup(config.NumLambdaClusters)
+
 	return bucket
 }
 

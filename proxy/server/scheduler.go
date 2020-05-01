@@ -3,8 +3,10 @@ package server
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 
 	"github.com/cornelk/hashmap"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -72,6 +74,23 @@ func (s *Scheduler) ReserveForInstance(insId uint64) (types.LambdaDeployment, er
 	} else {
 		return s.ReserveForGroup(ins.group, ins.idx)
 	}
+}
+
+func (s *Scheduler) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
+	numBaks := config.BackupsPerInstance
+	numTotal := numBaks * 2
+	distance := g.Len() / (numTotal + 1) // main + double backup candidates
+	if distance == 0 {
+		// In case 2 * total >= g.Len()
+		distance = 1
+		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len()-1, numBaks).(int) // Use all
+		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len()-1, numTotal).(int)
+	}
+	candidates := make([]*lambdastore.Instance, numTotal)
+	for j := 0; j < numTotal; j++ {
+		candidates[j] = g.Instance((i + j*distance + rand.Int()%distance + 1) % g.Len()) // Random to avoid the same backup set.
+	}
+	return numBaks, candidates
 }
 
 func (s *Scheduler) Recycle(dp types.LambdaDeployment) {
