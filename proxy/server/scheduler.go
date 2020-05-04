@@ -49,7 +49,7 @@ func newScheduler() *Scheduler {
 }
 
 func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {
-	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.pool))
+	ins := g.Reserve(g.Base(idx), lambdastore.NewInstanceFromDeployment(<-s.pool))
 	s.actives.Set(ins.Id(), ins)
 	g.Set(ins)
 	return ins.LambdaDeployment.(*lambdastore.Instance)
@@ -80,19 +80,19 @@ func (s *Scheduler) ReserveForInstance(insId uint64) (types.LambdaDeployment, er
 	}
 }
 
-func (s *Scheduler) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
+func (s *Scheduler) getBackupsForNode(instances []*GroupInstance, i int) (int, []*lambdastore.Instance) {
 	numBaks := config.BackupsPerInstance
 	numTotal := numBaks * 2
-	distance := g.Len() / (numTotal + 1) // main + double backup candidates
+	distance := len(instances) / (numTotal + 1) // main + double backup candidates
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len()-1, numBaks).(int) // Use all
-		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len()-1, numTotal).(int)
+		numBaks = util.Ifelse(numBaks >= len(instances), len(instances)-1, numBaks).(int) // Use all
+		numTotal = util.Ifelse(numTotal >= len(instances), len(instances)-1, numTotal).(int)
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = g.Instance((i + j*distance + rand.Int()%distance + 1) % g.Len()) // Random to avoid the same backup set.
+		candidates[j] = instances[(i + j*distance + rand.Int()%distance + 1) % len(instances)].LambdaDeployment.(*lambdastore.Instance) // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }

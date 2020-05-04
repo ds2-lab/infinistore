@@ -12,7 +12,6 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -20,8 +19,8 @@ import (
 )
 
 type Proxy struct {
-	log          logger.ILogger
-	group        *Group
+	log logger.ILogger
+	//group        *Group
 	movingWindow *MovingWindow
 	placer       *Placer
 
@@ -31,23 +30,21 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(config.NumLambdaClusters)
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		group:        group,
+		//group:        group,
 		movingWindow: NewMovingWindow(10, 1),
 		placer:       NewPlacer(NewMataStore()),
 	}
 
-	p.movingWindow.proxy = p
 	p.placer.proxy = p
-
+	p.movingWindow.placer = p.placer
 	// first group init
-	p.group = p.movingWindow.start()
+	p.movingWindow.start()
 
 	// start moving-window and auto-scaling Daemon
 	go p.movingWindow.Daemon()
@@ -78,11 +75,11 @@ func (p *Proxy) Close(lis net.Listener) {
 }
 
 func (p *Proxy) Release() {
-	for i, node := range p.group.All {
+	for i, node := range p.movingWindow.group.All {
 		scheduler.Recycle(node.LambdaDeployment)
-		p.group.All[i] = nil
+		p.movingWindow.group.All[i] = nil
 	}
-	scheduler.Clear(p.group)
+	scheduler.Clear(p.movingWindow.group)
 }
 
 // from client
@@ -141,7 +138,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
-	p.group.Instance(lambdaDest).C() <- &types.Request{
+	p.movingWindow.group.Instance(lambdaDest).C() <- &types.Request{
 		Id:              types.Id{connId, reqId, chunkId},
 		InsId:           uint64(lambdaDest),
 		Cmd:             protocol.CMD_SET,
@@ -187,7 +184,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
-	instance := p.group.Instance(lambdaDest)
+	instance := p.movingWindow.group.Instance(lambdaDest)
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
@@ -212,8 +209,6 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		instance.C() <- req
 	}
 }
-
-
 
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	wrapper := r.(*types.ProxyResponse)
@@ -249,14 +244,14 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 }
 
 func (p *Proxy) CollectData() {
-	for _, ins := range p.group.All {
+	for _, ins := range p.movingWindow.group.All {
 		p.log.Debug("active instance in proxy %v", ins.Name())
 	}
 
-	for i, _ := range p.group.All {
+	for i, _ := range p.movingWindow.group.All {
 		global.DataCollected.Add(1)
 		// send data command
-		p.group.Instance(i).C() <- &types.Control{Cmd: "data"}
+		p.movingWindow.group.Instance(i).C() <- &types.Control{Cmd: "data"}
 	}
 	p.log.Info("Waiting data from Lambda")
 	global.DataCollected.Wait()
@@ -270,7 +265,7 @@ func (p *Proxy) CollectData() {
 func (p *Proxy) dropEvicted(meta *Meta) {
 	reqId := uuid.New().String()
 	for i, lambdaId := range meta.Placement {
-		instance := p.group.Instance(lambdaId)
+		instance := p.movingWindow.group.Instance(lambdaId)
 		instance.C() <- &types.Request{
 			Id:    types.Id{0, reqId, strconv.Itoa(i)},
 			InsId: uint64(lambdaId),

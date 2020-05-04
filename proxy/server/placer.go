@@ -61,7 +61,7 @@ func (l *Placer) NewMeta(key string, size, dChunks, pChunks, chunkId, chunkSize 
 func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	//lambdaId from client
 	chunkId := newMeta.lastChunk
-	lambdaId := newMeta.Placement[chunkId]
+	//lambdaId := newMeta.Placement[chunkId]
 
 	meta, got, _ := l.metaStore.GetOrInsert(key, newMeta)
 
@@ -85,15 +85,13 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 		meta.placerMeta = newPlacerMeta()
 	}
 
-	// get current pointer and instance ID
-	pointer := atomic.LoadInt32(&l.pointer)
-	instanceId := l.proxy.movingWindow.getInstanceId(lambdaId, int(pointer))
-	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
-
 	// place
+	instanceId := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
 	meta.Placement[chunkId] = instanceId
 	l.updateInstanceSize(instanceId, meta.ChunkSize)
 
+	// get current pointer and instance ID
+	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 	// use last arrived chunk to touch meta
 	l.touch(meta)
 
@@ -125,18 +123,12 @@ func (l *Placer) AvgSize() int {
 
 	// only check size on small set of instances
 	for i := pointer; i < config.NumLambdaClusters; i++ {
-		sum += int(l.proxy.group.Instance(i).Meta.Size())
+		sum += int(l.proxy.movingWindow.group.Instance(i).Meta.Size())
 	}
 
 	return sum / config.NumLambdaClusters
 }
 
 func (l *Placer) updateInstanceSize(idx int, block int64) {
-	l.proxy.group.All[idx].LambdaDeployment.(*lambdastore.Instance).IncreaseSize(block)
-}
-
-func (l *Placer) temp(idx int) {
-	for i := range l.proxy.group.All {
-		l.log.Debug("name %v, size %v", l.proxy.group.All[i].Name(), l.proxy.group.All[i].LambdaDeployment.(*lambdastore.Instance).Size())
-	}
+	l.proxy.movingWindow.group.All[idx].LambdaDeployment.(*lambdastore.Instance).IncreaseSize(block)
 }

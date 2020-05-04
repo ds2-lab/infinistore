@@ -1,47 +1,54 @@
 package server
 
 import (
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
 
-const activeNum = 12
+var (
+	activeNumBuckets = 12
+	backupBuckets    = 3 * 6
+)
 
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
-	proxy    *Proxy
-	log      logger.ILogger
+	log    logger.ILogger
+	placer *Placer
+	group  *Group
+
 	window   int
 	interval int
 	num      int // number of hot bucket 1 hour time window = 6 num * 10 min
-	buckets  []*bucket
+	buckets  []*Bucket
 
-	cursor    int
+	cursor    *Bucket
 	startTime time.Time
 
 	scaler       chan struct{}
 	scaleCounter int32
+
+	mu sync.Mutex
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
-	// number of active time bucket
-	//num := window / interval
+	group := NewGroup(config.NumLambdaClusters)
 	return &MovingWindow{
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		num:       activeNum,
+		group:     group,
+		num:       activeNumBuckets,
 		window:    window,
 		interval:  interval,
-		buckets:   make([]*bucket, 0, 500),
+		buckets:   make([]*Bucket, 0, 500),
 		startTime: time.Now(),
-		cursor:    0,
 
 		// for scaling out
 		scaler:       make(chan struct{}, 1),
@@ -54,28 +61,34 @@ func (mw *MovingWindow) waitReady() {
 }
 
 // only assign backup for new node in bucket
-func (mw *MovingWindow) assignBackup(bucket *bucket) {
-	length := len(bucket.group.All)
-
-	for i := length - config.NumLambdaClusters; i < length; i++ {
-		num, candidates := scheduler.getBackupsForNode(bucket.group, i)
-		node := mw.proxy.group.Instance(int(i))
+func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
+	// get 3 hour buckets
+	start := mw.findBucket(backupBuckets).start
+	for i := 0; i < len(instances); i++ {
+		num, candidates := scheduler.getBackupsForNode(mw.group.All[start:], i)
+		node := mw.group.Instance(i)
 		node.AssignBackups(num, candidates)
 	}
 }
 
-func (mw *MovingWindow) start() *Group {
+func (mw *MovingWindow) findBucket(expireCount int) *Bucket {
+	old := mw.getCurrentBucket().id - expireCount
+	if old < 0 {
+		return mw.buckets[0]
+	}
+	return mw.buckets[old]
+
+}
+
+func (mw *MovingWindow) start() {
 	// init bucket
-	bucket := newBucket(0)
+	bucket, _ := newBucket(0, mw.group, config.NumLambdaClusters)
 
 	// assign backup node for all nodes of this bucket
-	mw.assignBackup(bucket)
+	mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
 	// append to bucket list & append current bucket group to proxy group
-	mw.appendToGroup(bucket.group)
 	mw.buckets = append(mw.buckets, bucket)
-
-	return bucket.group
 }
 
 func (mw *MovingWindow) Daemon() {
@@ -87,41 +100,13 @@ func (mw *MovingWindow) Daemon() {
 		// scaling out in bucket
 		case <-mw.scaler:
 
-			// get current bucket
 			bucket := mw.getCurrentBucket()
+			bucket.scale(config.NumLambdaClusters)
 
-			tmpGroup := NewGroup(config.NumLambdaClusters)
-			for i := range tmpGroup.All {
-				node := scheduler.GetForGroup(tmpGroup, i)
-				node.Meta.Capacity = config.InstanceCapacity
-				node.Meta.IncreaseSize(config.InstanceOverhead)
-				go func() {
-					node.WarmUp()
-					if atomic.AddInt32(&mw.scaleCounter, 1) == int32(len(tmpGroup.All)) {
-						mw.log.Info("[scale out is ready]")
-					}
-				}()
-				// Begin handle requests
-				go node.HandleRequests()
-			}
-
-			mw.assignBackup(bucket)
-
-			// reset counter
-			mw.scaleCounter = 0
-
-			// append tmpGroup to current bucket group
-			bucket.append(tmpGroup)
-			bucket.end += config.NumLambdaClusters
-
-			// append tmnGroup to proxy group
-			mw.appendToGroup(tmpGroup)
-
-			// move pointer after scale out
-			atomic.AddInt32(&mw.proxy.placer.pointer, config.NumLambdaClusters)
+			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
 			//scale out phase finished
-			mw.proxy.placer.scaling = false
+			mw.placer.scaling = false
 			mw.log.Debug("scale out finish")
 
 		// for bucket rolling
@@ -132,40 +117,33 @@ func (mw *MovingWindow) Daemon() {
 			//	break
 			//}
 
-			bucket := newBucket(idx)
-			mw.assignBackup(bucket)
+			bucket, _ := newBucket(idx, mw.group, config.NumLambdaClusters)
+			mw.assignBackup(bucket.instances)
 
 			// append to bucket list & append current bucket group to proxy group
-			mw.appendToGroup(bucket.group)
 			mw.buckets = append(mw.buckets, bucket)
-			mw.degrade()
 
-			// increase proxy group pointer and sync bucket start index
-			bucket.start = atomic.AddInt32(&mw.proxy.placer.pointer, config.NumLambdaClusters)
-			mw.cursor = len(mw.buckets) - 1
+			degrade := mw.getDegradingInstanceLocked()
+			if degrade != nil {
+				mw.degrade(degrade)
+			}
 
-			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.pointer), config.NumLambdaClusters)
-
+			// update cursor, point to active bucket
+			mw.cursor = bucket
 
 		}
 		idx += 1
 	}
 }
 
-func (mw *MovingWindow) getAllBuckets() []*bucket {
+func (mw *MovingWindow) getAllBuckets() []*Bucket {
 	return mw.buckets
 }
 
-func (mw *MovingWindow) getCurrentBucket() *bucket {
+func (mw *MovingWindow) getCurrentBucket() *Bucket {
 	return mw.buckets[len(mw.buckets)-1]
 }
 
-func (mw *MovingWindow) appendToGroup(g *Group) {
-	for i := 0; i < len(g.All); i++ {
-		mw.proxy.group.All = append(mw.proxy.group.All, g.All[i])
-		mw.log.Debug("active instance name %v", g.All[i].Name())
-	}
-}
 func (mw *MovingWindow) getInstanceId(id int, from int) int {
 	//idx := mw.getCurrentBucket().from + id
 	idx := id + from
@@ -173,69 +151,50 @@ func (mw *MovingWindow) getInstanceId(id int, from int) int {
 }
 
 func (mw *MovingWindow) touch(meta *Meta) {
-	mw.log.Debug("in touch %v", meta.Placement)
-	// brand new meta(-1) or already existed
-	if meta.placerMeta.bucketIdx == -1 {
-		mw.buckets[mw.cursor].m.Set(meta.Key, meta)
-	} else {
-		// remove meta from previous bucket
-		oldBucket := meta.placerMeta.bucketIdx
-		if mw.cursor == oldBucket {
-			return
-		} else {
-			mw.buckets[oldBucket].m.Del(meta.Key)
-			mw.buckets[mw.cursor].m.Set(meta.Key, meta)
-		}
-	}
-
-	meta.placerMeta.bucketIdx = mw.cursor
-	//meta.placerMeta.ts = time.Now().UnixNano()
+	//mw.log.Debug("in touch %v", meta.Placement)
+	//// brand new meta(-1) or already existed
+	//if meta.placerMeta.bucketIdx == -1 {
+	//	mw.cursor.m.Set(meta.Key, meta)
+	//} else {
+	//	// remove meta from previous bucket
+	//	oldBucket := meta.placerMeta.bucketIdx
+	//	if mw.cursor == mw.buckets[oldBucket] {
+	//		return
+	//	} else {
+	//		mw.buckets[oldBucket].m.Del(meta.Key)
+	//		mw.cursor.m.Set(meta.Key, meta)
+	//	}
+	//}
+	//
+	//meta.placerMeta.bucketIdx = mw.cursor.id
 }
 
-func (mw *MovingWindow) avgSize(bucket *bucket) int {
+func (mw *MovingWindow) activeInstances(num int) []*GroupInstance {
+	return mw.getCurrentBucket().activeInstances(num)
+}
+
+func (mw *MovingWindow) avgSize(bucket *Bucket) int {
 	sum := 0
 	start := bucket.start
 	end := bucket.end
 
 	for i := start; i < end; i++ {
-		sum += int(mw.proxy.group.Instance(int(i)).Meta.Size())
+		sum += int(mw.group.Instance(int(i)).Meta.Size())
 	}
 
 	return sum / int(end-start+1)
 }
 
-// TODO: degrade instance between
-//func (mw *MovingWindow) findInactive() []*bucket {
-//
-//}
-// retrieve hot bucket (second half)
-func (mw *MovingWindow) getActiveBucket() []*bucket {
-	if len(mw.buckets) <= activeNum {
-		return mw.buckets
-	} else {
-		return mw.buckets[len(mw.buckets)-activeNum:]
-	}
-}
-
-func (mw *MovingWindow) getColdBucket() []*bucket {
-	if len(mw.buckets) <= activeNum {
+func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
+	if len(mw.buckets) <= activeNumBuckets {
 		return nil
 	} else {
-		return mw.buckets[:len(mw.buckets)-activeNum]
+		return mw.buckets[len(mw.buckets)-activeNumBuckets-1]
 	}
 }
 
-func (mw *MovingWindow) getCold() *bucket {
-	if len(mw.buckets) <= activeNum {
-		return nil
-	} else {
-		return mw.buckets[len(mw.buckets)-activeNum-1]
-	}
-}
-
-func (mw *MovingWindow) degrade() {
-	b := mw.getCold()
-	for i := b.start; i < b.end; i++ {
-		mw.proxy.group.Instance(int(i)).Degrade()
+func (mw *MovingWindow) degrade(bucket *Bucket) {
+	for _, ins := range bucket.instances {
+		ins.LambdaDeployment.(*lambdastore.Instance).Degrade()
 	}
 }

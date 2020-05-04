@@ -15,21 +15,20 @@ var (
 )
 
 type Meta struct {
-	Key          string
-	Size         int64
-	DChunks      int64
-	PChunks      int64
-	NumChunks    int
+	Key       string
+	Size      int64
+	DChunks   int64
+	PChunks   int64
+	NumChunks int
 	Placement
-	ChunkSize    int64
-	Reset        bool
-	Deleted      bool
+	ChunkSize int64
+	Reset     bool
+	Deleted   bool
 
-	Balanced    int32
-	slice       Slice
-	placerMeta  *PlacerMeta
-	lastChunk   int64
-	mu          sync.Mutex
+	Balanced   int32
+	placerMeta *PlacerMeta
+	lastChunk  int64
+	mu         sync.Mutex
 }
 
 func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
@@ -44,9 +43,6 @@ func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
 	meta.Deleted = false
 	meta.Balanced = 0
 
-	if meta.slice.initialized {
-		meta.slice = Slice{}
-	}
 	meta.placerMeta = nil
 
 	return meta
