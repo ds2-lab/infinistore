@@ -6,6 +6,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"io/ioutil"
+	syslog "log"
 	"net"
 	"os"
 	"os/signal"
@@ -19,16 +20,8 @@ import (
 )
 
 var (
-	replica       = flag.Bool("replica", false, "Enable lambda replica deployment")
-	debug         = flag.Bool("debug", false, "Enable debug and print debug logs")
-	prefix        = flag.String("prefix", "log", "Log file prefix")
-	d             = flag.Int("d", 10, "The number of data chunks for buildin redis client.")
-	p             = flag.Int("p", 2, "The number of parity chunks for buildin redis client.")
-	log           = &logger.ColorLogger{
-		Level: logger.LOG_LEVEL_WARN,
-	}
-	lambdaLis net.Listener
-	filePath  = "/tmp/infinicache.pid"
+	options       = &global.Options
+	log           = &logger.ColorLogger{ Color: true, Level: logger.LOG_LEVEL_WARN }
 )
 
 func init() {
@@ -40,7 +33,19 @@ func init() {
 
 func main() {
 	done := make(chan struct{}, 1)
-	flag.Parse()
+	checkUsage(options)
+	if options.Debug {
+		log.Level = logger.LOG_LEVEL_ALL
+	}
+	if options.LogFile != "" {
+		logFile, err := os.OpenFile(options.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			syslog.Panic(err)
+		}
+		defer logFile.Close()
+
+		syslog.SetOutput(logFile)
+	}
 
 	// Register signals
 	sig := make(chan os.Signal, 1)
@@ -49,26 +54,16 @@ func main() {
 	// CPU profiling by default
 	//defer profile.Start().Stop()
 
-	global.Prefix = *prefix
-
 	// Initialize collector
-	collector.Create(global.Prefix)
+	collector.Create(options.Prefix)
 
-	// Initialize log
-	if *debug {
-		log.Level = logger.LOG_LEVEL_ALL
-	}
-
-	log.Info("======================================")
-	log.Info("replica: %v || debug: %v", *replica, *debug)
-	log.Info("======================================")
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
 		os.Exit(1)
 		return
 	}
-	lambdaLis, err = net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
+	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
 		log.Error("Failed to listen lambdas: %v", err)
 		os.Exit(1)
@@ -77,8 +72,8 @@ func main() {
 	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
 	// initial proxy server
 	srv := redeo.NewServer(nil)
-	prxy := server.New(*replica)
-	redis := server.NewRedisAdapter(srv, prxy, *d, *p)
+	prxy := server.New(false)
+	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 
 	// config server
 	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSet)
@@ -89,9 +84,12 @@ func main() {
 	go prxy.Serve(lambdaLis)
 	prxy.WaitReady()
 
-	err = ioutil.WriteFile(filePath, []byte(fmt.Sprintf("%d", os.Getpid())), 0660)
+	// Pid is only written after ready
+	err = ioutil.WriteFile(options.Pid, []byte(fmt.Sprintf("%d", os.Getpid())), 0640)
 	if err != nil {
 		log.Warn("Failed to write PID: %v", err)
+	} else {
+		defer os.Remove(options.Pid)
 	}
 
 	// Log goroutine
@@ -134,10 +132,31 @@ func main() {
 	<-done
 	prxy.Release()
 	server.CleanUpScheduler()
-
-	err = os.Remove(filePath)
-	if err != nil {
-		log.Error("Failed to remove PID: %v", err)
-	}
 	os.Exit(0)
+}
+
+func checkUsage(options *global.CommandlineOptions) {
+	var printInfo bool
+	flag.BoolVar(&printInfo, "h", false, "help info?")
+
+	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
+	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
+	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
+	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
+	flag.BoolVar(&options.NoDashboard, "disable-dashboard", false, "Disable dashboard")
+	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
+	flag.StringVar(&options.LogFile, "log", "", "Path to the log file. If dashboard is not disabled, the default value is \"log\".")
+
+	flag.Parse()
+
+	if printInfo {
+		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
+		fmt.Fprintf(os.Stderr, "Available options:\n")
+		flag.PrintDefaults()
+		os.Exit(0);
+	}
+
+	if !options.NoDashboard && options.LogFile == "" {
+		options.LogFile = "log"
+	}
 }
