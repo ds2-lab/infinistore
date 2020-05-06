@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+type ControlCallback func(*Control, interface{})
+
 type Control struct {
 	Cmd        string
 	Addr       string
@@ -14,6 +16,7 @@ type Control struct {
 	Payload    []byte
 	*Request
 	w          *resp.RequestWriter
+	Callback   ControlCallback
 }
 
 func (req *Control) String() string {
@@ -40,6 +43,11 @@ func (ctrl *Control) PrepareForMigrate(w *resp.RequestWriter) {
 
 func (ctrl *Control) PrepareForDel(w *resp.RequestWriter) {
 	ctrl.Request.PrepareForDel(w)
+	ctrl.w = w
+}
+
+func (ctrl *Control) PrepareForRecover(w *resp.RequestWriter) {
+	ctrl.Request.PrepareForRecover(w)
 	ctrl.w = w
 }
 

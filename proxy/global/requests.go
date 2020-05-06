@@ -68,17 +68,33 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 	return counter
 }
 
-func (c *RequestCoordinator) Load(reqId string) (*RequestCounter, bool) {
-	if counter, ok := c.registry.Get(reqId); ok {
-		return counter.(*RequestCounter), ok
-	} else {
-		return nil, ok
-	}
+func (c *RequestCoordinator) RegisterControl(reqId string, ctrl *types.Control) {
+	c.registry.Insert(reqId, ctrl)
 }
 
-func (c *RequestCoordinator) Clear(counter *RequestCounter) {
-	c.registry.Del(counter.reqId)
-	c.pool.Put(counter)
+func (c *RequestCoordinator) Load(reqId string) interface{} {
+	counter, _ := c.registry.Get(reqId)
+	return counter
+}
+
+func (c *RequestCoordinator) Clear(item interface{}) {
+	reqId, ok := item.(string)
+	if ok {
+		c.registry.Del(reqId)
+		return
+	}
+
+	c.tryClearCounter(item)
+}
+
+func (c *RequestCoordinator) tryClearCounter(item interface{}) bool {
+	counter, ok := item.(*RequestCounter)
+	if ok {
+		c.registry.Del(counter.reqId)
+		c.pool.Put(counter)
+	}
+
+	return ok
 }
 
 // Counter for returned requests.
@@ -95,6 +111,10 @@ type RequestCounter struct {
 
 func newRequestCounter() interface{} {
 	return &RequestCounter{}
+}
+
+func (c *RequestCounter) String() {
+	return c.reqId
 }
 
 func (c *RequestCounter) AddSucceeded(chunk int) int64 {

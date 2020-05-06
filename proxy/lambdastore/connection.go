@@ -161,6 +161,8 @@ func (conn *Connection) ServeLambda() {
 				go conn.initMigrateHandler()
 			case protocol.CMD_BYE:
 				conn.bye()
+			case protocol.CMD_RECOVER:
+				conn.recoverHandler()
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
 			}
@@ -280,8 +282,8 @@ func (conn *Connection) getHandler(start time.Time) {
 	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter, ok := global.ReqCoordinator.Load(reqId)
-	if ok == false {
+	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
 		if err := conn.r.SkipBulk(); err != nil {
@@ -402,5 +404,22 @@ func (conn *Connection) bye() {
 	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
 		conn.instance.bye(conn)
+	}
+}
+
+func (conn *Connection) recoverHandler() {
+	conn.log.Debug("RECOVER from lambda.")
+
+	connId, _ := conn.r.ReadBulkString()
+	reqId, _ := conn.r.ReadBulkString()
+	_, _ = conn.r.ReadBulkString()   // chunkId
+
+	ctrl := global.ReqCoordinator.Load(reqId).(*types.Control)
+	if ctrl == nil {
+		conn.log.Warn("No control found for %s", reqId)
+	} else if ctrl.Callback == nil {
+		conn.log.Warn("Control callback not defined for recover request %s", reqId)
+	} else {
+		ctrl.Callback(ctrl, conn.instance)
 	}
 }

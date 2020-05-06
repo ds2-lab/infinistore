@@ -60,7 +60,7 @@ var (
 
 type InstanceRegistry interface {
 	Instance(uint64) (*Instance, bool)
-	Reroute(uint64) *Instance
+	Reroute(int64) *Instance
 }
 
 type ValidateOption struct {
@@ -71,6 +71,7 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
+	BucketId     int64
 
 	cn           *Connection
 	chanCmd      chan types.Command
@@ -808,7 +809,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 }
 
 // TODO: add instance id
-func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
+func (ins *Instance) rerouteGetRequest(req *types.Request, targetIns uint64) bool {
 	// Rerouted keys will not be rerouted.
 	// During parallel recovery, the instance can be backing another instance. (Backing before recovery triggered)
 	if req.InsId != ins.Id() {
@@ -824,6 +825,13 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
 	ins.backups[bakId].chanPriorCmd <- req // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
+	return true
+}
+
+func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target uint64) bool {
+	ins := Registry.Instance(target)
+	ins.chanPriorCmd <- req // Rerouted request should not be queued again.
+	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target, req.Cmd)
 	return true
 }
 
@@ -855,14 +863,19 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				// Options here:
 				// 1. Recover to prevail node and reroute to the node. TODO: change CMD from GET to Recover, and add 1 arg retCMD
 				// 2. Return 404 (current implementation)
-				counter, ok := global.ReqCoordinator.Load(req.Id.ReqId)
-				if ok == false {
-					ins.log.Warn("Request not found: %s", req.Id.ReqId)
-				} else {
-					chunkId, _ := strconv.Atoi(req.Id.ChunkId)
-					counter.ReleaseIfAllReturned(counter.AddReturned(chunkId))
-				}
-				req.Abandon()
+				req.Cmd = protocol.RECOVER
+				req.RetCommand = protocol.Get
+				chunkId, _ := strconv.ParseInt(req.Id.ChunkId, 10, 64)
+				target := Registry.Reroute(chunkId)
+				ins.rerouteRequestWithTarget(req, target)
+				// counter := global.ReqCoordinator.Load(req.Id.ReqId).(*global.RequestCounter)
+				// if counter == nil {
+				// 	ins.log.Warn("Request not found: %s", req.Id.ReqId)
+				// } else {
+				// 	chunkId, _ := strconv.Atoi(req.Id.ChunkId)
+				// 	counter.ReleaseIfAllReturned(counter.AddReturned(chunkId))
+				// }
+				// req.Abandon()
 				return nil
 			}
 			req.PrepareForGet(conn.w)
@@ -872,6 +885,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			if ins.IsRecovering() {
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
+		case protocol.CMD_RECOVER:
+			req.PrepareForRecover(conn.w)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
 			// Unrecoverable
@@ -911,6 +926,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			if ins.IsRecovering() {
 				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
 			}
+		case protocol.CMD_RECOVER:
+			ctrl.PrepareForRecover(conn.w)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
 			// Unrecoverable

@@ -243,6 +243,23 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		w.AppendErrorf("%v", rsp)
 		w.Flush()
 	}
+
+	// Async logic
+	if wrapper.request.Cmd == protocol.CMD_GET {
+		// TODO: limit migration interval
+		// recoverReqId := uuid.New().String()
+		// instanceId := p.movingWindow.getActiveInstanceForChunk(wrapper.request.chunkId)
+		// instance.C() <- &types.Control{
+		// 	Cmd:        protocol.CMD_RECOVER
+		// 	Request:    &types.Request{
+		// 		Id:         types.Id{ wrapper.request.connId, recoverReqId, wrapper.request.chunkId},
+		// 		InsId:      instanceId,
+		// 		Cmd:        protocol.CMD_RECOVER,
+		// 		Key:        wrapper.request.Key,
+		// 	},
+		// 	Callback:   p.handleRecoverCallback,
+		// }
+	}
 }
 
 func (p *Proxy) CollectData() {
@@ -262,6 +279,11 @@ func (p *Proxy) CollectData() {
 	} else {
 		p.log.Info("Data collected.")
 	}
+}
+
+func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
+	instance := arg.(*lambdastore.Instance())
+	// Update meta.
 }
 
 func (p *Proxy) dropEvicted(meta *Meta) {

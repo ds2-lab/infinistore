@@ -21,6 +21,7 @@ type Request struct {
 	InsId        uint64   // Instance the request targeted.
 	Cmd          string
 	Key          string
+	RetCommand   string
 	Body         []byte
 	BodyStream   resp.AllReadCloser
 	Client       *redeo.Client
@@ -61,7 +62,7 @@ func (req *Request) PrepareForGet(w *resp.RequestWriter) {
 	w.WriteBulkString(req.Cmd)
 	w.WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	w.WriteBulkString(req.Id.ReqId)
-	w.WriteBulkString("")
+	w.WriteBulkString("")         // Obsoleted. Chunk Id is included in the key.
 	w.WriteBulkString(req.Key)
 	req.w = w
 }
@@ -79,6 +80,17 @@ func (req *Request) PrepareForDel(w *resp.RequestWriter) {
 	w.WriteBulkString(req.Id.ReqId)
 	w.WriteBulkString(req.Id.ChunkId)
 	w.WriteBulkString(req.Key)
+	req.w = w
+}
+
+func (req *Request) PrepareForRecover(w *resp.RequestWriter) {
+	w.WriteMultiBulkSize(6)
+	w.WriteBulkString(req.Cmd)
+	w.WriteBulkString("")         // Obsoleted. ConnId.
+	w.WriteBulkString(req.Id.ReqId)
+	w.WriteBulkString("")         // Keep consistent with GET
+	w.WriteBulkString(req.Key)
+	w.WriteBulkString(req.RetCommand)
 	req.w = w
 }
 
