@@ -27,6 +27,8 @@ import (
 )
 
 const (
+	INSTANCE_UNSTARTED = 0
+	INSTANCE_STARTED = 1
 	INSTANCE_SLEEP = 0
 	INSTANCE_AWAKE = 1
 	INSTANCE_MAYBE = 2
@@ -66,6 +68,7 @@ type Instance struct {
 	*Deployment
 	Meta
 
+	started       uint32
 	cn            *Connection
 	chanCmd       chan types.Command
 	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
@@ -95,7 +98,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 	dp.log = &logger.ColorLogger{
 		Prefix: fmt.Sprintf("%s ", dp.name),
 		Level:  global.Log.GetLevel(),
-		Color:  true,
+		Color:  !global.Options.NoColor,
 	}
 
 	chanValidated := make(chan struct{})
@@ -123,7 +126,6 @@ func NewInstance(name string, id uint64, replica bool) *Instance {
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 	ins.candidates = candidates
 	ins.backups = make([]*Instance, 0, numBak)
-	ins.log.Debug("Assigned backups:%d, %v", numBak, candidates)
 }
 
 func (ins *Instance) C() chan types.Command {
@@ -133,7 +135,7 @@ func (ins *Instance) C() chan types.Command {
 func (ins *Instance) WarmUp() {
 	ins.validate(&ValidateOption{ WarmUp: true })
 	// Force reset
-	ins.resetCoolTimer()
+	ins.flagWarmed()
 }
 
 func (ins *Instance) Validate(opts ...*ValidateOption) *Connection {
@@ -183,8 +185,13 @@ func (ins *Instance) HandleRequests() {
 		case <-ins.coolTimer.C:
 			// Double check, for it could timeout before a previous request got handled.
 			if len(ins.chanPriorCmd) == 0 || len(ins.chanCmd) == 0 {
-				// Do warm up
-				ins.WarmUp()
+				// Warmup will not work until first call.
+				if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+					ins.resetCoolTimer()
+				} else {
+					// Force warm up.
+					ins.warmUp()
+				}
 			}
 		}
 	}
@@ -606,7 +613,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	ins.warmUp()
+	ins.flagWarmed()
 	if ins.cn != conn {
 		if !ins.startSession(sid) {
 			// Deny session
@@ -749,7 +756,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Reset timer
-	ins.warmUp()
+	ins.flagWarmed()
 }
 
 func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
@@ -873,6 +880,13 @@ func (ins *Instance) isClosedLocked() bool {
 }
 
 func (ins *Instance) warmUp() {
+	ins.validate(&ValidateOption{ WarmUp: true })
+	// Force reset
+	ins.resetCoolTimer()
+}
+
+func (ins *Instance) flagWarmed() {
+	atomic.StoreUint32(&ins.started, INSTANCE_STARTED)
 	if global.IsWarmupWithFixedInterval() {
 		return
 	}
@@ -903,4 +917,22 @@ func (ins *Instance) promoteCandidate(dest int, src int) int {
 	} else {
 		return 0
 	}
+}
+
+func (ins *Instance) CollectData() {
+	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+		return
+	}
+
+	global.DataCollected.Add(1)
+	ins.C() <- &types.Control{Cmd: "data"}
+}
+
+func (ins *Instance) FlagDataCollected(ok string) {
+	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+		return
+	}
+
+	ins.log.Debug("Data collected: %s", ok)
+	global.DataCollected.Done()
 }

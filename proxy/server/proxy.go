@@ -38,7 +38,7 @@ func New(replica bool) *Proxy {
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		group:     group,
 		metaStore: NewPlacer(NewMataStore(), group),
@@ -63,11 +63,11 @@ func New(replica bool) *Proxy {
 		node.AssignBackups(num, candidates)
 
 		// Initialize instance, this is not neccessary if the start time of the instance is acceptable.
-		p.ready.Add(1)
-		go func() {
-			node.WarmUp()
-			p.ready.Done()
-		}()
+		// p.ready.Add(1)
+		// go func() {
+		// 	node.WarmUp()
+		// 	p.ready.Done()
+		// }()
 
 		// Begin handle requests
 		go node.HandleRequests()
@@ -252,9 +252,8 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 
 func (p *Proxy) CollectData() {
 	for i, _ := range p.group.All {
-		global.DataCollected.Add(1)
 		// send data command
-		p.group.Instance(i).C() <- &types.Control{Cmd: "data"}
+		p.group.Instance(i).CollectData()
 	}
 	p.log.Info("Waiting data from Lambda")
 	global.DataCollected.Wait()
