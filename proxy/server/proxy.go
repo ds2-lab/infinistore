@@ -113,13 +113,10 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.placer.NewMeta(
 		key, size, dataChunks, parityChunks, dChunkId, int64(bodyStream.Len()), int(lambdaId), int(randBase))
-	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
-	p.log.Debug("key is %v, lambdaId is %v", prepared.Key, lambdaId)
-	// redirect to do load balance
-	meta, exist := p.placer.GetOrInsert(key, prepared)
-	if exist {
-		meta.close()
-	}
+
+	meta, _ := p.placer.GetOrInsert(key, prepared)
+
+	p.log.Debug("chunkId id is %v, placement is %v", chunkId, meta.Placement)
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -148,14 +145,16 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		EnableCollector: true,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
+	temp, _ := p.placer.Get(key, int(dChunkId))
+	p.log.Debug("get test placement is %v", temp.Placement)
 }
 
 func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
 	key := c.Arg(0).String()
-	reqId := c.Arg(2).String()
-	dChunkId, _ := c.Arg(1).Int()
+	reqId := c.Arg(1).String()
+	dChunkId, _ := c.Arg(2).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
 	// Start counting time.
@@ -181,11 +180,13 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		w.Flush()
 		return
 	}
-	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	instance := p.movingWindow.group.Instance(lambdaDest)
 
+	p.log.Debug("chunkId is %v, lambdaDest is %v, instance id is %v", dChunkId, lambdaDest, instance.Name())
+
+	chunkKey := meta.ChunkKey(int(dChunkId))
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 
@@ -202,6 +203,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	// Unlikely, just to be safe
 	// TODO: reroute and update placement
 	if counter.IsFulfilled() || instance.IsReclaimed() {
+		p.log.Debug("late request %v", reqId)
 		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
 		counter.ReleaseIfAllReturned(status)

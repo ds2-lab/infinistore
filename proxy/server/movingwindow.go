@@ -66,7 +66,9 @@ func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
 	start := mw.findBucket(NumBackupBuckets).start
 	for i := 0; i < len(instances); i++ {
 		num, candidates := scheduler.getBackupsForNode(mw.group.All[start:], i)
-		node := mw.group.Instance(i)
+		//node := mw.group.Instance(i)
+		node := instances[i].LambdaDeployment.(*lambdastore.Instance)
+		mw.log.Debug("instance is %v", node.Name())
 		node.AssignBackups(num, candidates)
 	}
 }
@@ -82,13 +84,17 @@ func (mw *MovingWindow) findBucket(expireCount int) *Bucket {
 
 func (mw *MovingWindow) start() {
 	// init bucket
-	bucket, _ := newBucket(0, mw.group, config.NumLambdaClusters)
+	bucket, _ := newBucket(0, mw.group, config.NumLambdaClusters, "start")
+	for i := 0; i < len(mw.group.All); i++ {
+		mw.log.Debug("instance is %v", mw.group.All[i].Name())
+	}
+
+	// append to bucket list & append current bucket group to proxy group
+	mw.buckets = append(mw.buckets, bucket)
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
-	// append to bucket list & append current bucket group to proxy group
-	mw.buckets = append(mw.buckets, bucket)
 }
 
 func (mw *MovingWindow) Daemon() {
@@ -102,7 +108,6 @@ func (mw *MovingWindow) Daemon() {
 
 			bucket := mw.getCurrentBucket()
 			bucket.scale(config.NumLambdaClusters)
-
 			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
 			//scale out phase finished
@@ -118,10 +123,10 @@ func (mw *MovingWindow) Daemon() {
 			//}
 
 			bucket, _ := newBucket(idx, mw.group, config.NumLambdaClusters)
-			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
 			// append to bucket list & append current bucket group to proxy group
 			mw.buckets = append(mw.buckets, bucket)
+			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
 			degrade := mw.getDegradingInstanceLocked()
 			if degrade != nil {
@@ -170,6 +175,9 @@ func (mw *MovingWindow) touch(meta *Meta) {
 }
 
 func (mw *MovingWindow) activeInstances(num int) []*GroupInstance {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
 	return mw.getCurrentBucket().activeInstances(num)
 }
 
@@ -182,7 +190,7 @@ func (mw *MovingWindow) avgSize(bucket *Bucket) int {
 		sum += int(mw.group.Instance(int(i)).Meta.Size())
 	}
 
-	return sum / int(end-start+1)
+	return sum / (end - start + 1)
 }
 
 func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {

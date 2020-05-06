@@ -17,7 +17,7 @@ const NumLambdaClusters = 12
 const LambdaStoreName = "LambdaStore"
 
 // LambdaPrefix Prefix of Lambda function.
-const LambdaPrefix = "Proxy2Node"
+const LambdaPrefix = "Your Lambda Function Prefix"
 
 // InstanceWarmTimout Interval to warmup Lambda functions.
 const InstanceWarmTimout = 1 * time.Minute

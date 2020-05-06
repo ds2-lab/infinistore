@@ -1,27 +1,28 @@
 package global
 
 import (
-	"github.com/cornelk/hashmap"
 	"sync"
 	"sync/atomic"
+
+	"github.com/cornelk/hashmap"
 
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
-	REQCNT_STATUS_SUCCEED  = 0x00010000
-	REQCNT_STATUS_RETURNED = 0x00000001
-	REQCNT_MASK_SUCCEED    = 0x11110000
-	REQCNT_MASK_RETURNED   = 0x00001111
+	REQCNT_STATUS_SUCCEED  = 0x0000000100000000
+	REQCNT_STATUS_RETURNED = 0x0000000000000001
+	REQCNT_MASK_SUCCEED    = 0x1111111100000000
+	REQCNT_MASK_RETURNED   = 0x0000000011111111
 )
 
 var (
-	emptySlice = make([]*types.Request, 100)     // Large enough to cover most cases.
+	emptySlice = make([]*types.Request, 100) // Large enough to cover most cases.
 )
 
 type RequestCoordinator struct {
-	pool         *sync.Pool
-	registry     *hashmap.HashMap
+	pool     *sync.Pool
+	registry *hashmap.HashMap
 }
 
 func NewRequestCoordinator(size uintptr) *RequestCoordinator {
@@ -54,7 +55,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 			counter.Requests = make([]*types.Request, l)
 		} else {
 			if cap(emptySlice) < l {
-				emptySlice = make([]*types.Request, cap(emptySlice) * 2)
+				emptySlice = make([]*types.Request, cap(emptySlice)*2)
 			}
 			if len(counter.Requests) != l {
 				counter.Requests = counter.Requests[:l]
@@ -87,9 +88,9 @@ type RequestCounter struct {
 	ParityShards int64
 	Requests     []*types.Request
 
-	coordinator  *RequestCoordinator
-	reqId        string
-	status       int64       // int32(succeed) + int32(returned)
+	coordinator *RequestCoordinator
+	reqId       string
+	status      int64 // int32(succeed) + int32(returned)
 }
 
 func newRequestCounter() interface{} {
@@ -97,7 +98,7 @@ func newRequestCounter() interface{} {
 }
 
 func (c *RequestCounter) AddSucceeded(chunk int) int64 {
-	status := atomic.AddInt64(&c.status, REQCNT_STATUS_SUCCEED + REQCNT_STATUS_RETURNED)
+	status := atomic.AddInt64(&c.status, REQCNT_STATUS_SUCCEED+REQCNT_STATUS_RETURNED)
 	if c.Requests[chunk] != nil {
 		c.Requests[chunk].MarkReturned()
 	}
@@ -117,7 +118,7 @@ func (c *RequestCounter) Status() int64 {
 }
 
 func (c *RequestCounter) Succeeded() int64 {
-	return atomic.LoadInt64(&c.status) & REQCNT_MASK_SUCCEED
+	return (atomic.LoadInt64(&c.status) & REQCNT_MASK_SUCCEED) >> 32
 }
 
 func (c *RequestCounter) Returned() int64 {
@@ -128,21 +129,21 @@ func (c *RequestCounter) IsFulfilled(status ...int64) bool {
 	if len(status) == 0 {
 		return c.IsFulfilled(c.Status())
 	}
-	return status[0] & REQCNT_MASK_SUCCEED >= c.DataShards
+	return (status[0]&REQCNT_MASK_SUCCEED)>>32 >= c.DataShards
 }
 
 func (c *RequestCounter) IsLate(status ...int64) bool {
 	if len(status) == 0 {
 		return c.IsLate(c.Status())
 	}
-	return status[0] & REQCNT_MASK_SUCCEED > c.DataShards
+	return (status[0]&REQCNT_MASK_SUCCEED)>>32 > c.DataShards
 }
 
 func (c *RequestCounter) IsAllReturned(status ...int64) bool {
 	if len(status) == 0 {
 		return c.IsAllReturned(c.Status())
 	}
-	return status[0] & REQCNT_MASK_RETURNED >= c.DataShards + c.ParityShards
+	return status[0]&REQCNT_MASK_RETURNED >= c.DataShards+c.ParityShards
 }
 
 func (c *RequestCounter) Release() {

@@ -39,7 +39,7 @@ type Bucket struct {
 	end   int
 }
 
-func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
+func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Bucket, err error) {
 	bucket = bucketPool.Get().(*Bucket)
 
 	bucket.id = id
@@ -48,20 +48,24 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 	bucket.group = group
 
 	// expand
-	bucket.end, err = group.Expand(num)
-	if err != nil {
-		bucket.Close()
-		bucket = nil
-		return
+	if len(args) > 0 {
+		bucket.end = config.NumLambdaClusters
+	} else {
+		bucket.end, err = group.Expand(num)
+		if err != nil {
+			bucket.Close()
+			bucket = nil
+			return
+		}
 	}
-	bucket.start = bucket.end - num
 
+	bucket.start = bucket.end - num
 	bucket.initInstance(bucket.start, num)
 	return
 }
 
-func (b *Bucket) initInstance(from, len int) {
-	for i := from; i < from+len; i++ {
+func (b *Bucket) initInstance(from, length int) {
+	for i := from; i < from+length; i++ {
 		node := scheduler.GetForGroup(b.group, i)
 		node.Meta.Capacity = config.InstanceCapacity
 		node.Meta.IncreaseSize(config.InstanceOverhead)
@@ -78,8 +82,9 @@ func (b *Bucket) initInstance(from, len int) {
 			b.ready.Done()
 		}()
 	}
-
-	b.instances = b.group.SubGroup(b.start, from+len)
+	//b.log.Debug("start name is %v, end %v, base is %v", b.group.All[b.start].Name(), b.group.All[from+len-1].Name(), b.group.base)
+	b.instances = b.group.SubGroup(from, from+length)
+	b.log.Debug("len is %v, start is %v, end is %v", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
 
 }
 
@@ -118,6 +123,5 @@ func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 	if activeNum > b.end-b.start {
 		return b.instances
 	}
-
-	return b.instances[b.end-activeNum : b.end]
+	return b.group.All[b.end-activeNum : b.end]
 }
