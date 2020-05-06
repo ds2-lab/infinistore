@@ -113,7 +113,7 @@ func newRequestCounter() interface{} {
 	return &RequestCounter{}
 }
 
-func (c *RequestCounter) String() {
+func (c *RequestCounter) String() string {
 	return c.reqId
 }
 

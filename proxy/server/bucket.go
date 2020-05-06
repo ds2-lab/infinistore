@@ -69,6 +69,7 @@ func (b *Bucket) initInstance(from, length int) {
 		node := scheduler.GetForGroup(b.group, i)
 		node.Meta.Capacity = config.InstanceCapacity
 		node.Meta.IncreaseSize(config.InstanceOverhead)
+		node.BucketId = int64(b.id)
 		b.log.Debug("[adding lambda instance %v]", node.Name())
 
 		// Begin handle requests
