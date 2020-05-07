@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"strconv"
 	"sync/atomic"
-
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
@@ -24,16 +23,16 @@ import (
 // FULL < INCREMENTAL
 type Meta struct {
 	// Sequence of the last confirmed log. Logs store by sequence.
-	Term     uint64
+	Term uint64
 
 	// Total transmission size for restoring all confirmed logs.
-	Updates  uint64
+	Updates uint64
 
 	// Rank for lambda to decide if a fast recovery is required.
 	DiffRank float64
 
 	// Hash of the last confirmed log.
-	Hash     string
+	Hash string
 
 	// Sequence of snapshot.
 	SnapshotTerm    uint64
@@ -42,13 +41,13 @@ type Meta struct {
 	SnapshotUpdates uint64
 
 	// Total size of snapshot for transmission.
-	SnapshotSize    uint64
+	SnapshotSize uint64
 
 	// Flag shows that if meta is out of sync with the corresponding lambda.
 	Stale           bool
 
 	// Capacity of the instance.
-	Capacity        uint64
+	Capacity uint64
 
 	size            uint64             // Size of the instance.
 	// chunks map[string]*ChuckMeta

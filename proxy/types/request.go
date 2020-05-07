@@ -2,32 +2,35 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
-	REQUEST_INVOKED = 0
-	REQUEST_RETURNED = 1
+	REQUEST_INVOKED   = 0
+	REQUEST_RETURNED  = 1
 	REQUEST_RESPONDED = 2
 )
 
 type Request struct {
-	Id           Id
-	InsId        uint64   // Instance the request targeted.
-	Cmd          string
-	Key          string
-	Body         []byte
-	BodyStream   resp.AllReadCloser
-	Client       *redeo.Client
+	Id              Id
+	InsId           uint64 // Instance the request targeted.
+	Cmd             string
+	Key             string
+	RetCommand      string
+	Body            []byte
+	BodyStream      resp.AllReadCloser
+	Client          *redeo.Client
 	EnableCollector bool
+	Obj             interface{}
 
 	w                *resp.RequestWriter
-	status        uint32
+	status           uint32
 	streamingStarted bool
 }
 
@@ -61,7 +64,7 @@ func (req *Request) PrepareForGet(w *resp.RequestWriter) {
 	w.WriteBulkString(req.Cmd)
 	w.WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	w.WriteBulkString(req.Id.ReqId)
-	w.WriteBulkString("")
+	w.WriteBulkString("") // Obsoleted. Chunk Id is included in the key.
 	w.WriteBulkString(req.Key)
 	req.w = w
 }
@@ -79,6 +82,17 @@ func (req *Request) PrepareForDel(w *resp.RequestWriter) {
 	w.WriteBulkString(req.Id.ReqId)
 	w.WriteBulkString(req.Id.ChunkId)
 	w.WriteBulkString(req.Key)
+	req.w = w
+}
+
+func (req *Request) PrepareForRecover(w *resp.RequestWriter) {
+	w.WriteMultiBulkSize(6)
+	w.WriteBulkString(req.Cmd)
+	w.WriteBulkString("") // Obsoleted. ConnId.
+	w.WriteBulkString(req.Id.ReqId)
+	w.WriteBulkString("") // Keep consistent with GET
+	w.WriteBulkString(req.Key)
+	w.WriteBulkString(req.RetCommand)
 	req.w = w
 }
 
@@ -132,7 +146,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return false
 	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{ rsp, req })
+		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
@@ -147,5 +161,5 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
-	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
+	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }

@@ -2,14 +2,25 @@ package types
 
 import (
 	"errors"
+	"strconv"
 )
 
 var ErrNoSpareDeployment = errors.New("No spare deployment")
 
 type Id struct {
-	ConnId  int
-	ReqId   string
-	ChunkId string
+	ConnId   int
+	ReqId    string
+	ChunkId  string
+	oldChunk *string
+	chunk    int
+}
+
+func (id *Id) Chunk() int {
+	if id.oldChunk != &id.ChunkId {
+		id.chunk, _ = strconv.Atoi(id.ChunkId)
+		id.oldChunk = &id.ChunkId
+	}
+	return id.chunk
 }
 
 type Command interface {

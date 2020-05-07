@@ -2,10 +2,10 @@ package migrator
 
 import (
 	"io"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"net"
 	"sync"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 // forwardConnection - Manages a forwardConnection connection, piping data between local and remote.
@@ -142,7 +142,7 @@ func (fconn *forwardConnection) pipe(src io.Reader, dst io.Writer) {
 			fconn.receivedBytes += uint64(n)
 		}
 
-		if (readErr != nil) {
+		if readErr != nil {
 			fconn.close()
 			return
 		}

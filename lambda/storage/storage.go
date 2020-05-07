@@ -106,7 +106,7 @@ func New(id uint64, persistent bool) *Storage {
 }
 
 func (s *Storage) Init(id uint64, persistent bool) (types.Storage, error) {
-	if s != nil {
+	if s != nil || s.id == id {
 		return s, nil
 	} else {
 		return New(id, persistent), nil
@@ -141,9 +141,9 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 		doubleCheck = true
 	} else {
 		note := atomic.LoadUint32(&s.safenote)
-		if ((!chunk.Backup && (note & RECOVERING_MAIN) > 0) ||
+		if ((!chunk.Backup && (note & RECOVERING_MAIN) > 0) && chunk.Term <= s.lineage.Term ||
 				(chunk.Backup && (note & RECOVERING_BACKUP) > 0)) {
-			// Corresponding lineage is recovering.
+			// Corresponding lineage is recovering, and the chunk is not just set
 			doubleCheck = true
 		}
 		// else: We are ok to continue.
@@ -188,7 +188,7 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 	}
 }
 
-func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
+func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
 	s.setSafe.Wait()
 
 	// Lock lineage, ensure operation get processed in the term.
@@ -212,11 +212,19 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 			OpRet: types.OpDelayedSuccess(),
 			Body: val,
 		}
+		// Copy options. Field "Persisted" only so far.
+		if opt != nil {
+			op.Persisted = opt.Persisted
+		}
 		s.chanOps <- op
 		return op.OpRet
 	} else {
 		return types.OpSuccess()
 	}
+}
+
+func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
+	return s.setImpl(key, chunkId, val, nil)
 }
 
 func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) *types.OpRet {
@@ -225,7 +233,22 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 		return types.OpError(errors.New(fmt.Sprintf("Error on read stream: %v", err)))
 	}
 
-	return s.Set(key, chunkId, val)
+	return s.setImpl(key, chunkId, val, nil)
+}
+
+func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
+	bucket := s.getBucket(key)
+	object := &s3.GetObjectInput {
+		Bucket: s.bucket(&bucket),
+		Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key)),
+	}
+	writer := new(aws.WriteAtBuffer)
+	downloader := s3manager.NewDownloader(s.GetAWSSession())
+	if _, err := downloader.Download(writer, object); err != nil {
+		return types.OpError(err)
+	}
+
+	return s.setImpl(key, chunkId, writer.Bytes(), &types.OpWrapper{ Persisted: true })
 }
 
 func (s *Storage) Del(key string, chunkId string) *types.OpRet {
@@ -409,7 +432,7 @@ func (s *Storage) TrackLineage() {
 				token <- nil
 			}
 
-			// Try to get token to continue
+			// Try to get token to continue, if a previously operation persisted, handle that first.
 			persistedOp := <-token
 			if persistedOp != nil {
 				// Accept result
@@ -434,7 +457,7 @@ func (s *Storage) TrackLineage() {
 
 			// Upload to s3
 			var failure error
-			if op.LineageOp.Op == types.OP_SET {
+			if op.LineageOp.Op == types.OP_SET && !op.Persisted {
 				go func() {
 					for i := 0; i < attemps; i++ {
 						if i > 0 {

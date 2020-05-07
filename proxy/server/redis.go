@@ -87,7 +87,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 
 	key := c.Arg(0).String()
 
-	meta, ok := a.proxy.metaStore.Get(key, 0)
+	meta, ok := a.proxy.placer.Get(key, 0)
 	if !ok || meta.Deleted {
 		a.log.Warn("KEY %s not found, please set first.", key)
 		w.AppendNil()

@@ -87,8 +87,9 @@ type LineageOp struct {
 type OpWrapper struct {
 	LineageOp
 	*OpRet
-	Body      []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
-	OpIdx     int
+	Body         []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
+	OpIdx        int
+	Persisted    bool      // Indicate the operation has been persisted.
 }
 
 type CommitOption struct {

@@ -4,11 +4,12 @@ go 1.12
 
 require (
 	github.com/ScottMansfield/nanolog v0.2.0
-	github.com/aws/aws-lambda-go v1.13.3
-	github.com/aws/aws-sdk-go v1.28.11
+	github.com/aws/aws-lambda-go v1.16.0
+	github.com/aws/aws-sdk-go v1.30.15
 	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/cespare/xxhash v1.1.0
 	github.com/cornelk/hashmap v1.0.1
+	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/gizak/termui/v3 v3.1.0
 	github.com/google/uuid v1.1.1
@@ -18,13 +19,14 @@ require (
 	github.com/klauspost/reedsolomon v1.9.3
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mason-leap-lab/redeo v1.1.2
-	github.com/mattn/go-colorable v0.1.4 // indirect
+	github.com/mattn/go-colorable v0.1.6 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b
 	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d
 	github.com/onsi/ginkgo v1.12.0
 	github.com/onsi/gomega v1.9.0
-	github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7
-	golang.org/x/net v0.0.0-20181129055619-fae4c4e3ad76 // indirect
-	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
+	github.com/seiflotfy/cuckoofilter v0.0.0-20200416141329-862a88987de7
+	github.com/stretchr/objx v0.2.0 // indirect
+	github.com/urfave/cli/v2 v2.2.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
+	gopkg.in/yaml.v2 v2.2.8 // indirect
 )

@@ -4,6 +4,7 @@ import (
 	"time"
 )
 
+
 var (
 	Immortal = true
 )
@@ -14,11 +15,11 @@ type Lifetime struct {
 	expected  time.Duration
 }
 
-func New(expected time.Duration) *Lifetime{
+func New(expected time.Duration) *Lifetime {
 	return &Lifetime{
 		birthtime: time.Now(),
-		alive: true,
-		expected: expected,
+		alive:     true,
+		expected:  expected,
 	}
 }
 

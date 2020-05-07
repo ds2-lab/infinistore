@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
@@ -46,6 +47,7 @@ var (
 	// Data storage
 	storeId uint64
 	store   types.Storage = (*storage.Storage)(nil)
+	persist types.PersistentStorage
 	lineage types.Lineage
 
 	// Proxy that links stores as a system
@@ -91,8 +93,9 @@ func getAwsReqId(ctx context.Context) string {
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
-	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
+	store, _ = store.Init(input.Id, input.IsPersistentEnabled())    // NOTE: store may get reinitialized if id changes.
 	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+	persist = util.Ifelse(lineage == nil, nil, store.(*storage.Storage)).(types.PersistentStorage)
 
 	// Initialize session.
 	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
@@ -148,10 +151,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 
 	var recoverErrs []chan error
-	var recoverFast bool
+	var flags int64
 	if lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
-		pongHandler(ctx, session.Connection, false)
+		pongHandler(ctx, session.Connection, 0)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
@@ -175,27 +178,35 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			if err != nil {
 				return lineage.Status().ProtocolStatus(), err
 			} else if !metas[i].Consistent {
-				inconsistency++
+				if input.IsBackingOnly() && i > 0 {
+					// In backing only mode, we will not try to recover main repository.
+					// And any data loss will be regarded as signs of reclaimation.
+					flags |= protocol.PONG_RECLAIMED
+				} else {
+					inconsistency++
+				}
 			}
 		}
 
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// POND represents the node is ready to serve, no fast recovery required.
-			pongHandler(ctx, session.Connection, false)
+			pongHandler(ctx, session.Connection, flags)
 		} else {
 			session.Timeout.Busy()
 			recoverErrs = make([]chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
-			if !metas[0].Consistent {
+			if !input.IsBackingOnly() && !metas[0].Consistent {
 				fast, chanErr := lineage.Recover(metas[0])
 				// POND represents the node is ready to serve, request fast recovery.
-				pongHandler(ctx, session.Connection, fast)
+				if fast {
+					flags |= protocol.PONG_RECOVERY
+				}
+				pongHandler(ctx, session.Connection, flags)
 				recoverErrs = append(recoverErrs, chanErr)
-				recoverFast = fast
 			} else {
-				pongHandler(ctx, session.Connection, false)
+				pongHandler(ctx, session.Connection, flags)
 			}
 
 			// Recovery backup
@@ -218,7 +229,8 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
 		// Signal proxy the recover procedure is done.
-		if recoverFast {
+		// Normally the recovery of main repository is longer than backup, so we just wait all is done.
+		if flags & protocol.PONG_RECOVERY > 0 {
 			recoveredHandler(ctx, session.Connection)
 		}
 		session.Timeout.DoneBusy()
@@ -395,22 +407,22 @@ func issuePong() bool {
 	}
 }
 
-func pongHandler(ctx context.Context, conn net.Conn, recover bool) error {
+func pongHandler(ctx context.Context, conn net.Conn, flags int64) error {
 	if conn == nil && DRY_RUN {
-		log.Debug("Issue pong, request fast recovery: %v", recover)
+		pongLog(flags)
 		ready := ctx.Value(&ContextKeyReady)
 		close(ready.(chan struct{}))
 		return nil
 	}
 	writer := resp.NewResponseWriter(conn)
-	return pongImpl(writer, recover)
+	return pongImpl(writer, flags)
 }
 
 func pong(w resp.ResponseWriter) error {
-	return pongImpl(w, false)
+	return pongImpl(w, 0)
 }
 
-func pongImpl(w resp.ResponseWriter, recover bool) error {
+func pongImpl(w resp.ResponseWriter, flags int64) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -421,25 +433,31 @@ func pongImpl(w resp.ResponseWriter, recover bool) error {
 		return nil
 	}
 
-	log.Debug("POND")
-
-	info := int64(storeId)
-	flag := int64(0)
-	if recover {
-		flag += 0x01
-		log.Debug("Fast recovery requested.")
-	}
+	pongLog(flags)
 
 	w.AppendBulkString("pong")
-	w.AppendInt(info)
+	w.AppendInt(int64(storeId))
 	w.AppendBulkString(lambdaLife.GetSession().Sid)
-	w.AppendInt(flag)
+	w.AppendInt(flags)
 	if err := w.Flush(); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err
 	}
 
 	return nil
+}
+
+func pongLog(flags int64) {
+	var claim string
+	if flags > 0 {
+		// These two claims are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
+		if flags & protocol.PONG_RECOVERY > 0 {
+			claim = " with fast recovery requested."
+		} else if flags & protocol.PONG_RECLAIMED > 0 {
+			claim = " with claiming the node has experienced reclaimation."
+		}
+	}
+	log.Debug("POND%s", claim)
 }
 
 func recoveredHandler(ctx context.Context, conn net.Conn) error {
@@ -670,7 +688,7 @@ func main() {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &types.Response{
 			ResponseWriter: w,
-			Cmd:            "set",
+			Cmd:            c.Name,
 			ConnId:         connId,
 			ReqId:          reqId,
 			ChunkId:        chunkId,
@@ -683,6 +701,91 @@ func main() {
 
 		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s", key, connId, chunkId)
 		collector.Send(&types.DataEntry{types.OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), session.Id})
+	})
+
+	srv.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
+		session := lambdaLife.GetSession()
+		session.Timeout.Busy()
+		session.Requests++
+		extension := lambdaLife.TICK_ERROR
+		if session.Requests > 1 {
+			extension = lambdaLife.TICK
+		}
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
+
+		t := time.Now()
+		log.Debug("In RECOVER handler")
+
+		connId := c.Arg(0).String()
+		reqId := c.Arg(1).String()
+		chunkId := c.Arg(2).String()
+		key := c.Arg(3).String()
+		retCmd := c.Arg(4).String()
+
+		if persist == nil {
+			w.AppendErrorf("Recover is not supported")
+			if err := w.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
+		t2 := time.Now()
+
+		// Recover.
+		ret = persist.SetRecovery(key, chunkId)
+		if ret.Error() != nil {
+			log.Error("%v", ret.Error())
+			w.AppendErrorf("%v", ret.Error())
+			if err := w.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+				// Ignore
+			}
+			return
+		}
+
+		// Immediate get, unlikely to error, don't overwrite ret.
+		var stream resp.AllReadCloser
+		if retCmd == protocol.CMD_GET {
+			_, stream, _ = store.GetStream(key)
+			if stream != nil {
+				defer stream.Close()
+			}
+		}
+		d2 := time.Since(t2)
+
+		// write Key, clientId, chunkId, body back to proxy
+		response := &types.Response{
+			ResponseWriter: w,
+			Cmd:            retCmd,
+			ConnId:         connId,
+			ReqId:          reqId,
+			ChunkId:        chunkId,
+			BodyStream:     stream,
+		}
+		response.Prepare()
+
+		t3 := time.Now()
+		if err := response.Flush(); err != nil {
+			log.Error("Error on recover::flush(recover key %s): %v", key, err)
+			// Ignore
+		}
+		d3 := time.Since(t3)
+
+		dt := time.Since(t)
+		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
+		if retCmd == protocol.CMD_GET {
+			collector.Send(&types.DataEntry{types.OP_RECOVER, "200", reqId, chunkId, d2, d3, dt, session.Id})
+		}
 	})
 
 	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {

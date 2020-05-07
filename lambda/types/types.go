@@ -13,6 +13,7 @@ const (
 	OP_SET         = 0
 	OP_GET         = 1
 	OP_DEL         = 2
+	OP_RECOVER     = 3
 	OP_WARMUP      = 90
 	OP_MIGRATION   = 91
 
@@ -35,6 +36,11 @@ type Storage interface {
 	Del(string,string) *OpRet
 	Len() int
 	Keys()  <-chan string
+}
+
+type PersistentStorage interface {
+	Storage
+	SetRecovery(string, string) *OpRet
 }
 
 // For storage

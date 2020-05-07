@@ -65,7 +65,7 @@ func (logger *ColorLogger) log(color, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	if logger.Color && color != "" {
 		lines := strings.Split(msg, "\n")
-		for i, _ := range (lines) {
+		for i, _ := range lines {
 			lines[i] = ansi.Color(lines[i], color)
 		}
 		msg = strings.Join(lines, "\n")

@@ -72,13 +72,11 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   Create the S3 bucket to store the zip file of the Lambda code and data output from Lambda functions. Remember the name of this bucket for the configuration in next step.
 
-
 - ### Configuration
 
   #### Lambda function create and config
 
   Edit `deploy/create_function.sh` and `deploy/update_function.sh`
-
   ```shell
   PREFIX="your lambda function prefix"
   S3="your bucket name"
@@ -163,4 +161,4 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
 Client Library [ecRedis](https://github.com/mason-leap-lab/infinicache/tree/master/client)  
 Redis Protocol [redeo](https://github.com/mason-leap-lab/redeo)  
-Benchmark tool [redbench](https://github.com/wangaoone/redbench)  
+Benchmark tool [redbench](https://github.com/wangaoone/redbench)

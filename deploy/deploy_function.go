@@ -3,18 +3,20 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
+	"sync"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"math"
-	"sync"
-	"time"
 )
 
 const (
+
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::[aws account id]:role/[role name]"
+	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
@@ -30,15 +32,16 @@ var (
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
 	batch   = flag.Int64("batch", 5, "batch Number, no need to modify")
-	mem     = flag.Int64("mem", 1024, "the memory of lambda")
-	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
+	mem     = flag.Int64("mem", 256, "the memory of lambda")
+	bucket  = flag.String("S3", "ao.lambda.code", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("sb-your-subnet-1"),
-		aws.String("sb-your-subnet-2"),
+		aws.String("subnet-eeb536c0"),
+		//aws.String("subnet-f94739f6"),
+		aws.String("subnet-f432faca"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-your-security-group"),
+		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
 	}
 )
 
@@ -94,7 +97,7 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	input := &lambda.UpdateFunctionCodeInput{
 		FunctionName: aws.String(name),
-		S3Bucket:     bucket,
+		S3Bucket:     aws.String(*bucket),
 		S3Key:        aws.String(fmt.Sprintf("%s.zip", *key)),
 	}
 	result, err := svc.UpdateFunctionCode(input)
@@ -138,7 +141,7 @@ func createFunction(name string, svc *lambda.Lambda) {
 	}
 	input := &lambda.CreateFunctionInput{
 		Code: &lambda.FunctionCode{
-			S3Bucket: bucket,
+			S3Bucket: aws.String(*bucket),
 			S3Key:    aws.String(fmt.Sprintf("%s.zip", *key)),
 		},
 		FunctionName: aws.String(name),
@@ -221,7 +224,7 @@ func main() {
 			fmt.Println(j)
 			var wg sync.WaitGroup
 			//for i := j*(*batch) + *from; i < (j+1)*(*batch); i++ {
-			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to ; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to; i++ {
 				wg.Add(1)
 				go updateCode(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}
