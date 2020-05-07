@@ -9,16 +9,13 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
-var emptyTemplate = make([]*GroupInstance, config.LambdaMaxDeployments)
+var (
+	ErrOutOfBound = errors.New("instance is not active")
+)
 
 type Group struct {
-	All []*GroupInstance
-
-	size      int
-	sliceBase uint64
-
-	base int
-
+	All       []*GroupInstance
+	idxBase   int
 	mu sync.RWMutex
 }
 
@@ -35,42 +32,58 @@ func NewGroup(num int) *Group {
 }
 
 func (g *Group) Len() int {
-	return g.size
+	return len(g.All)
 }
 
 func (g *Group) Expand(n int) (int, error) {
-	if cap(g.All) < g.Len()+n {
-		return g.size, errors.New("insufficient lambda deployments")
-	}
-	// bin packing
 	if cap(g.All) < len(g.All)+n {
-		g.mu.Lock()
-		copy(g.All[:len(g.All)-g.base], g.All[g.base:len(g.All)])
-		copy(g.All[len(g.All):cap(g.All)], emptyTemplate[:cap(g.All)-len(g.All)])
-		g.base = 0
-		g.mu.Unlock()
+		return g.idxBase + len(g.All), errors.New("insufficient lambda deployments")
 	}
+
+	g.mu.RLock()
 	g.All = g.All[0 : len(g.All)+n]
-	g.size = len(g.All) - g.base
-	return g.size, nil
+	end := g.idxBase + len(g.All)
+	g.mu.RUnlock()
+
+	return end, nil
+}
+
+func (g *Group) Expire(n int) error {
+	if n > len(g.All) {
+		return errors.New("not enough instance to be expired")
+	}
+
+	// Force bin packing
+	all := make([]*GroupInstance, config.LambdaMaxDeployments)
+	g.mu.Lock()
+	all = all[:len(g.All) - n]
+	copy(all, g.All[n:len(g.All)])
+	g.idxBase += n
+	g.All = all
+	g.mu.Unlock()
+
+	return nil
 }
 
 func (g *Group) Base(offset int) int {
 	g.mu.RLock()
-	offset += g.base
+	offset -= g.idxBase
 	g.mu.RUnlock()
 	return offset
 }
 
-func (g *Group) SubGroup(start int, end int) []*GroupInstance {
+func (g *Group) SubGroup(startOffset int, endOffset int) []*GroupInstance {
 	g.mu.RLock()
-	subGroup := g.All[start+g.base : end+g.base]
+	subGroup := g.All[startOffset-g.idxBase:endOffset-g.idxBase]
 	g.mu.RUnlock()
 	return subGroup
 }
 
 func (g *Group) IsBoundary(end int) bool {
-	return g.size == end
+	g.mu.RLock()
+	ret := len(g.All) + g.idxBase == end
+	g.mu.RUnlock()
+	return ret
 }
 
 func (g *Group) Reserve(idx int, d types.LambdaDeployment) *GroupInstance {
@@ -78,35 +91,45 @@ func (g *Group) Reserve(idx int, d types.LambdaDeployment) *GroupInstance {
 }
 
 func (g *Group) Set(ins *GroupInstance) {
-	switch ins.LambdaDeployment.(type) {
-	case *lambdastore.Deployment:
-		ins.LambdaDeployment = lambdastore.NewInstanceFromDeployment(ins.LambdaDeployment.(*lambdastore.Deployment))
-	}
-	g.All[ins.idx] = ins
-}
-
-func (g *Group) Append(ins *GroupInstance) {
-	switch ins.LambdaDeployment.(type) {
-	case *lambdastore.Deployment:
-		ins.LambdaDeployment = lambdastore.NewInstanceFromDeployment(ins.LambdaDeployment.(*lambdastore.Deployment))
-	}
-	g.All = append(g.All, ins)
-	//g.size += 1
+	g.setWithTest(ins, false)
 }
 
 func (g *Group) Validate(ins *GroupInstance) *GroupInstance {
-	gins := g.All[ins.idx]
-	if gins == nil {
-		g.Set(ins)
-	} else if gins != ins {
-		gins.LambdaDeployment.(*lambdastore.Instance).Switch(ins)
+	ret, err := g.setWithTest(ins, true)
+	if err != nil {
+		return nil
+	} else if ret != ins {
+		ret.LambdaDeployment.(*lambdastore.Instance).Switch(ins)
 	}
-
-	return gins
+	return ret
 }
 
 func (g *Group) Instance(idx int) *lambdastore.Instance {
-	return g.All[idx].LambdaDeployment.(*lambdastore.Instance)
+	g.mu.RLock()
+	ret := g.All[idx-g.idxBase]
+	g.mu.RUnlock()
+	return ret.LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (g *Group) setWithTest(ins *GroupInstance, test bool) (ret *GroupInstance, err error) {
+	g.mu.RLock()
+	if !test {
+		g.All[ins.idx-g.idxBase] = ins
+		ret = ins
+	} else if ins.idx < g.idxBase || ins.idx >= g.idxBase + len(g.All) {
+		err = ErrOutOfBound
+	} else if ret = g.All[ins.idx-g.idxBase]; ret == nil {
+		g.All[ins.idx-g.idxBase] = ins
+	}
+	g.mu.RUnlock()
+
+	if ret != nil {
+		switch deployment := ret.LambdaDeployment.(type) {
+		case *lambdastore.Deployment:
+			ret.LambdaDeployment = lambdastore.NewInstanceFromDeployment(deployment)
+		}
+	}
+	return
 }
 
 func (g *Group) InstanceStatus(idx int) types.InstanceStatus {

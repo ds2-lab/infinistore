@@ -163,7 +163,7 @@ func (c *RequestCounter) IsAllReturned(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsAllReturned(c.Status())
 	}
-	return status[0]&REQCNT_MASK_RETURNED >= uint64(c.DataShards + c.ParityShards)
+	return status[0]&REQCNT_MASK_RETURNED >= uint64(c.DataShards+c.ParityShards)
 }
 
 func (c *RequestCounter) Release() {
