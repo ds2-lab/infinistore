@@ -28,10 +28,6 @@ type Scheduler struct {
 	actives *hashmap.HashMap
 }
 
-func (s *Scheduler) Reroute(uint64) *lambdastore.Instance {
-	panic("implement me")
-}
-
 // numCluster = small number, numDeployment = large number
 func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 	s := &Scheduler{
@@ -92,7 +88,7 @@ func (s *Scheduler) getBackupsForNode(instances []*GroupInstance, i int) (int, [
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = instances[(i + j*distance + rand.Int()%distance + 1) % len(instances)].LambdaDeployment.(*lambdastore.Instance) // Random to avoid the same backup set.
+		candidates[j] = instances[(i+j*distance+rand.Int()%distance+1)%len(instances)].LambdaDeployment.(*lambdastore.Instance) // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }
@@ -117,23 +113,23 @@ func (s *Scheduler) Deployment(id uint64) (types.LambdaDeployment, bool) {
 	}
 }
 
-func (s *Scheduler) Instance(id uint64) (*lambdastore.Instance, bool) {
-	got, exists := s.actives.Get(id)
-	if !exists {
-		return nil, exists
-	}
-
-	ins := got.(*GroupInstance)
-	validated := ins.group.Validate(ins)
-	if validated != ins {
-		// Switch keys
-		s.actives.Set(validated.Id(), validated)
-		s.actives.Set(ins.Id(), ins)
-		// Recycle ins
-		s.Recycle(ins.LambdaDeployment)
-	}
-	return validated.LambdaDeployment.(*lambdastore.Instance), exists
-}
+//func (s *Scheduler) Instance(id uint64) (*lambdastore.Instance, bool) {
+//	got, exists := s.actives.Get(id)
+//	if !exists {
+//		return nil, exists
+//	}
+//
+//	ins := got.(*GroupInstance)
+//	validated := ins.group.Validate(ins)
+//	if validated != ins {
+//		// Switch keys
+//		s.actives.Set(validated.Id(), validated)
+//		s.actives.Set(ins.Id(), ins)
+//		// Recycle ins
+//		s.Recycle(ins.LambdaDeployment)
+//	}
+//	return validated.LambdaDeployment.(*lambdastore.Instance), exists
+//}
 
 func (s *Scheduler) Clear(g *Group) {
 	for item := range s.actives.Iter() {
@@ -170,7 +166,6 @@ func (s *Scheduler) GetDestination(lambdaId uint64) (types.LambdaDeployment, err
 func init() {
 	scheduler = newScheduler()
 
-	lambdastore.Registry = scheduler
 	global.Migrator = scheduler
 
 }

@@ -19,9 +19,8 @@ import (
 	"github.com/cornelk/hashmap"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -60,7 +59,7 @@ var (
 
 type InstanceRegistry interface {
 	Instance(uint64) (*Instance, bool)
-	Reroute(int64) *Instance
+	Reroute(interface{}, int) *Instance
 }
 
 type ValidateOption struct {
@@ -71,7 +70,7 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
-	BucketId     int64
+	BucketId int64
 
 	cn           *Connection
 	chanCmd      chan types.Command
@@ -808,8 +807,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	ins.warmUp()
 }
 
-// TODO: add instance id
-func (ins *Instance) rerouteGetRequest(req *types.Request, targetIns uint64) bool {
+func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	// Rerouted keys will not be rerouted.
 	// During parallel recovery, the instance can be backing another instance. (Backing before recovery triggered)
 	if req.InsId != ins.Id() {
@@ -828,10 +826,9 @@ func (ins *Instance) rerouteGetRequest(req *types.Request, targetIns uint64) boo
 	return true
 }
 
-func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target uint64) bool {
-	ins := Registry.Instance(target)
-	ins.chanPriorCmd <- req // Rerouted request should not be queued again.
-	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target, req.Cmd)
+func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target *Instance) bool {
+	target.chanPriorCmd <- req // Rerouted request should not be queued again.
+	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target.Id(), req.Cmd)
 	return true
 }
 
@@ -863,10 +860,10 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				// Options here:
 				// 1. Recover to prevail node and reroute to the node. TODO: change CMD from GET to Recover, and add 1 arg retCMD
 				// 2. Return 404 (current implementation)
-				req.Cmd = protocol.RECOVER
-				req.RetCommand = protocol.Get
-				chunkId, _ := strconv.ParseInt(req.Id.ChunkId, 10, 64)
-				target := Registry.Reroute(chunkId)
+				req.Cmd = protocol.CMD_RECOVER
+				req.RetCommand = protocol.CMD_GET
+				chunkId := req.Id.Chunk()
+				target := Registry.Reroute(req.Obj, chunkId)
 				ins.rerouteRequestWithTarget(req, target)
 				// counter := global.ReqCoordinator.Load(req.Id.ReqId).(*global.RequestCounter)
 				// if counter == nil {

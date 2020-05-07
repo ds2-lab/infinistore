@@ -338,7 +338,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 	// Abandon rest chunks.
-	if counter.IsFulfilled(status) && !counter.IsAllReturned() {   // IsAllReturned will load updated status.
+	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
 		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
 		for _, req := range counter.Requests {
 			if req != nil && !req.IsReturnd() {
@@ -410,9 +410,9 @@ func (conn *Connection) bye() {
 func (conn *Connection) recoverHandler() {
 	conn.log.Debug("RECOVER from lambda.")
 
-	connId, _ := conn.r.ReadBulkString()
+	_, _ = conn.r.ReadBulkString() // connId
 	reqId, _ := conn.r.ReadBulkString()
-	_, _ = conn.r.ReadBulkString()   // chunkId
+	_, _ = conn.r.ReadBulkString() // chunkId
 
 	ctrl := global.ReqCoordinator.Load(reqId).(*types.Control)
 	if ctrl == nil {

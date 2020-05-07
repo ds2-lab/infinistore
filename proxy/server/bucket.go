@@ -126,3 +126,4 @@ func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 	}
 	return b.group.All[b.end-activeNum : b.end]
 }
+

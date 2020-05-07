@@ -11,8 +11,11 @@ import (
 )
 
 var (
-	activeNumBuckets = 12
+	bucketPerWindow  = 6
+	activeHour       = 2
+	activeNumBuckets = bucketPerWindow * activeHour
 	NumBackupBuckets = 3 * 6
+	expireHour       = 3
 )
 
 // reuse window and interval should be MINUTES
@@ -33,6 +36,28 @@ type MovingWindow struct {
 	scaleCounter int32
 
 	mu sync.Mutex
+}
+
+func (mw *MovingWindow) Instance(id uint64) (*lambdastore.Instance, bool) {
+	got, exists := scheduler.actives.Get(id)
+	if !exists {
+		return nil, exists
+	}
+
+	ins := got.(*GroupInstance)
+	validated := ins.group.Validate(ins)
+	if validated != ins {
+		// Switch keys
+		scheduler.actives.Set(validated.Id(), validated)
+		scheduler.actives.Set(ins.Id(), ins)
+		// Recycle ins
+		scheduler.Recycle(ins.LambdaDeployment)
+	}
+	return validated.LambdaDeployment.(*lambdastore.Instance), exists
+}
+
+func (mw *MovingWindow) Reroute(obj interface{}, chunkId int) *lambdastore.Instance {
+	return mw.getActiveInstanceForChunk(obj.(*Meta), chunkId)
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
@@ -205,4 +230,13 @@ func (mw *MovingWindow) degrade(bucket *Bucket) {
 	for _, ins := range bucket.instances {
 		ins.LambdaDeployment.(*lambdastore.Instance).Degrade()
 	}
+}
+
+func (mw *MovingWindow) getActiveInstanceForChunk(obj *Meta, chunkId int) *lambdastore.Instance {
+	instances := mw.activeInstances(obj.NumChunks)
+	return instances[chunkId].LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (mw *MovingWindow) CanRefresh(obj *Meta, chunkId int) bool {
+	return true
 }

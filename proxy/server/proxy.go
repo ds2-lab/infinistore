@@ -49,6 +49,8 @@ func New(replica bool) *Proxy {
 	// start moving-window and auto-scaling Daemon
 	go p.movingWindow.Daemon()
 
+	lambdastore.Registry = p.movingWindow
+
 	return p
 }
 
@@ -136,13 +138,14 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	p.movingWindow.group.Instance(lambdaDest).C() <- &types.Request{
-		Id:              types.Id{connId, reqId, chunkId},
+		Id:              types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
 		InsId:           uint64(lambdaDest),
 		Cmd:             protocol.CMD_SET,
 		Key:             chunkKey,
 		BodyStream:      bodyStream,
 		Client:          client,
 		EnableCollector: true,
+		Obj:             meta,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 	temp, _ := p.placer.Get(key, int(dChunkId))
@@ -191,12 +194,13 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 
 	req := &types.Request{
-		Id:              types.Id{connId, reqId, chunkId},
+		Id:              types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
 		InsId:           uint64(lambdaDest),
 		Cmd:             protocol.CMD_GET,
 		Key:             chunkKey,
 		Client:          client,
 		EnableCollector: true,
+		Obj:             meta,
 	}
 	counter.Requests[dChunkId] = req
 
@@ -245,20 +249,27 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	}
 
 	// Async logic
-	if wrapper.request.Cmd == protocol.CMD_GET {
+	if wrapper.Request.Cmd == protocol.CMD_GET {
 		// TODO: limit migration interval
-		// recoverReqId := uuid.New().String()
-		// instanceId := p.movingWindow.getActiveInstanceForChunk(wrapper.request.chunkId)
-		// instance.C() <- &types.Control{
-		// 	Cmd:        protocol.CMD_RECOVER
-		// 	Request:    &types.Request{
-		// 		Id:         types.Id{ wrapper.request.connId, recoverReqId, wrapper.request.chunkId},
-		// 		InsId:      instanceId,
-		// 		Cmd:        protocol.CMD_RECOVER,
-		// 		Key:        wrapper.request.Key,
-		// 	},
-		// 	Callback:   p.handleRecoverCallback,
-		// }
+		// random select whether current chunk need to be refresh, if > hard limit, do refresh.
+		if !p.movingWindow.CanRefresh(wrapper.Request.Obj.(*Meta), wrapper.Request.Id.Chunk()) {
+
+		}
+		recoverReqId := uuid.New().String()
+		chunkId := wrapper.Request.Id.Chunk()
+		instance := p.movingWindow.getActiveInstanceForChunk(wrapper.Request.Obj.(*Meta), chunkId)
+
+		//p.movingWindow.group.Instance(int(instanceId)).C() <- &types.Control{
+		instance.C() <- &types.Control{
+			Cmd: protocol.CMD_RECOVER,
+			Request: &types.Request{
+				Id:    types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId,},
+				InsId: instance.Id(),
+				Cmd:   protocol.CMD_RECOVER,
+				Key:   wrapper.Request.Key,
+			},
+			Callback: p.handleRecoverCallback,
+		}
 	}
 }
 
@@ -282,7 +293,7 @@ func (p *Proxy) CollectData() {
 }
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
-	instance := arg.(*lambdastore.Instance())
+	//_ = arg.(*lambdastore.Instance())
 	// Update meta.
 }
 
@@ -291,7 +302,7 @@ func (p *Proxy) dropEvicted(meta *Meta) {
 	for i, lambdaId := range meta.Placement {
 		instance := p.movingWindow.group.Instance(lambdaId)
 		instance.C() <- &types.Request{
-			Id:    types.Id{0, reqId, strconv.Itoa(i)},
+			Id:    types.Id{ConnId: 0, ReqId: reqId, ChunkId: strconv.Itoa(i)},
 			InsId: uint64(lambdaId),
 			Cmd:   protocol.CMD_DEL,
 			Key:   meta.ChunkKey(i),

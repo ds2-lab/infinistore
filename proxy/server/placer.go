@@ -76,11 +76,11 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	//defer l.mu.Unlock()
 
 	// scaler check
-	//if l.AvgSize() > config.InstanceCapacity*config.Threshold && l.scaling == false {
-	//	l.log.Debug("large than instance average size")
-	//	l.scaling = true
-	//	l.proxy.movingWindow.scaler <- struct{}{}
-	//}
+	if l.AvgSize() > config.InstanceCapacity*config.Threshold && l.scaling == false {
+		l.log.Debug("large than instance average size")
+		l.scaling = true
+		l.proxy.movingWindow.scaler <- struct{}{}
+	}
 
 	if meta.placerMeta == nil {
 		meta.placerMeta = newPlacerMeta()
