@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard/views"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
 type Dashboard struct {
 	*ui.Grid
-	clusterView   *views.ClusterView
-	logView       *views.LogView
+	ClusterView   *views.ClusterView
+	LogView       *views.LogView
 }
 
 func NewDashboard() *Dashboard {
@@ -22,8 +23,8 @@ func NewDashboard() *Dashboard {
 
 	dashboard := &Dashboard{
 		Grid: ui.NewGrid(),
-		clusterView: views.NewClusterView(" Nodes "),
-		logView: views.NewLogView(" Logs ", global.Options.LogFile),
+		ClusterView: views.NewClusterView(" Nodes "),
+		LogView: views.NewLogView(" Logs ", global.Options.LogFile),
 	}
 
 	// Full screen
@@ -33,14 +34,20 @@ func NewDashboard() *Dashboard {
 	// Layout
 	dashboard.Grid.Set(
 		ui.NewRow(1.0/3,
-			ui.NewCol(1.0/1, dashboard.clusterView),
+			ui.NewCol(1.0/1, dashboard.ClusterView),
 		),
 		ui.NewRow(2.0/3,
-			ui.NewCol(1.0/1, dashboard.logView),
+			ui.NewCol(1.0/1, dashboard.LogView),
 		),
 	)
 
 	return dashboard
+}
+
+func (dash *Dashboard) ConfigCluster(cluster types.ClusterStatus, rows int) {
+	dash.ClusterView.Cluster = cluster
+	dash.ClusterView.Rows = rows
+	dash.ClusterView.Update()
 }
 
 func (dash *Dashboard) Update() {

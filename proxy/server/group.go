@@ -64,6 +64,10 @@ func (g *Group) Instance(idx int) *lambdastore.Instance {
 	return g.All[idx].LambdaDeployment.(*lambdastore.Instance)
 }
 
+func (g *Group) InstanceStatus(idx int) types.InstanceStatus {
+	return g.Instance(idx)
+}
+
 func (g *Group) nextSlice(sliceSize int) int {
 	return int((atomic.AddUint64(&g.sliceBase, uint64(sliceSize)) - uint64(sliceSize)) % uint64(g.size))
 }

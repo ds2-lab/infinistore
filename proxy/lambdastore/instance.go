@@ -27,6 +27,11 @@ import (
 )
 
 const (
+	INSTANCE_MASK_STATUS_START = 0x000F
+	INSTANCE_MASK_STATUS_CONNECTION = 0x00F0
+	INSTANCE_MASK_STATUS_BACKING = 0x0F00
+	INSTANCE_MASK_STATUS_LIFECYCLE = 0xF000
+
 	INSTANCE_UNSTARTED = 0
 	INSTANCE_STARTED = 1
 	INSTANCE_SLEEP = 0
@@ -121,6 +126,23 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 // create new lambda instance
 func NewInstance(name string, id uint64, replica bool) *Instance {
 	return NewInstanceFromDeployment(NewDeployment(name, id, replica))
+}
+
+func (ins *Instance) Status() uint64 {
+	// 0x000F  started
+	// 0x00F0  connection
+	// 0x0F00  backing
+	var backing uint64
+	if ins.IsRecovering() {
+		backing += 1
+	}
+	if ins.IsBacking() {
+		backing += 2
+	}
+	// 0xF000  lifecycle
+	return uint64(atomic.LoadUint32(&ins.started)) +
+		(uint64(ins.awake) << 4) +
+		(backing << 8)
 }
 
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {

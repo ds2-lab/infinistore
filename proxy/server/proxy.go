@@ -76,6 +76,10 @@ func New(replica bool) *Proxy {
 	return p
 }
 
+func (p *Proxy) GetStatusProvider() types.ClusterStatus {
+	return p.group
+}
+
 func (p *Proxy) Serve(lis net.Listener) {
 	for {
 		cn, err := lis.Accept()

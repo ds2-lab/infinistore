@@ -90,6 +90,9 @@ func main() {
 	srv := redeo.NewServer(nil)
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
+	if dash != nil {
+		dash.ConfigCluster(prxy.GetStatusProvider(), 12)
+	}
 
 	// config server
 	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSet)
@@ -121,6 +124,9 @@ func main() {
 	// initiate lambda store proxy
 	go prxy.Serve(lambdaLis)
 	prxy.WaitReady()
+	if dash != nil {
+		dash.ClusterView.Update()
+	}
 
 	// Pid is only written after ready
 	err = ioutil.WriteFile(options.Pid, []byte(fmt.Sprintf("%d", os.Getpid())), 0640)
