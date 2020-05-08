@@ -44,7 +44,7 @@ func NewDashboard() *Dashboard {
 	return dashboard
 }
 
-func (dash *Dashboard) ConfigCluster(cluster types.ClusterStatus, rows int) {
+func (dash *Dashboard) ConfigCluster(cluster types.ClusterStats, rows int) {
 	dash.ClusterView.Cluster = cluster
 	dash.ClusterView.Rows = rows
 	dash.ClusterView.Update()

@@ -54,7 +54,7 @@ func New(replica bool) *Proxy {
 	return p
 }
 
-func (p *Proxy) GetStatusProvider() types.ClusterStatus {
+func (p *Proxy) GetStatsProvider() types.ClusterStats {
 	return p.movingWindow.group
 }
 

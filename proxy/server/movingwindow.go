@@ -66,7 +66,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		group:     group,
 		num:       activeNumBuckets,

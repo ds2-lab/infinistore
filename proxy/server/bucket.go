@@ -44,6 +44,7 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 
 	bucket.id = id
 	bucket.log.(*logger.ColorLogger).Prefix = fmt.Sprintf("Bucket %d", id)
+	bucket.log.(*logger.ColorLogger).Color = !global.Options.NoColor
 	bucket.m = hashmap.New(1000) // estimate each bucket will hold 1000 objects
 	bucket.group = group
 
@@ -76,12 +77,12 @@ func (b *Bucket) initInstance(from, length int) {
 		go node.HandleRequests()
 
 		// Initialize instance, Bucket is not necessary if the start time of the instance is acceptable.
-		b.ready.Add(1)
-
-		go func() {
-			node.WarmUp()
-			b.ready.Done()
-		}()
+		// b.ready.Add(1)
+		//
+		// go func() {
+		// 	node.WarmUp()
+		// 	b.ready.Done()
+		// }()
 	}
 	//b.log.Debug("start name is %v, end %v, base is %v", b.group.All[b.start].Name(), b.group.All[from+len-1].Name(), b.group.base)
 	b.instances = b.group.SubGroup(from, from+length)
@@ -126,4 +127,3 @@ func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 	}
 	return b.group.All[b.end-activeNum : b.end]
 }
-
