@@ -107,10 +107,6 @@ func (b *Bucket) waitReady() {
 	b.log.Info("[Bucket %v is ready]", b.id)
 }
 
-func (b *Bucket) Size() int {
-	return b.m.Len()
-}
-
 func (b *Bucket) Close() {
 	b.m = nil
 	b.instances = nil

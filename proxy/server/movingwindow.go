@@ -18,11 +18,11 @@ const (
 )
 
 var (
-	ActiveDuration   = 120 // min
-	ExpireDuration   = 360 //min
-	ActiveBucketsNum = ActiveDuration / BucketDuration
-	ExpireBucketsNum = ExpireDuration / BucketDuration
-	NumBackupBuckets = 3 * 6
+	ActiveDuration     = 3 // min
+	ExpireDuration     = 6 //min
+	ActiveBucketsNum   = ActiveDuration / BucketDuration
+	ExpireBucketsNum   = ExpireDuration / BucketDuration
+	NumBackupInstances = config.BackupsPerInstance * config.NumLambdaClusters
 )
 
 // reuse window and interval should be MINUTES
@@ -90,19 +90,6 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 
 func (mw *MovingWindow) waitReady() {
 	mw.getCurrentBucket().waitReady()
-}
-
-// only assign backup for new node in bucket
-func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
-	// get 3 hour buckets
-	start := mw.findBucket(NumBackupBuckets).start
-	for i := 0; i < len(instances); i++ {
-		num, candidates := scheduler.getBackupsForNode(mw.group.All[start:], i)
-		//node := mw.group.Instance(i)
-		node := instances[i].LambdaDeployment.(*lambdastore.Instance)
-		mw.log.Debug("instance is %v", node.Name())
-		node.AssignBackups(num, candidates)
-	}
 }
 
 func (mw *MovingWindow) Len() int {
@@ -299,6 +286,26 @@ func (mw *MovingWindow) Refresh(obj *Meta, chunkId int) (*lambdastore.Instance, 
 func (mw *MovingWindow) rand() int {
 	rand.Seed(time.Now().UnixNano())
 	return rand.Intn(2) // [0,2) random
+}
+
+func (mw *MovingWindow) findBackupInstanceStart() int {
+	if len(mw.group.All) < NumBackupInstances {
+		return 0
+	} else {
+		return len(mw.group.All) - NumBackupInstances
+	}
+
+}
+
+// only assign backup for new node in bucket
+func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
+	start := mw.findBackupInstanceStart()
+	for i := 0; i < len(instances); i++ {
+		num, candidates := scheduler.getBackupsForNode(mw.group.All[start:], i)
+		node := instances[i].LambdaDeployment.(*lambdastore.Instance)
+		mw.log.Debug("in assign backup, instance is %v", node.Name())
+		node.AssignBackups(num, candidates)
+	}
 }
 
 func (mw *MovingWindow) touch(meta *Meta) {
