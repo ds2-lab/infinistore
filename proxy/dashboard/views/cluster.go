@@ -97,10 +97,10 @@ func (v *ClusterView) updateMapper(len int) {
 	if v.mapper.Y > v.mapper.X {
 		v.mapper.Y = v.mapper.X
 	}
-	if v.mapper.Y < 3 {
-		v.mapper.Y = 3 // minimum recognizable interval
+	if v.mapper.Y < 4 {
+		v.mapper.Y = 4 // minimum recognizable interval
 	}
-	v.origin.Y = (v.Inner.Max.Y-1)*4 - v.mapper.Y // reverse
+	v.origin.Y = v.Inner.Max.Y * 4 // reverse
 	// log.Printf("Demension %v to %v: %v\n", v.Inner.Max, v.Inner.Min, v.mapper)
 
 	v.mapbase = len

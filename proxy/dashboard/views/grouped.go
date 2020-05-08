@@ -76,7 +76,7 @@ func (v *GroupedClusterView) SetRect(x1, y1, x2, y2 int) {
 	width := float64(v.Inner.Max.X - v.Inner.Min.X) / float64(cols)
 	for i := 0; i < cols; i++ {
 		xBase := float64(v.Inner.Min.X) + width * float64(i)
-		views[i].SetRect(int(math.Round(xBase)), y1, int(math.Round(xBase + width)), y2)
+		views[i].SetRect(int(math.Round(xBase)), v.Inner.Min.Y, int(math.Round(xBase + width)), v.Inner.Max.Y)
 	}
 }
 
