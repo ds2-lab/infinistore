@@ -11,6 +11,12 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
+const (
+	BUCKET_EXPIRE = 0
+	BUCKET_COLD   = 1
+	BUCKET_ACTIVE = 2
+)
+
 var (
 	bucketPool = sync.Pool{
 		New: func() interface{} {
@@ -37,6 +43,9 @@ type Bucket struct {
 	// pointer on group
 	start int
 	end   int
+
+	//state
+	state int
 }
 
 func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Bucket, err error) {
@@ -61,6 +70,7 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 
 	bucket.start = bucket.end - num
 	bucket.initInstance(bucket.start, num)
+	bucket.state = BUCKET_ACTIVE
 	return
 }
 
@@ -69,6 +79,7 @@ func (b *Bucket) initInstance(from, length int) {
 		node := scheduler.GetForGroup(b.group, i)
 		node.Meta.Capacity = config.InstanceCapacity
 		node.Meta.IncreaseSize(config.InstanceOverhead)
+		// assign bucket id to new instance
 		node.BucketId = int64(b.id)
 		b.log.Debug("[adding lambda instance %v]", node.Name())
 
@@ -126,4 +137,3 @@ func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 	}
 	return b.group.All[b.end-activeNum : b.end]
 }
-

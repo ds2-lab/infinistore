@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/client"
 )
@@ -33,15 +34,18 @@ func main() {
 	cli := client.NewClient(*d, *p, 32)
 
 	// start dial and PUT/GET
+	start := time.Now()
 	cli.Dial(addrArr)
 	if *set {
 		cli.EcSet(*key, val)
 	}
 	if *get {
-		res, _, ok := cli.EcGet(*key, 1024)
+		res, _, ok := cli.EcGet(*key, int(*size))
 		if !ok {
 			fmt.Println("err is", ok)
 		}
 		fmt.Println("res", res)
 	}
+	end := time.Since(start)
+	fmt.Printf("GET %s, size is %v, duration is %v \n", *key, *size, end)
 }

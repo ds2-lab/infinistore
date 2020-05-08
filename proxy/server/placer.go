@@ -89,7 +89,9 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	// place
 	instanceId := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
 	meta.Placement[chunkId] = instanceId
-	//l.updateInstanceSize(instanceId, meta.ChunkSize)
+	meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
+
+	l.updateInstanceSize(instanceId, meta.ChunkSize)
 
 	// get current pointer and instance ID
 	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)

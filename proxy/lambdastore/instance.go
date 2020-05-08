@@ -83,6 +83,7 @@ type Instance struct {
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
+	coolTimeout   time.Duration
 
 	// Connection management
 	sessions *hashmap.HashMap
@@ -118,6 +119,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
 		coolTimer:     time.NewTimer(WarmTimout),
+		coolTimeout:   WarmTimout,
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 	}
@@ -383,14 +385,12 @@ func (ins *Instance) Migrate() error {
 	return nil
 }
 
-// TODO: movingwindow set instance to degrade state
-
-// TODO: under degrade, lower warmup interval
-
 // TODO: if instance in reclaimed | no backing state -> no warmup perform
 
 func (ins *Instance) Degrade() {
-	atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY)
+	if atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY) {
+		ins.coolTimeout = config.InstanceDegradeWarmTimout
+	}
 }
 
 func (ins *Instance) Expire() {
@@ -857,8 +857,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			// And we now know it.
 			if ins.IsReclaimed() && req.InsId == ins.Id() {
 				// TODO: Handle reclaiming event
-				// Options here:
-				// 1. Recover to prevail node and reroute to the node. TODO: change CMD from GET to Recover, and add 1 arg retCMD
+				// Options here: use option 1
+				// 1. Recover to prevail node and reroute to the node.
 				// 2. Return 404 (current implementation)
 				req.Cmd = protocol.CMD_RECOVER
 				req.RetCommand = protocol.CMD_GET
@@ -960,7 +960,7 @@ func (ins *Instance) isClosedLocked() bool {
 }
 
 func (ins *Instance) warmUp() {
-	if global.IsWarmupWithFixedInterval() {
+	if global.IsWarmupWithFixedInterval() || ins.IsReclaimed() {
 		return
 	}
 
@@ -974,7 +974,7 @@ func (ins *Instance) resetCoolTimer() {
 		default:
 		}
 	}
-	ins.coolTimer.Reset(WarmTimout)
+	ins.coolTimer.Reset(ins.coolTimeout)
 }
 
 func (ins *Instance) promoteCandidate(dest int, src int) int {

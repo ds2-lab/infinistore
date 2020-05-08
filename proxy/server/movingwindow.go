@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand"
 	"sync"
 	"time"
 
@@ -10,12 +11,17 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
 
+const (
+	BucketDuration = 10 // min
+	ActiveReplica  = 2
+)
+
 var (
-	bucketPerWindow  = 6
-	activeHour       = 2
-	activeNumBuckets = bucketPerWindow * activeHour
+	ActiveDuration   = 120 // min
+	ExpireDuration   = 360 //min
+	ActiveBucketsNum = ActiveDuration / BucketDuration
+	ExpireBucketsNum = ExpireDuration / BucketDuration
 	NumBackupBuckets = 3 * 6
-	expireHour       = 3
 )
 
 // reuse window and interval should be MINUTES
@@ -69,7 +75,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 			Color:  true,
 		},
 		group:     group,
-		num:       activeNumBuckets,
+		num:       ActiveBucketsNum,
 		window:    window,
 		interval:  interval,
 		buckets:   make([]*Bucket, 0, 500),
@@ -153,10 +159,9 @@ func (mw *MovingWindow) Daemon() {
 			mw.buckets = append(mw.buckets, bucket)
 			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
-			degrade := mw.getDegradingInstanceLocked()
-			if degrade != nil {
-				mw.degrade(degrade)
-			}
+			//check degrade and expire
+			mw.DegradeCheck()
+			mw.ExpireCheck()
 
 			// update cursor, point to active bucket
 			mw.cursor = bucket
@@ -180,25 +185,6 @@ func (mw *MovingWindow) getInstanceId(id int, from int) int {
 	return idx
 }
 
-func (mw *MovingWindow) touch(meta *Meta) {
-	//mw.log.Debug("in touch %v", meta.Placement)
-	//// brand new meta(-1) or already existed
-	//if meta.placerMeta.bucketIdx == -1 {
-	//	mw.cursor.m.Set(meta.Key, meta)
-	//} else {
-	//	// remove meta from previous bucket
-	//	oldBucket := meta.placerMeta.bucketIdx
-	//	if mw.cursor == mw.buckets[oldBucket] {
-	//		return
-	//	} else {
-	//		mw.buckets[oldBucket].m.Del(meta.Key)
-	//		mw.cursor.m.Set(meta.Key, meta)
-	//	}
-	//}
-	//
-	//meta.placerMeta.bucketIdx = mw.cursor.id
-}
-
 func (mw *MovingWindow) activeInstances(num int) []*GroupInstance {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
@@ -218,11 +204,12 @@ func (mw *MovingWindow) avgSize(bucket *Bucket) int {
 	return sum / (end - start + 1)
 }
 
+// Bucket degrading
 func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
-	if len(mw.buckets) <= activeNumBuckets {
+	if len(mw.buckets) <= ActiveBucketsNum {
 		return nil
 	} else {
-		return mw.buckets[len(mw.buckets)-activeNumBuckets-1]
+		return mw.buckets[len(mw.buckets)-ActiveBucketsNum-1]
 	}
 }
 
@@ -232,11 +219,75 @@ func (mw *MovingWindow) degrade(bucket *Bucket) {
 	}
 }
 
+func (mw *MovingWindow) DegradeCheck() {
+	degradeBucket := mw.getDegradingInstanceLocked()
+	if degradeBucket != nil {
+		mw.degrade(degradeBucket)
+		degradeBucket.state = BUCKET_COLD
+	}
+}
+
+// Bucket expiration
+func (mw *MovingWindow) getExpiringInstanceLocked() *Bucket {
+	if len(mw.buckets) <= ExpireBucketsNum {
+		return nil
+	} else {
+		return mw.buckets[len(mw.buckets)-ExpireBucketsNum-1]
+	}
+}
+
+func (mw *MovingWindow) expire(bucket *Bucket) {
+	for _, ins := range bucket.instances {
+		ins.LambdaDeployment.(*lambdastore.Instance).Expire()
+	}
+}
+
+func (mw *MovingWindow) ExpireCheck() {
+	expireBucket := mw.getExpiringInstanceLocked()
+	if expireBucket != nil {
+		mw.expire(expireBucket)
+		expireBucket.state = BUCKET_EXPIRE
+	}
+}
+
 func (mw *MovingWindow) getActiveInstanceForChunk(obj *Meta, chunkId int) *lambdastore.Instance {
 	instances := mw.activeInstances(obj.NumChunks)
 	return instances[chunkId].LambdaDeployment.(*lambdastore.Instance)
 }
 
-func (mw *MovingWindow) CanRefresh(obj *Meta, chunkId int) bool {
-	return true
+func (mw *MovingWindow) Refresh(obj *Meta, chunkId int) (*lambdastore.Instance, bool) {
+	oldBucketId := obj.placerMeta.bucketIdx
+	if mw.getCurrentBucket().id-oldBucketId >= ActiveBucketsNum {
+		instance := mw.getActiveInstanceForChunk(obj, chunkId)
+		return instance, true
+	} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/ActiveReplica) {
+		instance := mw.getActiveInstanceForChunk(obj, chunkId)
+		return instance, true
+	}
+
+	return nil, false
+}
+
+func (mw *MovingWindow) rand() int {
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(2) // [0,2) random
+}
+
+func (mw *MovingWindow) touch(meta *Meta) {
+	//mw.log.Debug("in touch %v", meta.Placement)
+	//// brand new meta(-1) or already existed
+	//if meta.placerMeta.bucketIdx == -1 {
+	//	mw.cursor.m.Set(meta.Key, meta)
+	//} else {
+	//	// remove meta from previous bucket
+	//	oldBucket := meta.placerMeta.bucketIdx
+	//	if mw.cursor == mw.buckets[oldBucket] {
+	//		return
+	//	} else {
+	//		mw.buckets[oldBucket].m.Del(meta.Key)
+	//		mw.cursor.m.Set(meta.Key, meta)
+	//	}
+	//}
+	//
+	//meta.placerMeta.bucketIdx = mw.cursor.id
 }

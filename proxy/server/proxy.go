@@ -205,7 +205,6 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	counter.Requests[dChunkId] = req
 
 	// Unlikely, just to be safe
-	// TODO: reroute and update placement
 	if counter.IsFulfilled() || instance.IsReclaimed() {
 		p.log.Debug("late request %v", reqId)
 		status := counter.AddReturned(int(dChunkId))
@@ -250,14 +249,12 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 
 	// Async logic
 	if wrapper.Request.Cmd == protocol.CMD_GET {
-		// TODO: limit migration interval
 		// random select whether current chunk need to be refresh, if > hard limit, do refresh.
-		if !p.movingWindow.CanRefresh(wrapper.Request.Obj.(*Meta), wrapper.Request.Id.Chunk()) {
-
+		instance, ok := p.movingWindow.Refresh(wrapper.Request.Obj.(*Meta), wrapper.Request.Id.Chunk())
+		if !ok {
+			return
 		}
 		recoverReqId := uuid.New().String()
-		chunkId := wrapper.Request.Id.Chunk()
-		instance := p.movingWindow.getActiveInstanceForChunk(wrapper.Request.Obj.(*Meta), chunkId)
 
 		//p.movingWindow.group.Instance(int(instanceId)).C() <- &types.Control{
 		instance.C() <- &types.Control{
@@ -293,8 +290,8 @@ func (p *Proxy) CollectData() {
 }
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
-	//_ = arg.(*lambdastore.Instance())
-	// Update meta.
+	instance := arg.(*lambdastore.Instance)
+	ctrl.Obj.(*Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
 }
 
 func (p *Proxy) dropEvicted(meta *Meta) {
