@@ -106,7 +106,7 @@ func New(id uint64, persistent bool) *Storage {
 }
 
 func (s *Storage) Init(id uint64, persistent bool) (types.Storage, error) {
-	if s != nil || s.id == id {
+	if s != nil && s.id == id {
 		return s, nil
 	} else {
 		return New(id, persistent), nil
