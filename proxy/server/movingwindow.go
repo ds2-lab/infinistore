@@ -9,6 +9,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
@@ -72,7 +73,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		group:     group,
 		num:       ActiveBucketsNum,
@@ -102,6 +103,33 @@ func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
 		mw.log.Debug("instance is %v", node.Name())
 		node.AssignBackups(num, candidates)
 	}
+}
+
+func (mw *MovingWindow) Len() int {
+	return len(mw.buckets)
+}
+
+func (mw *MovingWindow) ClusterStats(idx int) types.ClusterStats {
+	return mw.buckets[idx]
+}
+
+func (mw *MovingWindow) AllClustersStats() types.Iterator {
+	all := mw.buckets
+	return types.NewStatsIterator(all, len(all))
+}
+
+func (mw *MovingWindow) ClusterStatsFromIterator(iter types.Iterator) (int, types.ClusterStats) {
+	i, val := iter.Value()
+
+	var b *Bucket
+	switch item := val.(type) {
+	case []*Bucket:
+		b = item[i]
+	case *Bucket:
+		b = item
+	}
+
+	return i, b
 }
 
 func (mw *MovingWindow) findBucket(expireCount int) *Bucket {

@@ -53,7 +53,7 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 		log: &logger.ColorLogger{
 			Prefix: "RedisAdapter ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 	}
 

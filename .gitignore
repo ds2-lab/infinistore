@@ -7,3 +7,5 @@ lambda.zip
 *.zip
 evaluation/cloudwatch/data
 evaluation/downloaded
+log
+*.clog

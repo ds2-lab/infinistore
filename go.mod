@@ -11,6 +11,7 @@ require (
 	github.com/cornelk/hashmap v1.0.1
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
+	github.com/gizak/termui/v3 v3.1.0
 	github.com/google/uuid v1.1.1
 	github.com/jordwest/mock-conn v0.0.0-20180617021051-4896c6bd1641
 	github.com/kelindar/binary v1.0.8
@@ -20,6 +21,9 @@ require (
 	github.com/mason-leap-lab/redeo v1.1.2
 	github.com/mattn/go-colorable v0.1.6 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b
+	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d
+	github.com/onsi/ginkgo v1.12.0
+	github.com/onsi/gomega v1.9.0
 	github.com/seiflotfy/cuckoofilter v0.0.0-20200416141329-862a88987de7
 	github.com/stretchr/objx v0.2.0 // indirect
 	github.com/urfave/cli/v2 v2.2.0 // indirect

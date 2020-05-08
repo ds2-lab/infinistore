@@ -40,7 +40,7 @@ func NewPlacer(store *MetaStore) *Placer {
 		log: &logger.ColorLogger{
 			Prefix: "Placer ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		metaStore: store,
 		scaling:   false,

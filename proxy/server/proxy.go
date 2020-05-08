@@ -34,7 +34,7 @@ func New(replica bool) *Proxy {
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		//group:        group,
 		movingWindow: NewMovingWindow(10, 1),
@@ -52,6 +52,10 @@ func New(replica bool) *Proxy {
 	lambdastore.Registry = p.movingWindow
 
 	return p
+}
+
+func (p *Proxy) GetStatsProvider() types.GroupedClusterStats {
+	return p.movingWindow
 }
 
 func (p *Proxy) Serve(lis net.Listener) {
@@ -271,14 +275,13 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 }
 
 func (p *Proxy) CollectData() {
-	for _, ins := range p.movingWindow.group.All {
-		p.log.Debug("active instance in proxy %v", ins.Name())
-	}
+	// for _, ins := range p.movingWindow.group.All {
+	// 	p.log.Debug("active instance in proxy %v", ins.Name())
+	// }
 
 	for i, _ := range p.movingWindow.group.All {
-		global.DataCollected.Add(1)
 		// send data command
-		p.movingWindow.group.Instance(i).C() <- &types.Control{Cmd: "data"}
+		p.movingWindow.group.Instance(i).CollectData()
 	}
 	p.log.Info("Waiting data from Lambda")
 	global.DataCollected.Wait()

@@ -20,7 +20,7 @@ import (
 var (
 	defaultConnectionLog = &logger.ColorLogger{
 		Prefix: fmt.Sprintf("Undesignated "),
-		Color:  true,
+		Color:  !global.Options.NoColor,
 	}
 	ErrConnectionClosed = errors.New("Connection closed")
 	ErrMissingResponse  = errors.New("Missing response")
@@ -390,8 +390,7 @@ func (conn *Connection) receiveData() {
 	if err != nil && err != io.EOF {
 		conn.log.Error("Error on processing result of data collection: %v", err)
 	}
-	conn.log.Debug("Collected DATA from lambda: %s", ok)
-	global.DataCollected.Done()
+	conn.instance.FlagDataCollected(ok)
 }
 
 func (conn *Connection) initMigrateHandler() {

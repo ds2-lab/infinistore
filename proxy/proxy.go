@@ -6,29 +6,25 @@ import (
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"io/ioutil"
+	syslog "log"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/server"
 )
 
 var (
-	replica       = flag.Bool("replica", false, "Enable lambda replica deployment")
-	debug         = flag.Bool("debug", false, "Enable debug and print debug logs")
-	prefix        = flag.String("prefix", "log", "Log file prefix")
-	d             = flag.Int("d", 10, "The number of data chunks for buildin redis client.")
-	p             = flag.Int("p", 2, "The number of parity chunks for buildin redis client.")
-	log           = &logger.ColorLogger{
-		Level: logger.LOG_LEVEL_WARN,
-	}
-	lambdaLis net.Listener
-	filePath  = "/tmp/infinicache.pid"
+	options       = &global.Options
+	log           = &logger.ColorLogger{ Color: true, Level: logger.LOG_LEVEL_INFO }
 )
 
 func init() {
@@ -39,83 +35,106 @@ func init() {
 }
 
 func main() {
-	done := make(chan struct{}, 1)
-	flag.Parse()
+	var done sync.WaitGroup
+	checkUsage(options)
+	if options.Debug {
+		log.Level = logger.LOG_LEVEL_ALL
+	}
+	log.Color = !options.NoColor
+	if options.LogFile != "" {
+		logFile, err := os.OpenFile(options.LogFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		if err != nil {
+			syslog.Panic(err)
+		}
+		defer logFile.Close()
 
-	// Register signals
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL, syscall.SIGABRT)
+		syslog.SetOutput(logFile)
+	}
 
 	// CPU profiling by default
 	//defer profile.Start().Stop()
 
-	global.Prefix = *prefix
-
 	// Initialize collector
-	collector.Create(global.Prefix)
+	collector.Create(options.Prefix)
 
-	// Initialize log
-	if *debug {
-		log.Level = logger.LOG_LEVEL_ALL
-	}
-
-	log.Info("======================================")
-	log.Info("replica: %v || debug: %v", *replica, *debug)
-	log.Info("======================================")
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
 		os.Exit(1)
 		return
 	}
-	lambdaLis, err = net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
+	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
 		log.Error("Failed to listen lambdas: %v", err)
 		os.Exit(1)
 		return
 	}
 	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
+
+	// Register signals
+	sig := make(chan os.Signal, 1)
+	// Start Dashboard
+	var dash *dashboard.Dashboard
+	if !options.NoDashboard {
+		dash = dashboard.NewDashboard()
+		defer dash.Close()
+		go func() {
+			dash.Start()
+			sig <- syscall.SIGINT
+		}()
+	} else {
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL, syscall.SIGABRT)
+	}
+
 	// initial proxy server
 	srv := redeo.NewServer(nil)
-	prxy := server.New(*replica)
-	redis := server.NewRedisAdapter(srv, prxy, *d, *p)
+	prxy := server.New(false)
+	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
+	if dash != nil {
+		dash.ConfigCluster(prxy.GetStatsProvider(), 21)
+	}
 
 	// config server
 	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSet)
 	srv.HandleFunc(protocol.CMD_GET_CHUNK, prxy.HandleGet)
 	srv.HandleCallbackFunc(prxy.HandleCallback)
 
-	// initiate lambda store proxy
-	go prxy.Serve(lambdaLis)
-	prxy.WaitReady()
-
-	err = ioutil.WriteFile(filePath, []byte(fmt.Sprintf("%d", os.Getpid())), 0660)
-	if err != nil {
-		log.Warn("Failed to write PID: %v", err)
-	}
-
 	// Log goroutine
-	//defer t.Stop()
+	done.Add(1)
 	go func() {
 		<-sig
 		log.Info("Receive signal, killing server...")
-		// done <- struct{}{}
 		close(sig)
 
 		collector.Stop()
 
-		// Close server
+		// // Close server
 		log.Info("Closing server...")
 		srv.Close(clientLis)
 
-		// Collect data
+		// // Collect data
 		log.Info("Collecting data...")
 		prxy.CollectData()
 
 		prxy.Close(lambdaLis)
 		redis.Close()
-		close(done)
+		done.Done()
 	}()
+
+	// initiate lambda store proxy
+	go prxy.Serve(lambdaLis)
+	prxy.WaitReady()
+	if dash != nil {
+		dash.ClusterView.Update()
+	}
+
+	// Pid is only written after ready
+	err = ioutil.WriteFile(options.Pid, []byte(fmt.Sprintf("%d", os.Getpid())), 0640)
+	if err != nil {
+		log.Warn("Failed to write PID: %v", err)
+	} else {
+		defer os.Remove(options.Pid)
+	}
 
 	// Start serving (blocking)
 	err = srv.ServeAsync(clientLis)
@@ -131,13 +150,42 @@ func main() {
 	log.Info("Server closed.")
 
 	// Wait for data collection
-	<-done
+	done.Wait()
 	prxy.Release()
 	server.CleanUpScheduler()
-
-	err = os.Remove(filePath)
-	if err != nil {
-		log.Error("Failed to remove PID: %v", err)
+	if dash != nil {
+		dash.Update()
+		time.Sleep(time.Second)
 	}
-	os.Exit(0)
+	return
+}
+
+func checkUsage(options *global.CommandlineOptions) {
+	var printInfo bool
+	flag.BoolVar(&printInfo, "h", false, "help info?")
+
+	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
+	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
+	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
+	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
+	flag.BoolVar(&options.NoDashboard, "disable-dashboard", false, "Disable dashboard")
+	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
+	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
+	flag.StringVar(&options.LogFile, "log", "", "Path to the log file. If dashboard is not disabled, the default value is \"log\".")
+
+	flag.Parse()
+
+	if printInfo {
+		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
+		fmt.Fprintf(os.Stderr, "Available options:\n")
+		flag.PrintDefaults()
+		os.Exit(0);
+	}
+
+	if !options.NoDashboard {
+		if options.LogFile == "" {
+			options.LogFile = "log"
+		}
+		options.NoColor = true
+	}
 }

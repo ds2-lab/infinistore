@@ -111,6 +111,33 @@ func (g *Group) Instance(idx int) *lambdastore.Instance {
 	return ret.LambdaDeployment.(*lambdastore.Instance)
 }
 
+func (g *Group) InstanceStats(idx int) types.InstanceStats {
+	return g.Instance(idx)
+}
+
+func (g *Group) AllInstancesStats() types.Iterator {
+	all := g.All
+	return types.NewStatsIterator(all, len(all))
+}
+
+func (g *Group) InstanceStatsFromIterator(iter types.Iterator) (int, types.InstanceStats) {
+	i, val := iter.Value()
+
+	var ins *GroupInstance
+	switch item := val.(type) {
+	case []*GroupInstance:
+		ins = item[i]
+	case *GroupInstance:
+		ins = item
+	}
+
+	if ins == nil {
+		return i, nil
+	} else {
+		return i, ins.LambdaDeployment.(*lambdastore.Instance)
+	}
+}
+
 func (g *Group) setWithTest(ins *GroupInstance, test bool) (ret *GroupInstance, err error) {
 	g.mu.RLock()
 	if !test {
