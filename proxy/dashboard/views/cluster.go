@@ -121,11 +121,11 @@ func (v *ClusterView) getColorByInstance(ins types.InstanceStats) ui.Color {
 	// unstarted
 	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
 		return ui.ColorWhite
-	} else if backing := status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8; backing == lambdastore.INSTANCE_RECOVERING {
+	} else if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing & lambdastore.INSTANCE_RECOVERING > 0 {
 		return ui.ColorCyan
-	} else if backing == lambdastore.INSTANCE_BACKING {
+	} else if backing & lambdastore.INSTANCE_BACKING > 0 {
 		return ui.ColorBlue
-	} else if phase := status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 16; phase == lambdastore.PHASE_ACTIVE {
+	} else if phase := (status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 12); phase == lambdastore.PHASE_ACTIVE {
 		return ui.ColorGreen
 	} else if phase == lambdastore.PHASE_BACKING_ONLY {
 		return ui.ColorYellow
