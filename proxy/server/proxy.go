@@ -54,8 +54,8 @@ func New(replica bool) *Proxy {
 	return p
 }
 
-func (p *Proxy) GetStatsProvider() types.ClusterStats {
-	return p.movingWindow.group
+func (p *Proxy) GetStatsProvider() types.GroupedClusterStats {
+	return p.movingWindow
 }
 
 func (p *Proxy) Serve(lis net.Listener) {

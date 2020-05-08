@@ -56,7 +56,7 @@ type ClusterStats interface {
 
 type GroupedClusterStats interface {
 	Len() int
-	ClusterStatus(int) ClusterStats
+	ClusterStats(int) ClusterStats
 	AllClustersStats() Iterator
 	ClusterStatsFromIterator(Iterator) (int, ClusterStats)
 }

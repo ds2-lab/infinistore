@@ -42,7 +42,7 @@ func main() {
 	}
 	log.Color = !options.NoColor
 	if options.LogFile != "" {
-		logFile, err := os.OpenFile(options.LogFile, os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err := os.OpenFile(options.LogFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 		if err != nil {
 			syslog.Panic(err)
 		}
@@ -91,7 +91,7 @@ func main() {
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
-		dash.ConfigCluster(prxy.GetStatsProvider(), 12)
+		dash.ConfigCluster(prxy.GetStatsProvider(), 21)
 	}
 
 	// config server

@@ -12,7 +12,7 @@ import (
 
 type Dashboard struct {
 	*ui.Grid
-	ClusterView   *views.ClusterView
+	ClusterView   *views.GroupedClusterView
 	LogView       *views.LogView
 }
 
@@ -23,7 +23,7 @@ func NewDashboard() *Dashboard {
 
 	dashboard := &Dashboard{
 		Grid: ui.NewGrid(),
-		ClusterView: views.NewClusterView(" Nodes "),
+		ClusterView: views.NewGroupedClusterView(" Nodes "),
 		LogView: views.NewLogView(" Logs ", global.Options.LogFile),
 	}
 
@@ -44,9 +44,15 @@ func NewDashboard() *Dashboard {
 	return dashboard
 }
 
-func (dash *Dashboard) ConfigCluster(cluster types.ClusterStats, rows int) {
+// func (dash *Dashboard) ConfigCluster(cluster types.ClusterStats, cols int) {
+// 	dash.ClusterView.Cluster = cluster
+// 	dash.ClusterView.Cols = cols
+// 	dash.ClusterView.Update()
+// }
+
+func (dash *Dashboard) ConfigCluster(cluster types.GroupedClusterStats, cols int) {
 	dash.ClusterView.Cluster = cluster
-	dash.ClusterView.Rows = rows
+	dash.ClusterView.Cols = cols
 	dash.ClusterView.Update()
 }
 
