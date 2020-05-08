@@ -2,22 +2,24 @@ package views
 
 import (
 	"image"
+	"math"
+
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/drawille"
-	"math"
+
 	// "log"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type ClusterView struct {
 	*ui.Canvas
-	Cluster types.ClusterStats
-	Cols    int
-	origin  image.Point
-	mapper  image.Point
-	mapbase int
+	Cluster    types.ClusterStats
+	Cols       int
+	origin     image.Point
+	mapper     image.Point
+	mapbase    int
 	invalidate bool
 }
 
@@ -45,7 +47,6 @@ func (v *ClusterView) Update() {
 	v.invalidate = true
 }
 
-
 func (v *ClusterView) UpdateInstance(idx int) {
 	instance := v.Cluster.InstanceStats(idx)
 	v.updateMapper(v.Cluster.Len())
@@ -62,7 +63,7 @@ func (v *ClusterView) update() {
 	}
 
 	if len(v.CellMap) > 0 {
-		v.CellMap = make(map[image.Point]drawille.Cell, len(v.CellMap) * 2)
+		v.CellMap = make(map[image.Point]drawille.Cell, len(v.CellMap)*2)
 	}
 
 	iter := v.Cluster.AllInstancesStats()
@@ -87,7 +88,7 @@ func (v *ClusterView) updateMapper(len int) {
 	// log.Printf("reset mapper for len:%d", len)
 	v.mapper.X = (v.Inner.Max.X - v.Inner.Min.X + 1) * 2 / (v.Cols + 1)
 	if v.mapper.X < 2 {
-		v.mapper.X = 2    // minimum recognizable interval
+		v.mapper.X = 2 // minimum recognizable interval
 	}
 	v.origin.X = v.Inner.Min.X * 2 // + v.mapper.X
 
@@ -99,14 +100,14 @@ func (v *ClusterView) updateMapper(len int) {
 	if v.mapper.Y < 3 {
 		v.mapper.Y = 3 // minimum recognizable interval
 	}
-	v.origin.Y = (v.Inner.Max.Y - 1) * 4 - v.mapper.Y // reverse
+	v.origin.Y = (v.Inner.Max.Y-1)*4 - v.mapper.Y // reverse
 	// log.Printf("Demension %v to %v: %v\n", v.Inner.Max, v.Inner.Min, v.mapper)
 
 	v.mapbase = len
 }
 
 func (v *ClusterView) mapPoint(p image.Point) image.Point {
-	ret := image.Pt(v.origin.X + v.mapper.X * p.X, v.origin.Y - v.mapper.Y * p.Y)
+	ret := image.Pt(v.origin.X+v.mapper.X*p.X, v.origin.Y-v.mapper.Y*p.Y)
 	// log.Printf("Map point from %v to %v\n", p, ret)
 	return ret
 }
@@ -118,13 +119,13 @@ func (v *ClusterView) getColorByInstance(ins types.InstanceStats) ui.Color {
 	status := ins.Status()
 
 	// unstarted
-	if status & lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
+	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
 		return ui.ColorWhite
-	} else if backing := status & lambdastore.INSTANCE_MASK_STATUS_BACKING; backing == lambdastore.INSTANCE_RECOVERING {
+	} else if backing := status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8; backing == lambdastore.INSTANCE_RECOVERING {
 		return ui.ColorCyan
 	} else if backing == lambdastore.INSTANCE_BACKING {
 		return ui.ColorBlue
-	} else if phase := status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE; phase == lambdastore.PHASE_ACTIVE {
+	} else if phase := status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 16; phase == lambdastore.PHASE_ACTIVE {
 		return ui.ColorGreen
 	} else if phase == lambdastore.PHASE_BACKING_ONLY {
 		return ui.ColorYellow
