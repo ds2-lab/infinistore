@@ -227,15 +227,14 @@ func (ins *Instance) HandleRequests() {
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
 			// Double check, for it could timeout before a previous request got handled.
-			if len(ins.chanPriorCmd) == 0 || len(ins.chanCmd) == 0 {
-				// Warmup will not work until first call.
-				if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED || ins.IsReclaimed() {
-					ins.resetCoolTimer()
-				} else {
-					// Force warm up.
-					ins.warmUp()
-				}
+			// Warmup will not work until first call.
+			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+				ins.resetCoolTimer()
+			} else {
+				// Force warm up.
+				ins.warmUp()
 			}
+
 		}
 	}
 }

@@ -169,7 +169,7 @@ func (conn *Connection) ServeLambda() {
 		}
 
 		if conn.instance != nil {
-			conn.instance.warmUp()
+			conn.instance.flagWarmed()
 		}
 	}
 }
