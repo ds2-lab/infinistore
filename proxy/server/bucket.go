@@ -98,7 +98,7 @@ func (b *Bucket) initInstance(from, length int) {
 		// }()
 	}
 	//b.log.Debug("start name is %v, end %v, base is %v", b.group.All[b.start].Name(), b.group.All[from+len-1].Name(), b.group.base)
-	b.instances = b.group.SubGroup(from, from+length)
+	b.instances = b.group.SubGroup(b.start, from+length)
 	b.log.Debug("len is %v, start is %v, end is %v", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
 }
 
@@ -123,7 +123,6 @@ func (b *Bucket) scale(num int) (err error) {
 	if err != nil {
 		return
 	}
-
 	b.initInstance(b.end-num, num)
 
 	return nil

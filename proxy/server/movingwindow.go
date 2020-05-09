@@ -145,9 +145,8 @@ func (mw *MovingWindow) start() {
 
 func (mw *MovingWindow) Daemon() {
 	idx := 1
+	ticker := time.NewTicker(time.Duration(BucketDuration) * time.Minute)
 	for {
-		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(30 * time.Second)
 		select {
 		// scaling out in bucket
 		case <-mw.scaler:
@@ -180,9 +179,12 @@ func (mw *MovingWindow) Daemon() {
 
 			// update cursor, point to active bucket
 			mw.cursor = bucket
+			mw.log.Debug("rolling finished, bucket is %v", bucket.id)
+			idx += 1
 
+			// reset ticker
+			ticker = time.NewTicker(time.Duration(BucketDuration) * time.Minute)
 		}
-		idx += 1
 	}
 }
 
