@@ -12,6 +12,7 @@ import (
 
 var (
 	// Clients        = make([]chan interface{}, 1024*1024)
+	Options          CommandlineOptions
 	DataCollected    sync.WaitGroup
 	Log              logger.ILogger
 	ReqCoordinator   = NewRequestCoordinator(1024)
@@ -19,7 +20,6 @@ var (
 	BasePort         = 6378
 	BaseMigratorPort = 6380
 	ServerIp         string
-	Prefix           string
 	Flags            uint64
 )
 
