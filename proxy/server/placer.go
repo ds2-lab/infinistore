@@ -18,11 +18,15 @@ type PlacerMeta struct {
 	bucketIdx int
 	counter   int32
 	instances []*GroupInstance
+
+	// scaling?
+	isScale bool
 }
 
 func newPlacerMeta() *PlacerMeta {
 	return &PlacerMeta{
-		counter:   0,
+		counter: 0,
+		isScale: false,
 	}
 
 }
@@ -81,9 +85,10 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	}
 
 	// scaler check
-	if l.AvgSize(meta.placerMeta.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false {
+	if l.AvgSize(meta.placerMeta.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false && meta.placerMeta.isScale == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
+		meta.placerMeta.isScale = true
 		l.proxy.movingWindow.scaler <- struct{}{}
 	}
 
