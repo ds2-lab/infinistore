@@ -38,6 +38,8 @@ type Placer struct {
 	scaling   bool
 	mu        sync.RWMutex
 	pointer   int32
+
+	instances []*GroupInstance
 }
 
 func NewPlacer(store *MetaStore) *Placer {
@@ -80,12 +82,14 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 
 	if meta.placerMeta == nil {
 		meta.placerMeta = newPlacerMeta()
-		meta.placerMeta.instances = l.proxy.movingWindow.activeInstances(meta.NumChunks)
-		meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
+
 	}
 
+	meta.placerMeta.instances = l.instances
+	meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
+
 	// scaler check
-	if l.AvgSize(meta.placerMeta.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false && meta.placerMeta.isScale == false {
+	if l.AvgSize(l.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false && meta.placerMeta.isScale == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
 		meta.placerMeta.isScale = true

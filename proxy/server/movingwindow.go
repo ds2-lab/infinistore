@@ -141,6 +141,8 @@ func (mw *MovingWindow) start() {
 	// assign backup node for all nodes of this bucket
 	mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
+	mw.placer.instances = mw.activeInstances(config.NumLambdaClusters)
+
 }
 
 func (mw *MovingWindow) Daemon() {
@@ -157,6 +159,11 @@ func (mw *MovingWindow) Daemon() {
 
 			//scale out phase finished
 			mw.placer.scaling = false
+
+			mw.placer.mu.Lock()
+			mw.placer.instances = mw.activeInstances(config.NumLambdaClusters)
+			mw.placer.mu.Unlock()
+
 			mw.log.Debug("scale out finish")
 
 		// for bucket rolling
@@ -172,6 +179,10 @@ func (mw *MovingWindow) Daemon() {
 			// append to bucket list & append current bucket group to proxy group
 			mw.buckets = append(mw.buckets, bucket)
 			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
+
+			mw.placer.mu.Lock()
+			mw.placer.instances = mw.activeInstances(config.NumLambdaClusters)
+			mw.placer.mu.Unlock()
 
 			//check degrade and expire
 			mw.DegradeCheck()
