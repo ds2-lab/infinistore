@@ -17,13 +17,14 @@ const (
 type PlacerMeta struct {
 	bucketIdx int
 	counter   int32
+	instances []*GroupInstance
 }
 
 func newPlacerMeta() *PlacerMeta {
 	return &PlacerMeta{
-		bucketIdx: -1,
 		counter:   0,
 	}
+
 }
 
 type Placer struct {
@@ -73,27 +74,22 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if meta.placerMeta == nil {
+		meta.placerMeta = newPlacerMeta()
+		meta.placerMeta.instances = l.proxy.movingWindow.activeInstances(meta.NumChunks)
+		meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
+	}
+
 	// scaler check
-
-	instances := l.proxy.movingWindow.activeInstances(meta.NumChunks)
-	l.log.Debug("active instance[0] is %v, key is %v", instances[0].Name(), meta.Key)
-
-	if l.AvgSize(instances) > config.InstanceCapacity*config.Threshold && l.scaling == false {
+	if l.AvgSize(meta.placerMeta.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
 		l.proxy.movingWindow.scaler <- struct{}{}
 	}
 
-	if meta.placerMeta == nil {
-		meta.placerMeta = newPlacerMeta()
-	}
-
-	id := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
-	l.log.Debug("key is %v, instanceId is %v", meta.ChunkKey(int(meta.lastChunk)), id)
 	// place
-	instanceId := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
+	instanceId := int(meta.placerMeta.instances[chunkId].LambdaDeployment.Id())
 	meta.Placement[chunkId] = instanceId
-	meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
 
 	l.updateInstanceSize(instanceId, meta.ChunkSize)
 
