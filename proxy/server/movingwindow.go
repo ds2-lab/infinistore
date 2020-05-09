@@ -12,16 +12,11 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
-const (
-	BucketDuration = 10 // min
-	ActiveReplica  = 2
-)
-
 var (
 	ActiveDuration     = 3 // min
 	ExpireDuration     = 6 //min
-	ActiveBucketsNum   = ActiveDuration / BucketDuration
-	ExpireBucketsNum   = ExpireDuration / BucketDuration
+	ActiveBucketsNum   = ActiveDuration / config.BucketDuration
+	ExpireBucketsNum   = ExpireDuration / config.BucketDuration
 	NumBackupInstances = config.BackupsPerInstance * config.NumLambdaClusters
 )
 
@@ -147,7 +142,7 @@ func (mw *MovingWindow) start() {
 
 func (mw *MovingWindow) Daemon() {
 	idx := 1
-	ticker := time.NewTicker(time.Duration(BucketDuration) * time.Minute)
+	ticker := time.NewTicker(time.Duration(config.BucketDuration) * time.Minute)
 	for {
 		select {
 		// scaling out in bucket
@@ -194,7 +189,7 @@ func (mw *MovingWindow) Daemon() {
 			idx += 1
 
 			// reset ticker
-			ticker = time.NewTicker(time.Duration(BucketDuration) * time.Minute)
+			ticker = time.NewTicker(time.Duration(config.BucketDuration) * time.Minute)
 		}
 	}
 }
@@ -288,7 +283,7 @@ func (mw *MovingWindow) Refresh(obj *Meta, chunkId int) (*lambdastore.Instance, 
 	if mw.getCurrentBucket().id-oldBucketId >= ActiveBucketsNum {
 		instance := mw.getActiveInstanceForChunk(obj, chunkId)
 		return instance, true
-	} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/ActiveReplica) {
+	} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/config.ActiveReplica) {
 		instance := mw.getActiveInstanceForChunk(obj, chunkId)
 		return instance, true
 	}

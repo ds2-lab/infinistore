@@ -43,11 +43,11 @@ const RecoverRate = 40 * 1000000 // 40MB for 1536MB instance, 70MB for 3008MB in
 // BackupsPerInstance  Number of backup instances used for parallel recovery.
 const BackupsPerInstance = 36 // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
-// active window
-const ActiveWindow = 2 * time.Hour
+// Each bucket's active duration
+const BucketDuration = 1 // min
 
-//
-const expireTime = ActiveWindow + 3*time.Hour
+// Async migrate control
+const ActiveReplica = 2 //min
 
 // ProxyList Ip addresses of proxies.
 var ProxyList []string
