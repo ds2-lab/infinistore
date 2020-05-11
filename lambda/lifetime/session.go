@@ -15,8 +15,8 @@ var (
 )
 
 type Session struct {
-	Sid       string
-	Id        string
+	Sid       string                    // Id from proxy
+	Id        string                    // Id from provider
 	Input     *protocol.InputEvent
 	Requests  int
 	Setup     sync.WaitGroup            // Used to wait for setup on invocation

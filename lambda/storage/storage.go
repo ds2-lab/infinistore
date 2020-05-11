@@ -676,7 +676,7 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
 		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes + ssBytes)
-		collector.AddPersist(
+		collector.AddCommit(
 			types.OP_COMMIT, false, s.id, int(term),
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
 		opt.BytesUploaded += uint64(termBytes + ssBytes)
@@ -855,9 +855,9 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	s.log.Debug("End recovery node %d.", meta.Meta.Id)
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
 	s.log.Trace("recover,%d,%d,%d,%d", stop1, stop2, end, objectBytes)
-	collector.AddPersist(
+	collector.AddRecovery(
 		types.OP_RECOVERY, meta.Backup, meta.Meta.Id, meta.BackupId,
-		stop1, stop2, end, lineageBytes, objectBytes)
+		stop1, stop2, end, lineageBytes, objectBytes, len(tbds))
 	close(chanErr)
 }
 

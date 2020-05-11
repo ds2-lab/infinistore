@@ -73,6 +73,7 @@ func init() {
 
 	collector.AWSRegion = AWS_REGION
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
+	collector.Lifetime = lifetime
 
 	migrator.AWSRegion = AWS_REGION
 }
@@ -112,6 +113,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline)) / float64(time.Second))) * time.Second
 	session.Timeout.SetLogger(log)
 	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
+	collector.Session = session
 
 	issuePong()     // Ensure pong will only be issued once on invocation
 	// Setup of the session is done.
@@ -765,7 +767,7 @@ func main() {
 		}
 
 		// put DATA to s3
-		collector.Save(lifetime)
+		collector.Save()
 
 		w.AppendBulkString("data")
 		w.AppendBulkString("OK")
@@ -882,7 +884,7 @@ func main() {
 			// Should be ready if migration ended.
 			if session.Migrator.IsReady() {
 				// put data to s3 before migration finish
-				collector.Save(lifetime)
+				collector.Save()
 
 				// This is essential for debugging, and useful if deployment pool is not large enough.
 				lifetime.Rest()

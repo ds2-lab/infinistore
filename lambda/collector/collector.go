@@ -29,7 +29,8 @@ var (
 	HostName       string
 	FunctionName   string
 	Enables        int32 = COLLECT_PERSIST
-
+	Lifetime       *lifetime.Lifetime
+	Session        *lifetime.Session
 
 	dataGatherer                   = make(chan DataEntry, 10)
 	dataDepository                 = make([]DataEntry, 0, 100)
@@ -74,7 +75,7 @@ func Collect(session *lifetime.Session) {
 	}
 }
 
-func Save(l *lifetime.Lifetime) {
+func Save() {
 	// Wait for data depository.
 	dataDeposited.Wait()
 
@@ -83,7 +84,7 @@ func Save(l *lifetime.Lifetime) {
 		entry.WriteTo(data)
 	}
 
-	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, l.Id())
+	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, Lifetime.Id())
 	s3Put(S3Bucket, key, data)
 	dataDepository = dataDepository[:0]
 }

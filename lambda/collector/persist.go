@@ -17,11 +17,26 @@ type PersistEntry struct {
 	Duration       time.Duration    // Duration for lambda side latency.
 	BytesLineage   int
 	BytesObjects   int
+	Objects        int
+	Session        string
 }
 
-func AddPersist(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
+func AddRecovery(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
+	if addPersist(op, backup, id, backKey, d1, d2, d, b1, b2, o) {
+		Save()
+	}
+}
+
+func AddCommit(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
+	addPersist(op, backup, id, backKey, d1, d2, d, b1, b2, 0)
+}
+
+func addPersist(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) bool {
 	if Enables & COLLECT_PERSIST > 0 {
-		Send(&PersistEntry{op, backup, id, backKey, d1, d2, d, b1, b2})
+		Send(&PersistEntry{op, backup, id, backKey, d1, d2, d, b1, b2, o, Session.Id})
+		return true
+	} else {
+		return false
 	}
 }
 
@@ -47,4 +62,8 @@ func (e *PersistEntry) WriteTo(buf *bytes.Buffer) {
 	buf.WriteString(strconv.Itoa(e.BytesLineage))
 	buf.WriteRune(',')
 	buf.WriteString(strconv.Itoa(e.BytesObjects))
+	buf.WriteRune(',')
+	buf.WriteString(strconv.Itoa(e.Objects))
+	buf.WriteRune(',')
+	buf.WriteString(e.Session)
 }
