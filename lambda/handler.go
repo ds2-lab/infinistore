@@ -88,10 +88,14 @@ func getAwsReqId(ctx context.Context) string {
 	return lc.AwsRequestID
 }
 
+func isDebug() bool {
+	return log.Level == logger.LOG_LEVEL_ALL
+}
+
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
-	store, _ = store.Init(input.Id, input.IsPersistentEnabled())
+	store, _ = store.Init(input.Id, input.IsPersistencyEnabled())
 	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
 	// Initialize session.
@@ -142,7 +146,6 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Extend timeout for expecting requests except invocation with cmd "warmup".
 	if input.Cmd == "warmup" {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
-		collector.Send(&types.DataEntry{Op: types.OP_WARMUP, Session: session.Id})
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
@@ -227,8 +230,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Adaptive timeout control
 	meta := wait(session, lifetime).ProtocolStatus()
 	log.Debug("Output meta: %v", meta)
-	log.Debug("All routing cleared(%d) at %v, interrupted: %v",
-		runtime.NumGoroutine(), session.Timeout.Since(), session.Timeout.Interrupted())
+	if isDebug() {
+		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
+	}
+	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
+	log.Info("served %d, interrupted: %d", session.Timeout.Since(), session.Timeout.Interrupted())
 	return meta, nil
 }
 
@@ -453,8 +459,6 @@ func recoveredHandler(ctx context.Context, conn net.Conn) error {
 }
 
 func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) bool {
-	collector.Send(&types.DataEntry{ Op: types.OP_MIGRATION, Session: session.Id })
-
 	if len(session.Input.Addr) == 0 {
 		log.Error("No migrator set.")
 		return false
@@ -565,16 +569,11 @@ func main() {
 		reqId := c.Arg(1).String()
 		key := c.Arg(3).String()
 
-		//val, err := myCache.Get(key)
-		//if err == false {
-		//	log.Debug("not found")
-		//}
-		t2 := time.Now()
 		chunkId, stream, ret := store.GetStream(key)
 		if stream != nil {
 			defer stream.Close()
 		}
-		d2 := time.Since(t2)
+		d1 := time.Since(t)
 
 		if ret.Error() == nil {
 			// construct lambda store response
@@ -588,18 +587,16 @@ func main() {
 			}
 			response.Prepare()
 
-			t3 := time.Now()
+			t2 := time.Now()
 			if err := response.Flush(); err != nil {
 				log.Error("Error on flush(get key %s): %v", key, err)
 				return
 			}
-			d3 := time.Since(t3)
+			d2 := time.Since(t2)
 
 			dt := time.Since(t)
-			log.Debug("Streaming duration is %v", d3)
-			log.Debug("Total duration is %v", dt)
-			log.Debug("Get complete, Key: %s, ConnID:%s, ChunkID:%s", key, connId, chunkId)
-			collector.Send(&types.DataEntry{types.OP_GET, "200", reqId, chunkId, d2, d3, dt, session.Id})
+			log.Debug("Get key:%s, chunk:%s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+			collector.AddRequest(types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		} else {
 			var respError *types.ResponseError
 			if ret.Error() == types.ErrNotFound {
@@ -614,7 +611,7 @@ func main() {
 			if err := w.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
-			collector.Send(&types.DataEntry{types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), session.Id})
+			collector.AddRequest(types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
 		}
 	})
 
@@ -626,24 +623,29 @@ func main() {
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		var ret *types.OpRet
-		defer func() {
-			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension)
-			} else {
-				go func() {
-					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension)
-				}()
-			}
-		}()
 
 		t := time.Now()
 		log.Debug("In SET handler")
 
+		var reqId, chunkId string
+		var finalize func(*types.OpRet, bool, ...time.Duration)
+		finalize = func(ret *types.OpRet, wait bool, ds ...time.Duration) {
+			if ret == nil || !ret.IsDelayed() {
+				// Only if error
+				collector.AddRequest(types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
+			} else if wait {
+				ret.Wait()
+				collector.AddRequest(types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
+			} else {
+				go finalize(ret, true)
+				return
+			}
+			session.Timeout.DoneBusyWithReset(extension)
+		}
+
 		connId, _ := c.NextArg().String()
-		reqId, _ := c.NextArg().String()
-		chunkId, _ := c.NextArg().String()
+		reqId, _ = c.NextArg().String()
+		chunkId, _ = c.NextArg().String()
 		key, _ := c.NextArg().String()
 		valReader, err := c.Next()
 		if err != nil {
@@ -652,11 +654,13 @@ func main() {
 			if err := w.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 			}
+			finalize(nil, false)
 			return
 		}
 
 		// Streaming set.
-		ret = store.SetStream(key, chunkId, valReader)
+		ret := store.SetStream(key, chunkId, valReader)
+		d1 := time.Since(t)
 		if ret.Error() != nil {
 			log.Error("%v", ret.Error())
 			w.AppendErrorf("%v", ret.Error())
@@ -664,6 +668,7 @@ func main() {
 				log.Error("Error on flush(error 500): %v", err)
 				// Ignore
 			}
+			finalize(ret, false)
 			return
 		}
 
@@ -676,13 +681,16 @@ func main() {
 			ChunkId:        chunkId,
 		}
 		response.Prepare()
+		t2 := time.Now()
 		if err := response.Flush(); err != nil {
 			log.Error("Error on set::flush(set key %s): %v", key, err)
 			// Ignore
 		}
+		d2 := time.Since(t2)
 
-		log.Debug("Set complete, Key:%s, ConnID: %s, ChunkID: %s", key, connId, chunkId)
-		collector.Send(&types.DataEntry{types.OP_SET, "200", reqId, chunkId, 0, 0, time.Since(t), session.Id})
+		dt := time.Since(t)
+		log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+		finalize(ret, false, d1, d2, dt)
 	})
 
 	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {

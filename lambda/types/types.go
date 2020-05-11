@@ -15,6 +15,8 @@ const (
 	OP_DEL         = 2
 	OP_WARMUP      = 90
 	OP_MIGRATION   = 91
+	OP_RECOVERY    = 92      // Recover repository
+	OP_COMMIT      = 93      // Commit lineage
 
 	CHUNK_OK       = 0
 	CHUNK_RECOVERING = 1
@@ -73,18 +75,6 @@ func (c *Chunk) Op() uint32 {
 	} else {
 		return OP_SET
 	}
-}
-
-// For data collection
-type DataEntry struct {
-	Op             int
-	Status         string
-	ReqId          string
-	ChunkId        string
-	DurationAppend time.Duration
-	DurationFlush  time.Duration
-	Duration       time.Duration
-	Session        string
 }
 
 type ResponseError struct {

@@ -543,6 +543,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 	event := &protocol.InputEvent{
 		Sid:    ins.initSession(),
+		Cmd:    protocol.CMD_PING,
 		Id:     ins.Id(),
 		Proxy:  fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix: global.Options.Prefix,
@@ -597,7 +598,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
-	} else if event.IsPersistentEnabled() {
+	} else if event.IsPersistencyEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 }
