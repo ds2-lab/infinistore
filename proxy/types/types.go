@@ -29,3 +29,12 @@ type MigrationScheduler interface {
 	StartMigrator(uint64) (string, error)
 	GetDestination(uint64) (LambdaDeployment, error)
 }
+
+type ClusterStatus interface {
+	Len() int
+	InstanceStatus(int) InstanceStatus
+}
+
+type InstanceStatus interface {
+	Status() uint64
+}
