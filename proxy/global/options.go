@@ -9,4 +9,7 @@ type CommandlineOptions struct {
 	NoDashboard   bool
 	NoColor       bool
 	LogFile       string
+	Evaluation    bool
+	NumBackups    int
+	NoFirstD      bool
 }

@@ -1,33 +1,33 @@
 #!/bin/bash
 
+PWD=`dirname $0`
 BASE=`pwd`/`dirname $0`
 PROXY=$BASE/../bin/proxy
 REDBENCH=$BASE/../bin/redbench
-DEPLOY=$BASE/../../proxy
-
-echo $PWD
+DEPLOY=$BASE/../../deploy
 
 function reclaim_lambda() {
     NAME=$1
     RECLAIM=$2
-    ((RECLAIM_END=RECLAIM+1))
     TIMEOUT=$3
-    echo "reclaiming node $RECLAIM"
-    go run $DEPLOY/deploy_function.go -config -prefix=$NAME -vpc -from=$RECLAIM -to=$RECLAIM_END -timeout=$TIMEOUT
+    go run $DEPLOY/deploy_function.go -config -prefix=$NAME -vpc -from=$RECLAIM -to=$((RECLAIM+1)) -timeout=$TIMEOUT
+    echo "Node $NAME$RECLAIM reclaimed."
 }
 
 function update_lambda_mem() {
     NAME=$1
     CLUSTER=$2
     MEM=$3
+    TIMEOUT=$4
     echo "updating all nodes to memory of $MEM"
-    go run $DEPLOY/deploy_function.go -config -prefix=$NAME -vpc -to=$CLUSTER -mem=$MEM -timeout=600
+    go run $DEPLOY/deploy_function.go -config -prefix=$NAME -vpc -to=$CLUSTER -mem=$MEM -timeout=$TIMEOUT
 }
 
 function start_proxy() {
     echo "starting proxy server"
     PREFIX=$1
-    $PROXY -prefix=$PREFIX -disable-dashboard # -debug
+    BACKUPS=$2
+    $PROXY -disable-dashboard -enable-evaluation -prefix=$PREFIX -numbak=$BACKUPS # -debug
 }
 
 function bench() {

@@ -36,6 +36,10 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 		counter.DataShards = d
 		counter.ParityShards = p
 		counter.returned = 0
+		counter.numToFulfill = d
+		if Options.Evaluation && Options.NoFirstD {
+			counter.numToFulfill = d + p
+		}
 		l := int(d + p)
 		if cap(counter.Requests) < l {
 			counter.Requests = make([]*types.Request, l)
@@ -75,6 +79,7 @@ type RequestCounter struct {
 	Requests     []*types.Request
 
 	returned     int64       // Returned counter from lambda.
+	numToFulfill int64
 }
 
 func newRequestCounter() interface{} {
@@ -94,11 +99,11 @@ func (c *RequestCounter) Returned() int64 {
 }
 
 func (c *RequestCounter) IsFulfilled(returned int64) bool {
-	return returned >= c.DataShards
+	return returned >= c.numToFulfill
 }
 
 func (c *RequestCounter) IsLate(returned int64) bool {
-	return returned > c.DataShards
+	return returned > c.numToFulfill
 }
 
 func (c *RequestCounter) IsAllReturned(returned int64) bool {

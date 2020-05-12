@@ -169,10 +169,13 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
 	flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
-	showDashboard := flag.Bool("enable-dashboard", false, "Disable dashboard")
+	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
 	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
 	flag.StringVar(&options.LogFile, "log", "", "Path to the log file. If dashboard is not disabled, the default value is \"log\".")
+	flag.BoolVar(&options.Evaluation, "enable-evaluation", false, "Enable evaluation settings.")
+	flag.IntVar(&options.NumBackups, "numbak", 0, "EVALUATION ONLY: The number of backups used per node.")
+	flag.BoolVar(&options.NoFirstD, "disable-first-d", false, "EVALUATION ONLY: Disable first-d optimization.")
 
 	flag.Parse()
 	options.NoDashboard = !*showDashboard

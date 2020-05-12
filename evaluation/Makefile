@@ -9,7 +9,6 @@ build: prepare
 	go build ../proxy/
 	mv proxy bin/
 
-
 build-bench: prepare
 	go build $(GOPATH)/src/github.com/wangaoone/redbench/
 	mv redbench bin/
@@ -41,4 +40,4 @@ benchmark:
 	go run $(GOPATH)/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
 benchmark-recovery: build build-bench
-	
+	benchmark-recovery/benchmark.sh 1>./log 2>&1 &

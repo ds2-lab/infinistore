@@ -33,7 +33,11 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(config.NumLambdaClusters)
+	extra := 0
+	if global.Options.Evaluation && global.Options.NumBackups > 0 {
+		extra = global.Options.NumBackups
+	}
+	group := NewGroup(config.NumLambdaClusters, extra)
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
@@ -270,17 +274,27 @@ func (p *Proxy) CollectData() {
 
 func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
 	numBaks := config.BackupsPerInstance
+	available := g.Len()
+	selectFrom := 0
+	unipool := 1
+	if global.Options.Evaluation && global.Options.NumBackups > 0 {
+		// In evaluation mode, main nodes and backup nodes are seqarated
+		numBaks = global.Options.NumBackups
+		available = global.Options.NumBackups
+		selectFrom = g.Len() - available
+		unipool = 0
+	}
 	numTotal := numBaks * 2
-	distance := g.Len() / (numTotal + 1)     // main + double backup candidates
+	distance := available / (numTotal + unipool)     // main + double backup candidates
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len() - 1, numBaks).(int)    // Use all
-		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len() - 1, numTotal).(int)
+		numBaks = util.Ifelse(numBaks >= available, available - unipool, numBaks).(int)    // Use all
+		numTotal = util.Ifelse(numTotal >= available, available - unipool, numTotal).(int)
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = g.Instance((i + j * distance + rand.Int() % distance + 1) % g.Len()) // Random to avoid the same backup set.
+		candidates[j] = g.Instance(selectFrom + (i + j * distance + rand.Int() % distance + 1) % available) // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }

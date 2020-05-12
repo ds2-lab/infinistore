@@ -11,7 +11,7 @@ const AWSRegion = "us-east-1"
 const LambdaMaxDeployments = 400
 
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
-const NumLambdaClusters = 400
+const NumLambdaClusters = 12
 
 // LambdaStoreName Obsoleted. Name of Lambda function for replica version.
 const LambdaStoreName = "LambdaStore"

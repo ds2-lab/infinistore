@@ -20,15 +20,19 @@ type GroupInstance struct {
 	idx         int
 }
 
-func NewGroup(num int) *Group {
+func NewGroup(num int, extra ...int) *Group {
+	more := 0
+	if len(extra) > 0 {
+		more = extra[0]
+	}
 	return &Group{
-		All: make([]*GroupInstance, num),
+		All: make([]*GroupInstance, num + more),
 		size: num,
 	}
 }
 
 func (g *Group) Len() int {
-	return g.size
+	return len(g.All)
 }
 
 func (g *Group) InitMeta(meta *Meta, sliceSize int) *Meta {
