@@ -222,7 +222,7 @@ func (ins *Instance) HandleRequests() {
 func (ins *Instance) StartRecovery() int {
 	recovering := atomic.LoadUint32(&ins.recovering)
 	if recovering > 0 {
-		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
+		ins.log.Warn("Instance is recovering")
 		return int(recovering)
 	}
 
@@ -234,7 +234,7 @@ func (ins *Instance) StartRecovery() int {
 
 func (ins *Instance) startRecoveryLocked() int {
 	if recovering := atomic.LoadUint32(&ins.recovering); recovering > 0 {
-		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
+		ins.log.Warn("Instance is recovering")
 		return int(recovering)
 	}
 

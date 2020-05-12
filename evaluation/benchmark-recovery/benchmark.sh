@@ -12,6 +12,7 @@ NODE_PREFIX="Your Lambda Function Prefix"
 MINBACKUPS=10
 OVERHEAD=100
 CLUSTER=12
+TIMEOUTBASE=600
 
 source $PWD/util.sh
 
@@ -23,12 +24,11 @@ function perform(){
     INTERVAL=$5
     MEM=$6
     BACKUPS=$7
-    TIMEOUT=$8
 
     ((NODES=CLUSTER+BACKUPS))
     ((BYTES=SZ*1024*1024))
     ((BAKOVERHEAD=MEM/MINBACKUPS))   # Reserved.
-    SETS=$(((MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
+    ((SETS=(MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
     ((N=SECS*1000/INTERVAL))
     RECLAIM=0
 
@@ -36,7 +36,7 @@ function perform(){
     do
         PREPROXY=$ENTRY/No.$i"_"lambda$MEM"_"$BACKUPS"_"$SZ"_"$INTERVAL
 
-        update_lambda_mem $NODE_PREFIX $NODES $MEM $((TIMEOUT+i*10))
+        update_lambda_mem $NODE_PREFIX $NODES $MEM $((TIMEOUTBASE+i*10))
         # Wait for proxy ready
         start_proxy $PREPROXY $BACKUPS &
         while [ ! -f /tmp/infinicache.pid ]
@@ -55,7 +55,7 @@ function perform(){
 
         # Trigger force reclaimation, the lambda 0 will be reclaimed in the middle of experiment.
         echo "Trigger reclaimation of node $RECLAIM in 5 seconds"
-        /bin/bash -c "$PWD/reclaim.sh $NODE_PREFIX $RECLAIM 5 $i &"
+        /bin/bash -c "$PWD/reclaim.sh $NODE_PREFIX $RECLAIM $MEM 5 $i &"
 
         # Get objects, be sure to long enough
         echo "Getting random $N objects for $SECS seconds, interval: $INTERVAL ms"
@@ -67,14 +67,18 @@ function perform(){
 #perform $*
 #perform
 
-SEC=(60)
+# Seconds to run.
+LASTING=(60)
+# Memory settings
 MEMSET=(512 1024 1536 2048 3008)
+# Object size settings
 SZSET=(1 10 50 100)
-INTERVAL=(200 500 1000 2000)
-BACKUPS=(10 20 40 80)
+# Inter-arrival time settings
+IASET=(200 500 1000 2000)
+# # of backup nodes settings
+BAKSET=(10 20 40 80)
 CONCURRENCY=1
-KEYS=1          # Occupant
-TIMEOUT=600
+MAXKEY=1          # Occupant
 if [ "$1" != "" ]; then
     TIMEOUT="$1"
 fi
@@ -84,11 +88,9 @@ for mem in {0..4}
 do
     for sz in {0..3}
     do
-      i=0
-      bak=1
-      # perform seconds concur       keys  object-size  inter-arrival  memory         num-backups     timeout
-      perform ${SEC[i]} $CONCURRENCY $KEYS ${SZSET[sz]} ${INTERVAL[i]} ${MEMSET[mem]} ${BACKUPS[bak]} $TIMEOUT
+      iaIdx=1
+      bak=0
+      #       seconds       concur       keys    object-size  inter-arrival   memory       num-backups
+      perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${BAKSET[bak]}
     done
 done
-
-mv $PWD/log $PWD/$ENTRY.log
