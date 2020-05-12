@@ -8,6 +8,7 @@ type CommandlineOptions struct {
 	P             int
 	NoDashboard   bool
 	NoColor       bool
+	LogPath       string
 	LogFile       string
 	Evaluation    bool
 	NumBackups    int
