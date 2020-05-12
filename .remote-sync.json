@@ -1,0 +1,19 @@
+{
+  "logger": {
+    "title": "Remote Sync"
+  },
+  "uploadOnSave": false,
+  "useAtomicWrites": false,
+  "deleteLocal": false,
+  "hostname": "server.gmu.tianium.com",
+  "port": "22",
+  "target": "/home/ubuntu/go/src/github.com/mason-leap-lab/infinicache",
+  "ignore": [
+    ".remote-sync.json",
+    ".git/**"
+  ],
+  "username": "ubuntu",
+  "keyfile": "/Users/Tianium/.ssh/tianium",
+  "watch": [],
+  "transport": "scp"
+}

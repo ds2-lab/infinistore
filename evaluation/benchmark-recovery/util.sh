@@ -2,9 +2,10 @@
 
 PWD=`dirname $0`
 BASE=`pwd`/`dirname $0`
-PROXY=$BASE/../bin/proxy
-REDBENCH=$BASE/../bin/redbench
-DEPLOY=$BASE/../../deploy
+EVALBASE=$BASE/..
+PROJECTBASE=$BASE/../..
+BINDIR=$EVALBASE/bin
+DEPLOY=$PROJECTBASE/deploy
 
 function reclaim_lambda() {
     NAME=$1
@@ -27,7 +28,8 @@ function start_proxy() {
     echo "starting proxy server"
     PREFIX=$1
     BACKUPS=$2
-    $PROXY -disable-dashboard -enable-evaluation -prefix=$PREFIX -numbak=$BACKUPS # -debug
+    mkdir -p `dirname $EVALBASE/$PREFIX`
+    $BINDIR/proxy -disable-dashboard -enable-evaluation -base=$EVALBASE -prefix=$PREFIX -numbak=$BACKUPS # -debug
 }
 
 function bench() {
@@ -38,6 +40,6 @@ function bench() {
     SZ=$5
     OP=$6
     INTERVAL=$7
-    $REDBENCH -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
-    -sz $SZ -cli=redis -op $OP -i INTERVAL
+    $BINDIR/redbench -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
+      -sz $SZ -cli=redis -op $OP -i $INTERVAL
 }

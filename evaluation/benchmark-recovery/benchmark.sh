@@ -26,14 +26,15 @@ function perform(){
     TIMEOUT=$8
 
     ((NODES=CLUSTER+BACKUPS))
+    ((BYTES=SZ*1024*1024))
     ((BAKOVERHEAD=MEM/MINBACKUPS))   # Reserved.
-    ((SETS=(MEM-OVERHEAD)/(SZ/10)))  # Default EC configuration: 10+2
+    SETS=$(((MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
     ((N=SECS*1000/INTERVAL))
     RECLAIM=0
 
     for i in {1..5}
     do
-        PREPROXY=$PWD/$ENTRY/No.$i"_"lambda$MEM"_"$BACKUPS"_"$SZ"_"$INTERVAL
+        PREPROXY=$ENTRY/No.$i"_"lambda$MEM"_"$BACKUPS"_"$SZ"_"$INTERVAL
 
         update_lambda_mem $NODE_PREFIX $NODES $MEM $((TIMEOUT+i*10))
         # Wait for proxy ready
@@ -42,12 +43,12 @@ function perform(){
         do
             sleep 1s
         done
-        cat /tmp/infinicache.pid
+        echo pid:`cat /tmp/infinicache.pid`
 
         # Set objects
         sleep 1s
-        echo "Setting $((MEM-OVERHEAD-BAKOVERHEAD))MB objects"
-        bench $SETS 1 1 $SETS $SZ 0 0
+        echo "Setting $SETS $SZMB objects, $((SETS*SZ))MB in total."
+        bench $SETS 1 1 $SETS $BYTES 0 0
 
         echo "Wait 60s for persisting..."
         sleep 60s
@@ -57,7 +58,8 @@ function perform(){
         /bin/bash -c "$PWD/reclaim.sh $NODE_PREFIX $RECLAIM 5 $i &"
 
         # Get objects, be sure to long enough
-        bench $N 1 1 $SETS $SZ 1 $INTERVAL
+        echo "Getting random $N objects for $SECS seconds, interval: $INTERVAL ms"
+        bench $N 1 1 $SETS $BYTES 1 $INTERVAL
         kill -2 `cat /tmp/infinicache.pid`
     done
 }
@@ -67,7 +69,7 @@ function perform(){
 
 SEC=(60)
 MEMSET=(512 1024 1536 2048 3008)
-SZSET=(1048576 10485760 52428800 104857600)
+SZSET=(1 10 50 100)
 INTERVAL=(200 500 1000 2000)
 BACKUPS=(10 20 40 80)
 CONCURRENCY=1
