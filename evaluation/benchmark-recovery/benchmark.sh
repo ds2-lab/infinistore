@@ -78,9 +78,9 @@ if [ "$1" != "" ]; then
 fi
 
 mkdir -p $PWD/$ENTRY
-for mem in {0..4}
+for mem in {0..0}
 do
-    for sz in {0..3}
+    for sz in {0..0}
     do
       i=0
       bak=1
