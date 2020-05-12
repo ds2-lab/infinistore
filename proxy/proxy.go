@@ -168,12 +168,14 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
-	flag.BoolVar(&options.NoDashboard, "disable-dashboard", false, "Disable dashboard")
+	flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
+	showDashboard := flag.Bool("enable-dashboard", false, "Disable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
 	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
 	flag.StringVar(&options.LogFile, "log", "", "Path to the log file. If dashboard is not disabled, the default value is \"log\".")
 
 	flag.Parse()
+	options.NoDashboard = !*showDashboard
 
 	if printInfo {
 		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
