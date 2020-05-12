@@ -639,7 +639,7 @@ func main() {
 				ret.Wait()
 				collector.AddRequest(types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
 			} else {
-				go finalize(ret, true)
+				go finalize(ret, true, ds...)
 				return
 			}
 			session.Timeout.DoneBusyWithReset(extension)

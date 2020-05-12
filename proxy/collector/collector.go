@@ -33,8 +33,8 @@ var (
 func init() {
 	// cmd, reqId, chunk, start, duration, firstByte, header from lambda, header to client, obsolete1, obsolete2, streaming, ping
 	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
-	// cmd, bytes, start, duration
-	LogEndtoEnd = nanolog.AddLogger("%s,%i64,%i64,%i64")
+	// cmd, status, bytes, start, duration
+	LogEndtoEnd = nanolog.AddLogger("%s,%s,%i64,%i64,%i64")
 }
 
 func Create(prefix string) {
