@@ -20,15 +20,19 @@ type GroupInstance struct {
 	idx         int
 }
 
-func NewGroup(num int) *Group {
+func NewGroup(num int, extra ...int) *Group {
+	more := 0
+	if len(extra) > 0 {
+		more = extra[0]
+	}
 	return &Group{
-		All: make([]*GroupInstance, num),
+		All: make([]*GroupInstance, num + more),
 		size: num,
 	}
 }
 
 func (g *Group) Len() int {
-	return g.size
+	return len(g.All)
 }
 
 func (g *Group) InitMeta(meta *Meta, sliceSize int) *Meta {
@@ -62,6 +66,10 @@ func (g *Group) Validate(ins *GroupInstance) *GroupInstance {
 
 func (g *Group) Instance(idx int) *lambdastore.Instance {
 	return g.All[idx].LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (g *Group) InstanceStatus(idx int) types.InstanceStatus {
+	return g.Instance(idx)
 }
 
 func (g *Group) nextSlice(sliceSize int) int {

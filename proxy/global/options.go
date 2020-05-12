@@ -7,5 +7,9 @@ type CommandlineOptions struct {
 	D             int
 	P             int
 	NoDashboard   bool
+	NoColor       bool
 	LogFile       string
+	Evaluation    bool
+	NumBackups    int
+	NoFirstD      bool
 }

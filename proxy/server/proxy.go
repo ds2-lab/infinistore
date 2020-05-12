@@ -33,12 +33,16 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(config.NumLambdaClusters)
+	extra := 0
+	if global.Options.Evaluation && global.Options.NumBackups > 0 {
+		extra = global.Options.NumBackups
+	}
+	group := NewGroup(config.NumLambdaClusters, extra)
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		group:     group,
 		metaStore: NewPlacer(NewMataStore(), group),
@@ -63,17 +67,21 @@ func New(replica bool) *Proxy {
 		node.AssignBackups(num, candidates)
 
 		// Initialize instance, this is not neccessary if the start time of the instance is acceptable.
-		p.ready.Add(1)
-		go func() {
-			node.WarmUp()
-			p.ready.Done()
-		}()
+		// p.ready.Add(1)
+		// go func() {
+		// 	node.WarmUp()
+		// 	p.ready.Done()
+		// }()
 
 		// Begin handle requests
 		go node.HandleRequests()
 	}
 
 	return p
+}
+
+func (p *Proxy) GetStatusProvider() types.ClusterStatus {
+	return p.group
 }
 
 func (p *Proxy) Serve(lis net.Listener) {
@@ -129,7 +137,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	bodyStream.(resp.Holdable).Hold()   // Hold to prevent being closed
 
 	// Start counting time.
-	if err := collector.Collect(collector.LogStart, "set", reqId, chunkId, time.Now().UnixNano()); err != nil {
+	if err := collector.Collect(collector.LogStart, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
@@ -176,7 +184,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
 	// Start couting time.
-	if err := collector.Collect(collector.LogStart, "get", reqId, chunkId, time.Now().UnixNano()); err != nil {
+	if err := collector.Collect(collector.LogStart, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
@@ -252,9 +260,8 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 
 func (p *Proxy) CollectData() {
 	for i, _ := range p.group.All {
-		global.DataCollected.Add(1)
 		// send data command
-		p.group.Instance(i).C() <- &types.Control{Cmd: "data"}
+		p.group.Instance(i).CollectData()
 	}
 	p.log.Info("Waiting data from Lambda")
 	global.DataCollected.Wait()
@@ -267,17 +274,27 @@ func (p *Proxy) CollectData() {
 
 func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
 	numBaks := config.BackupsPerInstance
+	available := g.Len()
+	selectFrom := 0
+	unipool := 1
+	if global.Options.Evaluation && global.Options.NumBackups > 0 {
+		// In evaluation mode, main nodes and backup nodes are seqarated
+		numBaks = global.Options.NumBackups
+		available = global.Options.NumBackups
+		selectFrom = g.Len() - available
+		unipool = 0
+	}
 	numTotal := numBaks * 2
-	distance := g.Len() / (numTotal + 1)     // main + double backup candidates
+	distance := available / (numTotal + unipool)     // main + double backup candidates
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len() - 1, numBaks).(int)    // Use all
-		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len() - 1, numTotal).(int)
+		numBaks = util.Ifelse(numBaks >= available, available - unipool, numBaks).(int)    // Use all
+		numTotal = util.Ifelse(numTotal >= available, available - unipool, numTotal).(int)
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = g.Instance((i + j * distance + rand.Int() % distance + 1) % g.Len()) // Random to avoid the same backup set.
+		candidates[j] = g.Instance(selectFrom + (i + j * distance + rand.Int() % distance + 1) % available) // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }

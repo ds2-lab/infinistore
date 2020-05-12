@@ -78,7 +78,7 @@ func NewPlacer(store *MetaStore, group *Group) *Placer {
 		log: &logger.ColorLogger{
 			Prefix: "Placer ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		store:     store,
 		group:     group,

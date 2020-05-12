@@ -38,7 +38,7 @@ func (wg *WaitGroup) Done() {
 
 func (wg *WaitGroup) Wait() {
 	if wg.IsWaiting() {
-		wg.Wait()
+		wg.WaitGroup.Wait()
 	}
 }
 

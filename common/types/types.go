@@ -18,7 +18,7 @@ func (i *InputEvent) IsReplicaEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_REPLICA) > 0
 }
 
-func (i *InputEvent) IsPersistentEnabled() bool {
+func (i *InputEvent) IsPersistencyEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
 }
 
