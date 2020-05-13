@@ -896,7 +896,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 			Bucket: aws.String(s.s3bucketDefault),
 			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + 1)), // meta.SnapshotTerm
 		}
-		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
+		inputs[0].Writer = aws.NewWriteAtBuffer(make([]byte, 0, meta.SnapshotSize))
 		inputs[0].After = s.getReadyNotifier(0, chanNotify)
 		inputs[0].Small = true
 		// Skip 0
@@ -1156,8 +1156,8 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			Bucket: s.bucket(&tbds[i].Bucket),
 			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key)),
 		}
-		// tbds[i].Body = make([]byte, tbds[i].Size)  // We don't initialize buffer here, or partial download can't be detected.
-		inputs[i].Writer = new(aws.WriteAtBuffer)     // aws.NewWriteAtBuffer(tbds[i].Body)
+		tbds[i].Body = make([]byte, 0, tbds[i].Size)          // Pre-allocate fixed sized buffer.
+		inputs[i].Writer = aws.NewWriteAtBuffer(tbds[i].Body) // Don't use new(aws.WriteAtBuffer), will OOM.
 		inputs[i].After = s.getReadyNotifier(i, chanNotify)
 
 		// Custom properties, remove if use the downloader in AWS SDK
@@ -1195,6 +1195,8 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			if uint64(len(buffer.Bytes())) == tbds[idx].Size {
 				succeed++
 				tbds[idx].Body = buffer.Bytes()
+			} else {
+				// TODO: Add backoff retry.
 			}
 			receivedBytes += len(tbds[idx].Body)
 
