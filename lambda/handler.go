@@ -749,7 +749,6 @@ func main() {
 			}
 			return
 		}
-		t2 := time.Now()
 
 		// Recover.
 		ret = persist.SetRecovery(key, chunkId)
@@ -771,7 +770,7 @@ func main() {
 				defer stream.Close()
 			}
 		}
-		d2 := time.Since(t2)
+		d1 := time.Since(t)
 
 		// write Key, clientId, chunkId, body back to proxy
 		response := &types.Response{
@@ -784,17 +783,17 @@ func main() {
 		}
 		response.Prepare()
 
-		t3 := time.Now()
+		t2 := time.Now()
 		if err := response.Flush(); err != nil {
 			log.Error("Error on recover::flush(recover key %s): %v", key, err)
 			// Ignore
 		}
-		d3 := time.Since(t3)
+		d2 := time.Since(t2)
 
 		dt := time.Since(t)
 		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
 		if retCmd == protocol.CMD_GET {
-			collector.Send(&types.DataEntry{types.OP_RECOVER, "200", reqId, chunkId, d2, d3, dt, session.Id})
+			collector.AddRequest(types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		}
 	})
 
