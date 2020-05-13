@@ -13,8 +13,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/lambda/types"
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
+)
+
+const (
+	COLLECT_REQUEST = 0x0001
+	COLLECT_PERSIST = 0x0002
 )
 
 var (
@@ -24,10 +28,12 @@ var (
 	Prefix         string
 	HostName       string
 	FunctionName   string
+	Enables        int32 = COLLECT_PERSIST
+	Lifetime       *lifetime.Lifetime
+	Session        *lifetime.Session
 
-
-	dataGatherer                   = make(chan *types.DataEntry, 10)
-	dataDepository                 = make([]*types.DataEntry, 0, 100)
+	dataGatherer                   = make(chan DataEntry, 10)
+	dataDepository                 = make([]DataEntry, 0, 100)
 	dataDeposited  sync.WaitGroup
 	log            logger.ILogger  = &logger.ColorLogger{ Prefix: "collector ", Level: logger.LOG_LEVEL_INFO }
 )
@@ -45,7 +51,11 @@ func init() {
 	FunctionName = lambdacontext.FunctionName
 }
 
-func Send(entry *types.DataEntry) {
+type DataEntry interface {
+	WriteTo(*bytes.Buffer)
+}
+
+func Send(entry DataEntry) {
 	dataDeposited.Add(1)
 	dataGatherer <- entry
 }
@@ -65,19 +75,16 @@ func Collect(session *lifetime.Session) {
 	}
 }
 
-func Save(l *lifetime.Lifetime) {
+func Save() {
 	// Wait for data depository.
 	dataDeposited.Wait()
 
 	data := new(bytes.Buffer)
 	for _, entry := range dataDepository {
-		data.WriteString(fmt.Sprintf("%d,%s,%s,%s,%d,%d,%d,%s,%s,%s\n",
-			entry.Op, entry.ReqId, entry.ChunkId, entry.Status,
-			entry.Duration, entry.DurationAppend, entry.DurationFlush,
-			HostName, FunctionName, entry.Session))
+		entry.WriteTo(data)
 	}
 
-	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, l.Id())
+	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, Lifetime.Id())
 	s3Put(S3Bucket, key, data)
 	dataDepository = dataDepository[:0]
 }

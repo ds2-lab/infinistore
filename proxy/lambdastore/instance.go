@@ -226,6 +226,7 @@ func (ins *Instance) HandleRequests() {
 			}
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
+			// Warmup will not work until first call.
 			// Double check, for it could timeout before a previous request got handled.
 			// Warmup will not work until first call.
 			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
@@ -244,7 +245,7 @@ func (ins *Instance) HandleRequests() {
 func (ins *Instance) StartRecovery() int {
 	recovering := atomic.LoadUint32(&ins.recovering)
 	if recovering > 0 {
-		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
+		ins.log.Warn("Instance is recovering")
 		return int(recovering)
 	}
 
@@ -256,7 +257,7 @@ func (ins *Instance) StartRecovery() int {
 
 func (ins *Instance) startRecoveryLocked() int {
 	if recovering := atomic.LoadUint32(&ins.recovering); recovering > 0 {
-		ins.log.Warn("Instance is recovering %d", ins.backingIns.Id())
+		ins.log.Warn("Instance is recovering")
 		return int(recovering)
 	}
 
@@ -625,6 +626,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 	event := &protocol.InputEvent{
 		Sid:     ins.initSession(),
+		Cmd:     protocol.CMD_PING,
 		Id:      ins.Id(),
 		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix:  global.Options.Prefix,
@@ -679,7 +681,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
-	} else if event.IsPersistentEnabled() {
+	} else if event.IsPersistencyEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 }

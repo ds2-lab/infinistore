@@ -17,12 +17,13 @@ var (
 	LogServer2Client nanolog.Handle
 	//LogServer        nanolog.Handle
 	//LogServerBufio   nanolog.Handle
-	LogProxy     nanolog.Handle = 10001
-	LogData      nanolog.Handle = 10002
-	LogStart     nanolog.Handle = 10003
-	LogLambda    nanolog.Handle = 10004
-	LogValidate  nanolog.Handle = 10005
-	ErrorNoEntry                = errors.New("No collector log entry found.")
+	LogProxy         nanolog.Handle = 10001
+	LogChunk         nanolog.Handle = 10002
+	LogStart         nanolog.Handle = 10003
+	LogLambda        nanolog.Handle = 10004
+	LogValidate      nanolog.Handle = 10005
+	LogEndtoEnd      nanolog.Handle = 20000
+	ErrorNoEntry     = errors.New("No collector log entry found.")
 
 	logMu   sync.Mutex
 	ticker  *time.Ticker
@@ -31,17 +32,10 @@ var (
 )
 
 func init() {
-	//LogServer2Client = nanolog.AddLogger("Cmd is %s, ReqId is %s, ChunkId is %s, Server2Client total time is %i64, AppendBulk time is %i64, Flush time is %i64, TimeStamp is %i64")
-	//LogServer = nanolog.AddLogger("KEY is %s, IN %s, ReqID is %s, ConnID is %i, ChunkID is %s, LambdaStoreID is %i64")
-	//LogServerBufio = nanolog.AddLogger("ReadBulk ReadLen time is %s, ReadBulk Require time is %s, ReadBulk Append time is %s")
-	//LogProxy = nanolog.AddLogger("Cmd is %s, ReqId is %s, ChunkId is %s, First byte is %i64, lambda2Server total time is %i64, Server read chunkBody is %i64")
-	//"Sever read field0 clientId time is %s, " +
-	//"Sever PeekType chunkId time is %s, " +
-	//"Sever read field1 chunkId time is %s, " +
-	//	"Sever PeekType objBody time is %s, " +
-	LogData = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
-	//LogLambda = nanolog.AddLogger("%s,%s,%s,%s,%s,%s,%s,%s")
-	LogLambda = nanolog.AddLogger("%s,%s")
+	// cmd, reqId, chunk, start, duration, firstByte, header from lambda, header to client, obsolete1, obsolete2, streaming, ping
+	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
+	// cmd, status, bytes, start, duration
+	LogEndtoEnd = nanolog.AddLogger("%s,%s,%i64,%i64,%i64")
 }
 
 func Create(prefix string) {
@@ -142,7 +136,7 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 		entry.flush = args[5].(int64)
 		entry.duration = args[6].(int64) - entry.start
 
-		return nanolog.Log(LogData, entry.cmd, entry.reqId, entry.chunkId,
+		return nanolog.Log(LogChunk, fmt.Sprintf("%schunk", entry.cmd), entry.reqId, entry.chunkId,
 			entry.start, entry.duration,
 			entry.firstByte, entry.lambda2Server, entry.server2Client,
 			entry.readBulk, entry.appendBulk, entry.flush, entry.validate)

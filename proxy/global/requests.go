@@ -50,6 +50,10 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 		counter.coordinator = c
 		counter.reqId = reqId
 		counter.status = 0
+		counter.numToFulfill = uint64(d)
+		if Options.Evaluation && Options.NoFirstD {
+			counter.numToFulfill = uint64(d + p)
+		}
 		l := int(d + p)
 		if cap(counter.Requests) < l {
 			counter.Requests = make([]*types.Request, l)
@@ -104,9 +108,10 @@ type RequestCounter struct {
 	ParityShards int64
 	Requests     []*types.Request
 
-	coordinator *RequestCoordinator
-	reqId       string
-	status      uint64 // int32(succeed) + int32(returned)
+	coordinator  *RequestCoordinator
+	reqId        string
+	status       uint64 // int32(succeed) + int32(returned)
+	numToFulfill uint64
 }
 
 func newRequestCounter() interface{} {
@@ -149,14 +154,14 @@ func (c *RequestCounter) IsFulfilled(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsFulfilled(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 >= uint64(c.DataShards)
+	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 >= c.numToFulfill
 }
 
 func (c *RequestCounter) IsLate(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsLate(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 > uint64(c.DataShards)
+	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 > c.numToFulfill
 }
 
 func (c *RequestCounter) IsAllReturned(status ...uint64) bool {

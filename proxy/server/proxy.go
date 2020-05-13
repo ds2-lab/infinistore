@@ -112,7 +112,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 
 	// Start counting time.
-	if err := collector.Collect(collector.LogStart, "set", reqId, chunkId, time.Now().UnixNano()); err != nil {
+	if err := collector.Collect(collector.LogStart, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
@@ -164,8 +164,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	dChunkId, _ := c.Arg(2).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
-	// Start counting time.
-	if err := collector.Collect(collector.LogStart, "get", reqId, chunkId, time.Now().UnixNano()); err != nil {
+	// Start couting time.
+	if err := collector.Collect(collector.LogStart, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 

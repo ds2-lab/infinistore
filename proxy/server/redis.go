@@ -3,13 +3,16 @@ package server
 import (
 	"fmt"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
+	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	infinicache "github.com/mason-leap-lab/infinicache/client"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
 )
 
 type RedisAdapter struct {
@@ -70,16 +73,18 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	key := c.Arg(0).String()
 	body := c.Arg(1).Bytes()
 
-	if _, ok := client.EcSet(key, body); !ok {
-		a.log.Warn("Set %s - Failed", key)
+	t := time.Now()
+	_, ok := client.EcSet(key, body)
+	dt := time.Since(t)
+	if !ok {
 		w.AppendErrorf("Failed to set %s.", key)
 		w.Flush()
-		return
+	} else {
+		w.AppendInlineString("OK")
+		w.Flush()
 	}
-
-	a.log.Debug("Set %s - OK", key)
-	w.AppendInlineString("OK")
-	w.Flush()
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, util.Ifelse(ok, "200", "500"),
+		int64(len(body)), t.UnixNano(), int64(dt))
 }
 
 func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
@@ -95,15 +100,21 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
-	if _, reader, ok := client.EcGet(key, int(meta.Size)); !ok {
+	t := time.Now()
+	_, reader, ok := client.EcGet(key, int(meta.Size))
+	dt := time.Since(t)
+	if !ok {
 		w.AppendNil()
 		w.Flush()
 	} else {
 		if err := w.CopyBulk(reader, meta.Size); err != nil {
+			ok = false
 			a.log.Warn("Error on sending %s: %v", key, err)
 		}
 		reader.Close()
 	}
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, util.Ifelse(ok, "200", "500"),
+		meta.Size, t.UnixNano(), int64(dt))
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {

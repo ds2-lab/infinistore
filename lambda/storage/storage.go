@@ -28,10 +28,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"log"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/mason-leap-lab/infinicache/lambda/collector"
 )
 
 const (
@@ -80,7 +80,7 @@ type Storage struct {
 	backup     *hashmap.HashMap        // Just a index, all will be available to repo
 	backupMeta *types.LineageMeta      // Only one backup is effective at a time.
 
-	// Persistent backpack
+	// Persistency backpack
 	s3bucket   string
 	s3bucketDefault string
 	s3prefix   string
@@ -91,7 +91,6 @@ func New(id uint64, persistent bool) *Storage {
 	if FunctionPrefix == "" {
 		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte("")))
 	}
-	log.Println(FunctionPrefix)
 	return &Storage{
 		id: id,
 		repo: hashmap.New(1024),
@@ -667,7 +666,7 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 
 func (s *Storage) doCommit(opt *types.CommitOption) {
 	if len(s.lineage.Ops) > 0 {
-		var bytesUploaded uint64
+		var termBytes, ssBytes int
 		uploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
 			u.Concurrency = 1
 		})
@@ -679,14 +678,14 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 		if err != nil {
 			s.log.Warn("Failed to commit term %d: %v", term, err)
 		} else {
-			bytesUploaded += s.lineage.Size
+			termBytes = int(s.lineage.Size)
 
 			if !opt.Full || opt.Snapshotted {
 				// pass
 			} else if snapshot, err := s.doSnapshot(s.lineage, uploader); err != nil {
 				s.log.Warn("Failed to snapshot up to term %d: %v", term, err)
 			} else {
-				bytesUploaded += snapshot.Size
+				ssBytes = int(snapshot.Size)
 				s.snapshot = snapshot
 				opt.Snapshotted = true
 			}
@@ -697,8 +696,11 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 		// This time, ignore argument "full" if snapshotted.
 		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
-		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), bytesUploaded)
-		opt.BytesUploaded += bytesUploaded
+		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes + ssBytes)
+		collector.AddCommit(
+			types.OP_COMMIT, false, s.id, int(term),
+			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
+		opt.BytesUploaded += uint64(termBytes + ssBytes)
 		s.signalTracker <- opt
 	} else {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
@@ -832,11 +834,11 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 
 	// Recover lineage
 	start := time.Now()
-	receivedBytes, terms, numOps, err := s.doRecoverLineage(lineage, meta.Meta, downloader)
+	lineageBytes, terms, numOps, err := s.doRecoverLineage(lineage, meta.Meta, downloader)
+	stop1 := time.Since(start)
 	if err != nil {
 		chanErr <- err
 	}
-	stop1 := time.Now()
 
 	if len(terms) == 0 {
 		// No term recovered
@@ -860,20 +862,23 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	// 	s.log.Debug("%d: %v", i, *t)
 	// }
 
-	stop2 := time.Now()
+	start2 := time.Now()
+	objectBytes := 0
 	if len(tbds) > 0 {
-		if n, err := s.doRecoverObjects(tbds, downloader); err != nil {
-			chanErr <- err
-			receivedBytes += n
-		} else {
-			receivedBytes += n
-		}
+		objectBytes, err = s.doRecoverObjects(tbds, downloader)
 	}
-	end := time.Now()
+	stop2 := time.Since(start2)
+	if err != nil {
+		chanErr <- err
+	}
 
+	end := time.Since(start)
 	s.log.Debug("End recovery node %d.", meta.Meta.Id)
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
-	s.log.Trace("recover,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop2), end.Sub(start), receivedBytes)
+	s.log.Trace("recover,%d,%d,%d,%d", stop1, stop2, end, objectBytes)
+	collector.AddRecovery(
+		types.OP_RECOVERY, meta.Backup, meta.Meta.Id, meta.BackupId,
+		stop1, stop2, end, lineageBytes, objectBytes, len(tbds))
 	close(chanErr)
 }
 
@@ -914,7 +919,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 			Bucket: aws.String(s.s3bucketDefault),
 			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + 1)), // meta.SnapshotTerm
 		}
-		inputs[0].Writer = new(aws.WriteAtBuffer) // aws.NewWriteAtBuffer(make([]byte, meta.SnapshotSize))
+		inputs[0].Writer = aws.NewWriteAtBuffer(make([]byte, 0, meta.SnapshotSize))
 		inputs[0].After = s.getReadyNotifier(0, chanNotify)
 		inputs[0].Small = true
 		// Skip 0
@@ -1174,8 +1179,8 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			Bucket: s.bucket(&tbds[i].Bucket),
 			Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key)),
 		}
-		// tbds[i].Body = make([]byte, tbds[i].Size)  // We don't initialize buffer here, or partial download can't be detected.
-		inputs[i].Writer = new(aws.WriteAtBuffer)     // aws.NewWriteAtBuffer(tbds[i].Body)
+		tbds[i].Body = make([]byte, 0, tbds[i].Size)          // Pre-allocate fixed sized buffer.
+		inputs[i].Writer = aws.NewWriteAtBuffer(tbds[i].Body) // Don't use new(aws.WriteAtBuffer), will OOM.
 		inputs[i].After = s.getReadyNotifier(i, chanNotify)
 
 		// Custom properties, remove if use the downloader in AWS SDK
@@ -1213,6 +1218,8 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			if uint64(len(buffer.Bytes())) == tbds[idx].Size {
 				succeed++
 				tbds[idx].Body = buffer.Bytes()
+			} else {
+				// TODO: Add backoff retry.
 			}
 			receivedBytes += len(tbds[idx].Body)
 
