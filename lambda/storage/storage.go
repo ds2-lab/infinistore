@@ -195,8 +195,11 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	defer s.lineageMu.Unlock()
 
 	chunk := types.NewChunk(key, chunkId, val)
-	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
-	chunk.Bucket = s.getBucket(key)
+	chunk.Term = 1
+	if s.lineage != nil {
+		chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+		chunk.Bucket = s.getBucket(key)
+	}
 	s.set(key, chunk)
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
@@ -347,9 +350,9 @@ func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 		lineage = types.LineageTermFromMeta(s.backupMeta)
 	}
 	if lineage.Term > meta.Term {
-		return false, errors.New(fmt.Sprintf(
+		return false, fmt.Errorf(
 			"Detected staled term of lambda %d, expected at least %d, have %d",
-			meta.Id, lineage.Term, meta.Term))
+			meta.Id, lineage.Term, meta.Term)
 	}
 	// Don't check hash if term is the start term(1).
 	return lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash), nil
@@ -1355,7 +1358,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 
 	for object := range ch {
 		if _, err := downloader.Download(object.Writer, object.Object); err != nil {
-			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
 		}
 
 		if object.After == nil {
@@ -1363,7 +1366,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 		}
 
 		if err := object.After(); err != nil {
-			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
 		}
 	}
 }

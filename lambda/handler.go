@@ -323,10 +323,10 @@ func waitForRecovery(chs ...chan error) {
 	var wg sync.WaitGroup
 	for _, ch := range chs {
 		wg.Add(1)
-		go func() {
+		go func(ch chan error) {
 			waitForRecovery(ch)
 			wg.Done()
-		}()
+		}(ch)
 	}
 	wg.Wait()
 }
