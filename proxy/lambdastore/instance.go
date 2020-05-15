@@ -84,6 +84,7 @@ type Instance struct {
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
+	enableSwitch  int32            // If connection swtich is enabled.
 
 	// Connection management
 	sessions      *hashmap.HashMap
@@ -386,6 +387,7 @@ func (ins *Instance) Migrate() error {
 	}
 
 	ins.log.Info("Initiating migration to %s...", dply.Name())
+	atomic.AddInt32(&ins.enableSwitch, 1)
 	ins.chanCmd <- &types.Control{
 		Cmd:        "migrate",
 		Addr:       addr,
@@ -636,6 +638,22 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 
 	ins.flagWarmed()
 	if ins.cn != conn {
+		// Is connction switch enabled
+		if ins.cn != nil {
+			allowed := atomic.LoadInt32(&ins.enableSwitch)
+			for allowed > 0 {
+				if atomic.CompareAndSwapInt32(&ins.enableSwitch, allowed, allowed - 1) {
+					break
+				}
+
+				allowed = atomic.LoadInt32(&ins.enableSwitch)
+			}
+			// Deny session
+			if allowed == 0 {
+				return conn
+			}
+		}
+		// Check possible duplicated session
 		if !ins.startSession(sid) {
 			// Deny session
 			return conn
