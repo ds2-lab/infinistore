@@ -31,7 +31,7 @@ function start_proxy() {
     # BACKUPS=$2
     LOGFILE=`dirname $1`
     mkdir -p $EVALBASE/$LOGFILE
-    $BINDIR/proxy -debug -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 # -debug
+    $BINDIR/proxy -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 # -debug
 }
 
 function bench() {
