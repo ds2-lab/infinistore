@@ -44,9 +44,8 @@ const (
 )
 
 var (
-	AWSRegion      string
 	Backups        = 10
-	Concurrency    = 10
+	Concurrency    = types.Concurrency
 	Buckets        = 1
 	FunctionPrefix string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
@@ -331,16 +330,6 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) types.Lineage {
 	return s
 }
 
-func (s *Storage) GetAWSSession() *awsSession.Session {
-	if s.awsSession == nil {
-		s.awsSession = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-			SharedConfigState: awsSession.SharedConfigEnable,
-			Config:            aws.Config{Region: aws.String(AWSRegion)},
-		}))
-	}
-	return s.awsSession
-}
-
 func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	if meta.Backup {
@@ -376,10 +365,10 @@ func (s *Storage) TrackLineage() {
 	s.log.Debug("Tracking lineage...")
 
 	// Initialize s3 uploader
-	smallUploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+	smallUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 		u.Concurrency = 1
 	})
-	largeUploader := s3manager.NewUploader(s.GetAWSSession())
+	largeUploader := s3manager.NewUploader(types.AWSSession())
 	attemps := 3
 	persistedOps := make([]*types.OpWrapper, 0, 10)
 	persisted := 0
@@ -647,7 +636,7 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 func (s *Storage) doCommit(opt *types.CommitOption) {
 	if len(s.lineage.Ops) > 0 {
 		var termBytes, ssBytes int
-		uploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+		uploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 			u.Concurrency = 1
 		})
 
@@ -1284,13 +1273,13 @@ func (s *Storage) getS3Downloader(smallOnly bool) S3Downloader{
 	downloader := make([]*s3manager.Downloader, num)
 	// Initialize downloaders for small object
 	for i := 0; i < Concurrency; i++ {
-		downloader[i] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+		downloader[i] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = 1
 		})
 	}
 	// Initialize the downloader for large object
 	if !smallOnly {
-		downloader[Concurrency] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+		downloader[Concurrency] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = Concurrency
 		})
 	}

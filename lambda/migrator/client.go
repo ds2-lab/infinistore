@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
@@ -20,8 +19,6 @@ import (
 )
 
 var (
-	AWSRegion            string
-
 	log = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_INFO,
 	}
@@ -78,10 +75,7 @@ func (cli *Client) Connect(addr string) (err error) {
 }
 
 func (cli *Client) TriggerDestination(dest string, args interface{}) (err error) {
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-	client := lambda.New(sess, &aws.Config{Region: aws.String(AWSRegion)})
+	client := lambda.New(types.AWSSession())
 	payload, _ := json.Marshal(args)
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String(dest),

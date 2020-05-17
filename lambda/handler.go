@@ -69,13 +69,8 @@ func init() {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
 
-	storage.AWSRegion = AWS_REGION
-
-	collector.AWSRegion = AWS_REGION
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
 	collector.Lifetime = lifetime
-
-	migrator.AWSRegion = AWS_REGION
 }
 
 func getAwsReqId(ctx context.Context) string {

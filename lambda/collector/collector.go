@@ -6,9 +6,7 @@ import (
 	"os/exec"
 	"io"
 	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	// "runtime"
 	// "runtime/pprof"
@@ -16,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 const (
@@ -24,7 +23,6 @@ const (
 )
 
 var (
-	AWSRegion      string
 	S3Bucket       string
 
 	Prefix         string
@@ -105,14 +103,8 @@ func SaveWithOption(snapshot bool) {
 }
 
 func s3Put(bucket string, key string, body io.Reader, num int) {
-	// The session the S3 Uploader will use
-	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-		SharedConfigState: awsSession.SharedConfigEnable,
-		Config:            aws.Config{Region: aws.String(AWSRegion)},
-	}))
-
 	// Create an uploader with the session and default options
-	uploader := s3manager.NewUploader(sess)
+	uploader := s3manager.NewUploader(types.AWSSession())
 
 	upParams := &s3manager.UploadInput{
 		Bucket: &bucket,
