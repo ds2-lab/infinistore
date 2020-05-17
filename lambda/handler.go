@@ -11,7 +11,6 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-
 	//	"github.com/wangaoone/s3gof3r"
 	"io"
 	"math"
@@ -20,16 +19,17 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	// "runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
@@ -37,7 +37,7 @@ const (
 )
 
 var (
-	DefaultStatus = protocol.Status{}
+	DefaultStatus   = protocol.Status{}
 	ContextKeyReady = "ready"
 
 	// Track how long the store has lived, migration is required before timing up.
@@ -54,7 +54,7 @@ var (
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
 	mu  sync.RWMutex
-	log = &logger.ColorLogger{ Level: logger.LOG_LEVEL_INFO, Color: false }
+	log = &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false}
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
 	pongLimiter = make(chan struct{}, 1)
@@ -110,12 +110,12 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Setup timeout.
 	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
 	deadline, _ := ctx.Deadline()
-	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline)) / float64(time.Second))) * time.Second
+	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
 	session.Timeout.SetLogger(log)
 	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
 	collector.Session = session
 
-	issuePong()     // Ensure pong will only be issued once on invocation
+	issuePong() // Ensure pong will only be issued once on invocation
 	// Setup of the session is done.
 	session.Setup.Done()
 
@@ -151,6 +151,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 	}
+
+	// Start data collector
+	go collector.Collect(session)
 
 	var recoverErrs []chan error
 	var recoverFast bool
@@ -215,9 +218,6 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Start tracking
 		lineage.TrackLineage()
 	}
-
-	// Start data collector
-	go collector.Collect(session)
 
 	// Wait until recovered to avoid timeout on recovery.
 	if recoverErrs != nil {
@@ -920,7 +920,7 @@ func main() {
 		w.AppendBulkString("mhello")
 		w.AppendBulkString(strconv.Itoa(store.Len()))
 
-		delList := make([]string, 0, 2 * store.Len())
+		delList := make([]string, 0, 2*store.Len())
 		getList := delList[store.Len():store.Len()]
 		for key := range store.Keys() {
 			_, _, ret := store.Get(key)
@@ -969,7 +969,7 @@ func main() {
 		flag.Uint64Var(&input.Status[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
 		flag.Uint64Var(&input.Status[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
 		flag.Uint64Var(&input.Status[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
-		flag.StringVar(&input.Status[len(input.Status) - 1].Tip, "tip", "", "Tips in http query format")
+		flag.StringVar(&input.Status[len(input.Status)-1].Tip, "tip", "", "Tips in http query format")
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
@@ -977,6 +977,8 @@ func main() {
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 		concurrency := flag.Int("c", 5, "Concurrency of recovery")
 		buckets := flag.Int("b", 1, "Number of buckets used to persist.")
+		// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+		// var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
 		flag.Parse()
 
@@ -987,10 +989,22 @@ func main() {
 			os.Exit(0)
 		}
 
+		// if *cpuprofile != "" {
+		// 	f, err := os.Create(*cpuprofile)
+		// 	if err != nil {
+		// 		log.Error("could not create CPU profile: ", err)
+		// 	}
+		// 	defer f.Close() // error handling omitted for example
+		// 	if err := pprof.StartCPUProfile(f); err != nil {
+		// 		log.Error("could not start CPU profile: ", err)
+		// 	}
+		// 	defer pprof.StopCPUProfile()
+		// }
+
 		input.Status[0].Id = input.Id
-		tips, err := url.ParseQuery(input.Status[len(input.Status) - 1].Tip)
+		tips, err := url.ParseQuery(input.Status[len(input.Status)-1].Tip)
 		if err != nil {
-			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status) - 1].Tip, err)
+			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status)-1].Tip, err)
 		}
 
 		if DRY_RUN {
@@ -1037,7 +1051,7 @@ func main() {
 			for i := 0; i < *numToInsert; i++ {
 				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
-				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank) + i), "0", val); ret.Error() != nil {
+				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
 					log.Error("Error on set obj-%d: %v", i, ret.Error())
 				}
 			}
@@ -1045,8 +1059,19 @@ func main() {
 
 			<-ctx.Done()
 			log.Trace("Bill duration for dryrun: %v", time.Since(start))
+			// if *memprofile != "" {
+			// 	f, err := os.Create(*memprofile)
+			// 	if err != nil {
+			// 		log.Error("could not create memory profile: ", err)
+			// 	}
+			// 	defer f.Close() // error handling omitted for example
+			// 	runtime.GC()    // get up-to-date statistics
+			// 	if err := pprof.WriteHeapProfile(f); err != nil {
+			// 		log.Error("could not write memory profile: ", err)
+			// 	}
+			// }
 			return
-		}	// else: continue to try lambda.Start
+		} // else: continue to try lambda.Start
 	}
 
 	// log.Debug("Routings on launching: %d", runtime.NumGoroutine())

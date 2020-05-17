@@ -46,7 +46,7 @@ const (
 var (
 	AWSRegion      string
 	Backups        = 10
-	Concurrency    = 5
+	Concurrency    = 10
 	Buckets        = 1
 	FunctionPrefix string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
@@ -93,8 +93,8 @@ func New(id uint64, persistent bool) *Storage {
 	}
 	return &Storage{
 		id: id,
-		repo: hashmap.New(1024),
-		backup: hashmap.New(1024), // Initilize early to buy time for fast backup recovery.
+		repo: hashmap.New(10000),
+		backup: hashmap.New(1000), // Initilize early to buy time for fast backup recovery.
 		lineage: util.Ifelse(!persistent, (*types.LineageTerm)(nil), &types.LineageTerm{
 			Term: 1,  // Term start with 1 to avoid uninitialized term ambigulous.
 			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.

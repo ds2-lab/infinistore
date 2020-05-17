@@ -77,8 +77,7 @@ type Instance struct {
 	cn            *Connection
 	chanCmd       chan types.Command
 	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	awake         int
-	awakeLock     sync.Mutex
+	awake        uint32
 	chanValidated chan struct{}
 	lastValidated *Connection
 	mu            sync.Mutex
@@ -472,24 +471,31 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 				ins.cn.Ping(DefaultPingPayload)
 			}
 
-			// Start timeout, ping may get stucked anytime.
-			timeout := timeouts.Get().(*time.Timer)
-			if !timeout.Stop() {
+			if atomic.LoadUint32(&ins.awake) == INSTANCE_MAYBE {
+				// Start timeout, ping may get stucked anytime.
+				timeout := timeouts.Get().(*time.Timer)
+				if !timeout.Stop() {
+					select {
+					case <-timeout.C:
+					default:
+					}
+				}
+				timeout.Reset(ConnectTimeout)
+
 				select {
 				case <-timeout.C:
-				default:
+					// Set status to dead and revalidate.
+					timeouts.Put(timeout)
+					atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
+					// Close or not? Maybe we can wait until connection incomes.
+					ins.cn.Close()
+					ins.cn = nil
+					ins.log.Warn("Timeout on validating, assuming instance dead and retry...")
+				case <-ins.chanValidated:
+					timeouts.Put(timeout)
+					return ins.validated()
 				}
-			}
-			timeout.Reset(ConnectTimeout)
-
-			select {
-			case <-timeout.C:
-				// Set status to dead and revalidate.
-				timeouts.Put(timeout)
-				ins.awake = INSTANCE_SLEEP
-				ins.log.Warn("Timeout on validating, assuming instance dead and retry...")
-			case <-ins.chanValidated:
-				timeouts.Put(timeout)
+			} else {
 				return ins.validated()
 			}
 		}
@@ -501,10 +507,7 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 }
 
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
-
-	if ins.awake == INSTANCE_AWAKE {
+	if atomic.LoadUint32(&ins.awake) == INSTANCE_AWAKE {
 		return false
 	}
 
@@ -523,11 +526,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	for {
 		if !ins.IsValidating() {
 			// Don't overwrite the MAYBE status.
-			ins.awakeLock.Lock()
-			if ins.awake != INSTANCE_MAYBE {
-				ins.awake = INSTANCE_SLEEP
-			}
-			ins.awakeLock.Unlock()
+			atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_AWAKE, INSTANCE_SLEEP)
 			return
 		}
 
@@ -596,6 +595,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	ins.Meta.Stale = true
 	output, err := client.Invoke(input)
 	ins.endSession(event.Sid)
+	ins.cn = nil
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
 	} else {
@@ -612,13 +612,11 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0])  // Ignore backing store
 			if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
-				ins.awakeLock.Lock()
-				if ins.awake == INSTANCE_AWAKE {
+				if atomic.LoadUint32(&ins.awake) == INSTANCE_AWAKE {
 					ins.Meta.Stale = false
 				} else {
 					uptodate = false
 				}
-				ins.awakeLock.Unlock()
 			}
 
 			if uptodate {
@@ -675,19 +673,16 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 				// 1. Migration
 				// 2. Accidential concurrent triggering, usually after lambda returning and before it get reclaimed.
 				// In either case, the status is awake and it indicate the status of the old instance, it is not reliable.
-				ins.awakeLock.Lock()
-				ins.awake = INSTANCE_MAYBE
-				ins.awakeLock.Unlock()
+				atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
+			} else {
+				ins.log.Warn("I can't believe this, you find a misplaced instance: %d", oldConn.instance.Id())
 			}
 		} else {
-			ins.awakeLock.Lock()
-			ins.awake = INSTANCE_AWAKE
-			ins.awakeLock.Unlock()
+			atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
 		}
-	} else if ins.awake != INSTANCE_MAYBE { // For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
-		ins.awakeLock.Lock()
-		ins.awake = INSTANCE_AWAKE
-		ins.awakeLock.Unlock()
+	} else {
+		// For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
+		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEP, INSTANCE_AWAKE)
 	}
 
 	if recoveryRequired {
@@ -705,12 +700,8 @@ func (ins *Instance) bye(conn *Connection) {
 		return
 	}
 
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
-	if ins.awake == INSTANCE_MAYBE {
-		ins.awake = INSTANCE_SLEEP
-	} else {
-		ins.log.Debug("Bye ignored, waiting for return of synchronous invocation.")
+	if !atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_MAYBE, INSTANCE_SLEEP) {
+		ins.log.Debug("Bye ignored, waiting for the return of synchronous invocation.")
 	}
 }
 
@@ -747,9 +738,7 @@ func (ins *Instance) flagClosed(conn *Connection) {
 
 	ins.cn = nil
 
-	ins.awakeLock.Lock()
-	defer ins.awakeLock.Unlock()
-	ins.awake = INSTANCE_SLEEP
+	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
