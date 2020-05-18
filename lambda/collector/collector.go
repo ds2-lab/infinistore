@@ -6,14 +6,15 @@ import (
 	"os/exec"
 	"io"
 	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	// "runtime"
+	// "runtime/pprof"
 	"strings"
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 const (
@@ -22,7 +23,6 @@ const (
 )
 
 var (
-	AWSRegion      string
 	S3Bucket       string
 
 	Prefix         string
@@ -76,28 +76,35 @@ func Collect(session *lifetime.Session) {
 }
 
 func Save() {
+	SaveWithOption(false)
+}
+
+func SaveWithOption(snapshot bool) {
 	// Wait for data depository.
 	dataDeposited.Wait()
+	cnt := len(dataDepository)
 
 	data := new(bytes.Buffer)
 	for _, entry := range dataDepository {
 		entry.WriteTo(data)
 	}
 
+	// memprof := new(bytes.Buffer)
+	// runtime.GC()
+	// pprof.WriteHeapProfile(memprof)
+
 	key := fmt.Sprintf("%s/%s/%d", Prefix, FunctionName, Lifetime.Id())
-	s3Put(S3Bucket, key, data)
-	dataDepository = dataDepository[:0]
+	s3Put(S3Bucket, key, data, cnt)
+	// memkey := fmt.Sprintf("%s/%s/%d.mem.prof", Prefix, FunctionName, Lifetime.Id())
+	// s3Put(S3Bucket, memkey, memprof)
+	if !snapshot {
+		dataDepository = dataDepository[:0]
+	}
 }
 
-func s3Put(bucket string, key string, body io.Reader) {
-	// The session the S3 Uploader will use
-	sess := awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-		SharedConfigState: awsSession.SharedConfigEnable,
-		Config:            aws.Config{Region: aws.String(AWSRegion)},
-	}))
-
+func s3Put(bucket string, key string, body io.Reader, num int) {
 	// Create an uploader with the session and default options
-	uploader := s3manager.NewUploader(sess)
+	uploader := s3manager.NewUploader(types.AWSSession())
 
 	upParams := &s3manager.UploadInput{
 		Bucket: &bucket,
@@ -111,5 +118,5 @@ func s3Put(bucket string, key string, body io.Reader) {
 		return
 	}
 
-	log.Info("Data uploaded to S3: %v", result.Location)
+	log.Info("Data(%d) uploaded to S3: %v", num, result.Location)
 }

@@ -17,7 +17,7 @@ var _ = Describe("Storage", func() {
 	var store *storage.Storage
 
 	setup := func() {
-		store = storage.New()
+		store = storage.New(0, false)
 		store.Set("key1", "1", nil)
 		store.Set("key2", "1", nil)
 	}

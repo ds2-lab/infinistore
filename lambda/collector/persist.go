@@ -23,7 +23,7 @@ type PersistEntry struct {
 
 func AddRecovery(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
 	if addPersist(op, backup, id, backKey, d1, d2, d, b1, b2, o) {
-		Save()
+		SaveWithOption(true) // Wait to be saved.
 	}
 }
 

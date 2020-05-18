@@ -44,9 +44,8 @@ const (
 )
 
 var (
-	AWSRegion      string
 	Backups        = 10
-	Concurrency    = 5
+	Concurrency    = types.Concurrency
 	Buckets        = 1
 	FunctionPrefix string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
@@ -93,8 +92,8 @@ func New(id uint64, persistent bool) *Storage {
 	}
 	return &Storage{
 		id: id,
-		repo: hashmap.New(1024),
-		backup: hashmap.New(1024), // Initilize early to buy time for fast backup recovery.
+		repo: hashmap.New(10000),
+		backup: hashmap.New(1000), // Initilize early to buy time for fast backup recovery.
 		lineage: util.Ifelse(!persistent, (*types.LineageTerm)(nil), &types.LineageTerm{
 			Term: 1,  // Term start with 1 to avoid uninitialized term ambigulous.
 			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
@@ -195,8 +194,11 @@ func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpW
 	defer s.lineageMu.Unlock()
 
 	chunk := types.NewChunk(key, chunkId, val)
-	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
-	chunk.Bucket = s.getBucket(key)
+	chunk.Term = 1
+	if s.lineage != nil {
+		chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
+		chunk.Bucket = s.getBucket(key)
+	}
 	s.set(key, chunk)
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
@@ -351,16 +353,6 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) types.Lineage {
 	return s
 }
 
-func (s *Storage) GetAWSSession() *awsSession.Session {
-	if s.awsSession == nil {
-		s.awsSession = awsSession.Must(awsSession.NewSessionWithOptions(awsSession.Options{
-			SharedConfigState: awsSession.SharedConfigEnable,
-			Config:            aws.Config{Region: aws.String(AWSRegion)},
-		}))
-	}
-	return s.awsSession
-}
-
 func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	if meta.Backup {
@@ -370,9 +362,9 @@ func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 		lineage = types.LineageTermFromMeta(s.backupMeta)
 	}
 	if lineage.Term > meta.Term {
-		return false, errors.New(fmt.Sprintf(
+		return false, fmt.Errorf(
 			"Detected staled term of lambda %d, expected at least %d, have %d",
-			meta.Id, lineage.Term, meta.Term))
+			meta.Id, lineage.Term, meta.Term)
 	}
 	// Don't check hash if term is the start term(1).
 	return lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash), nil
@@ -396,10 +388,10 @@ func (s *Storage) TrackLineage() {
 	s.log.Debug("Tracking lineage...")
 
 	// Initialize s3 uploader
-	smallUploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+	smallUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 		u.Concurrency = 1
 	})
-	largeUploader := s3manager.NewUploader(s.GetAWSSession())
+	largeUploader := s3manager.NewUploader(types.AWSSession())
 	attemps := 3
 	persistedOps := make([]*types.OpWrapper, 0, 10)
 	persisted := 0
@@ -667,7 +659,7 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 func (s *Storage) doCommit(opt *types.CommitOption) {
 	if len(s.lineage.Ops) > 0 {
 		var termBytes, ssBytes int
-		uploader := s3manager.NewUploader(s.GetAWSSession(), func(u *s3manager.Uploader) {
+		uploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 			u.Concurrency = 1
 		})
 
@@ -1304,13 +1296,13 @@ func (s *Storage) getS3Downloader(smallOnly bool) S3Downloader{
 	downloader := make([]*s3manager.Downloader, num)
 	// Initialize downloaders for small object
 	for i := 0; i < Concurrency; i++ {
-		downloader[i] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+		downloader[i] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = 1
 		})
 	}
 	// Initialize the downloader for large object
 	if !smallOnly {
-		downloader[Concurrency] = s3manager.NewDownloader(s.GetAWSSession(), func(d *s3manager.Downloader) {
+		downloader[Concurrency] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = Concurrency
 		})
 	}
@@ -1378,7 +1370,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 
 	for object := range ch {
 		if _, err := downloader.Download(object.Writer, object.Object); err != nil {
-			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
 		}
 
 		if object.After == nil {
@@ -1386,7 +1378,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 		}
 
 		if err := object.After(); err != nil {
-			errs <- s3manager.Error{err, object.Object.Bucket, object.Object.Key}
+			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
 		}
 	}
 }
