@@ -10,7 +10,6 @@ ENTRY=`date "+%Y%m%d%H%M"`
 ENTRY="/data/$ENTRY"
 NODE_PREFIX="Store1VPCNode"
 MINBACKUPS=10
-OVERHEAD=100
 CLUSTER=12
 TIMEOUTBASE=700
 
@@ -23,7 +22,8 @@ function perform(){
     SZ=$4
     INTERVAL=$5
     MEM=$6
-    BACKUPS=$7
+    OVERHEAD=$7
+    BACKUPS=$8
 
     ((NODES=CLUSTER+BACKUPS))
     ((BYTES=SZ*1024*1024))
@@ -39,7 +39,7 @@ function perform(){
 
         update_lambda_mem $NODE_PREFIX $NODES $REALMEM $((TIMEOUTBASE+i*10))
         # Wait for proxy ready
-        start_proxy $PREPROXY $BACKUPS &
+        start_proxy $PREPROXY $BACKUPS $REALMEM &
         while [ ! -f /tmp/infinicache.pid ]
         do
             sleep 1s
@@ -72,6 +72,7 @@ function perform(){
 LASTING=(60)
 # Memory settings
 MEMSET=(512 1024 1536 2048 3008)
+SYSSET=(100 100 200 200 200)
 # Object size settings
 SZSET=(1 10 50 100)
 # Inter-arrival time settings
@@ -91,7 +92,7 @@ do
     do
       iaIdx=1
       bak=0
-      #       seconds       concur       keys    object-size  inter-arrival   memory       num-backups
-      perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${BAKSET[bak]}
+      #       seconds       concur       keys    object-size  inter-arrival   memory         overhead       num-backups
+      perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${SYSSET[mem]} ${BAKSET[bak]}
     done
 done
