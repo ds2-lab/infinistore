@@ -31,6 +31,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 	ret, ok := c.registry.GetOrInsert(reqId, prepared)
 	counter := ret.(*RequestCounter)
 	if !ok {
+		counter.initialized.Add(1)
 		// New counter registered, initialize values.
 		counter.Cmd = cmd
 		counter.DataShards = d
@@ -52,8 +53,10 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 			}
 			copy(counter.Requests, emptySlice[:l])
 		}
+		counter.initialized.Done()
 	} else {
 		c.pool.Put(prepared)
+		counter.initialized.Wait()
 	}
 	return counter
 }
@@ -80,6 +83,7 @@ type RequestCounter struct {
 
 	returned     int64       // Returned counter from lambda.
 	numToFulfill int64
+	initialized  sync.WaitGroup
 }
 
 func newRequestCounter() interface{} {
