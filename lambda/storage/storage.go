@@ -103,6 +103,10 @@ func New(id uint64, persistent bool) *Storage {
 	}
 }
 
+func (s *Storage) Id() uint64 {
+	return s.id
+}
+
 func (s *Storage) Init(id uint64, persistent bool) (types.Storage, error) {
 	if s != nil {
 		return s, nil

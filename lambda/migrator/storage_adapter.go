@@ -77,6 +77,10 @@ func newStorageAdapter(migrator *Client, store types.Storage) *StorageAdapter {
 	return adapter
 }
 
+func (s *StorageAdapter) Id() uint64 {
+	return s.store.Id()
+}
+
 func (s *StorageAdapter) Init(id uint64, persistent bool) (types.Storage, error) {
 	return nil, errors.New("Not implemented")
 }

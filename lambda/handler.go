@@ -28,8 +28,10 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
+	"github.com/mason-leap-lab/infinicache/lambda/handlers"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
+	. "github.com/mason-leap-lab/infinicache/lambda/store"
 )
 
 const (
@@ -38,32 +40,24 @@ const (
 
 var (
 	DefaultStatus   = protocol.Status{}
-	ContextKeyReady = "ready"
 
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
-
-	// Data storage
-	storeId uint64
-	store   types.Storage = (*storage.Storage)(nil)
-	lineage types.Lineage
 
 	// Proxy that links stores as a system
 	proxy     string // Passed from proxy dynamically.
 	proxyConn net.Conn
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
-	mu  sync.RWMutex
-	log = &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false}
-	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
-	// at the same time.
-	pongLimiter = make(chan struct{}, 1)
+	log       = Log
+	mu        sync.RWMutex
+	pong      = handlers.NewPongHandler()
 )
 
 func init() {
 	goroutines := runtime.GOMAXPROCS(0)
 	if goroutines < EXPECTED_GOMAXPROCS {
-		log.Debug("Set GOMAXPROCS to %d (original %d)", EXPECTED_GOMAXPROCS, goroutines)
+		Log.Debug("Set GOMAXPROCS to %d (original %d)", EXPECTED_GOMAXPROCS, goroutines)
 		runtime.GOMAXPROCS(EXPECTED_GOMAXPROCS)
 	} else {
 		log.Debug("GOMAXPROCS %d", goroutines)
@@ -84,15 +78,11 @@ func getAwsReqId(ctx context.Context) string {
 	return lc.AwsRequestID
 }
 
-func isDebug() bool {
-	return log.Level == logger.LOG_LEVEL_ALL
-}
-
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
-	store, _ = store.Init(input.Id, input.IsPersistencyEnabled())
-	lineage = store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+	Store, _ = Store.Init(input.Id, input.IsPersistencyEnabled())
+	Lineage = Store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
 
 	// Initialize session.
 	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
@@ -110,20 +100,21 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
 	collector.Session = session
 
-	issuePong() // Ensure pong will only be issued once on invocation
+	// Ensure pong will only be issued once on invocation
+	pong.Issue(input.Cmd == protocol.CMD_PING)
 	// Setup of the session is done.
 	session.Setup.Done()
 
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
-	store.(*storage.Storage).ConfigLogger(log.Level, log.Color)
+	Store.(*storage.Storage).ConfigLogger(log.Level, log.Color)
 	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
 
 	// migration triggered lambda
-	if input.Cmd == "migrate" && !migrateHandler(&input, session) {
+	if input.Cmd == protocol.CMD_MIGRATE && !migrateHandler(&input, session) {
 		return DefaultStatus, nil
 	}
 
@@ -141,7 +132,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 
 	// Extend timeout for expecting requests except invocation with cmd "warmup".
-	if input.Cmd == "warmup" {
+	if input.Cmd == protocol.CMD_WARMUP {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
 	} else {
 		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
@@ -152,16 +143,16 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	var recoverErrs []chan error
 	var recoverFast bool
-	if lineage == nil {
+	if Lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
-		pongHandler(ctx, session.Connection, false)
+		pong.SendToConnection(ctx, session.Connection, false)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
-			return lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
+			return Lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
 		} else if len(input.Status) == 1 {
 			// No backup info
-			lineage.ResetBackup()
+			Lineage.ResetBackup()
 		}
 
 		// Preprocess protocol meta and check consistency
@@ -171,12 +162,12 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		for i := 0; i < len(metas); i++ {
 			metas[i], err = types.LineageMetaFromProtocol(&input.Status[i])
 			if err != nil {
-				return lineage.Status().ProtocolStatus(), err
+				return Lineage.Status().ProtocolStatus(), err
 			}
 
-			metas[i].Consistent, err = lineage.IsConsistent(metas[i])
+			metas[i].Consistent, err = Lineage.IsConsistent(metas[i])
 			if err != nil {
-				return lineage.Status().ProtocolStatus(), err
+				return Lineage.Status().ProtocolStatus(), err
 			} else if !metas[i].Consistent {
 				inconsistency++
 			}
@@ -185,33 +176,33 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// POND represents the node is ready to serve, no fast recovery required.
-			pongHandler(ctx, session.Connection, false)
+			pong.SendToConnection(ctx, session.Connection, false)
 		} else {
 			session.Timeout.Busy()
 			recoverErrs = make([]chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
 			if !metas[0].Consistent {
-				fast, chanErr := lineage.Recover(metas[0])
+				fast, chanErr := Lineage.Recover(metas[0])
 				// POND represents the node is ready to serve, request fast recovery.
-				pongHandler(ctx, session.Connection, fast)
+				pong.SendToConnection(ctx, session.Connection, fast)
 				recoverErrs = append(recoverErrs, chanErr)
 				recoverFast = fast
 			} else {
-				pongHandler(ctx, session.Connection, false)
+				pong.SendToConnection(ctx, session.Connection, false)
 			}
 
 			// Recovery backup
 			for i := 1; i < len(metas); i++ {
 				if !metas[i].Consistent {
-					_, chanErr := lineage.Recover(metas[i])
+					_, chanErr := Lineage.Recover(metas[i])
 					recoverErrs = append(recoverErrs, chanErr)
 				}
 			}
 		}
 
 		// Start tracking
-		lineage.TrackLineage()
+		Lineage.TrackLineage()
 	}
 
 	// Wait until recovered to avoid timeout on recovery.
@@ -227,7 +218,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Adaptive timeout control
 	meta := wait(session, lifetime).ProtocolStatus()
 	log.Debug("Output meta: %v", meta)
-	if isDebug() {
+	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
@@ -243,9 +234,8 @@ func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
 		return errors.New("no proxy specified")
 	}
 
-	storeId = input.Id
 	proxy = input.Proxy
-	log.Debug("Ready to connect %s, id %d", proxy, storeId)
+	log.Debug("Ready to connect %s, id %d", proxy, Store.Id())
 
 	var connErr error
 	session.Connection, connErr = net.Dial("tcp", proxy)
@@ -330,26 +320,26 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	defer session.CleanUp.Wait()
 
 	var commitOpt *types.CommitOption
-	if lineage != nil {
+	if Lineage != nil {
 		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
 			// Commit and wait, error will be logged.
-			commitOpt, _ = lineage.Commit()
+			commitOpt, _ = Lineage.Commit()
 			return true
 		}
 	}
 
 	select {
 	case <-session.WaitDone():
-		if lineage != nil {
+		if Lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			status = lineage.Status()
+			status = Lineage.Status()
 		}
 		return
 	case <-session.Timeout.C():
 		// There's no turning back.
 		session.Timeout.Halt()
 
-		if lifetime.IsTimeUp() && store.Len() > 0 {
+		if lifetime.IsTimeUp() && Store.Len() > 0 {
 			// Time to migrate
 			// Check of number of keys in store is necessary. As soon as there is any value
 			// in the store and time up, we should start migration.
@@ -370,8 +360,8 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			log.Debug("Migration initiated.")
 		} else {
 			// Finalize, this is quick usually.
-			if lineage != nil {
-				status = lineage.StopTracker(commitOpt)
+			if Lineage != nil {
+				status = Lineage.StopTracker(commitOpt)
 			}
 			byeHandler(session.Connection)
 			session.Done()
@@ -383,66 +373,6 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	// Unlikely to reach here
 	log.Error("Wait, where am I?")
 	return
-}
-
-func issuePong() bool {
-	mu.Lock()
-	defer mu.Unlock()
-
-	select {
-	case pongLimiter <- struct{}{}:
-		return true
-	default:
-		// if limiter is full, move on
-		return false
-	}
-}
-
-func pongHandler(ctx context.Context, conn net.Conn, recover bool) error {
-	if conn == nil && DRY_RUN {
-		log.Debug("Issue pong, request fast recovery: %v", recover)
-		ready := ctx.Value(&ContextKeyReady)
-		close(ready.(chan struct{}))
-		return nil
-	}
-	writer := resp.NewResponseWriter(conn)
-	return pongImpl(writer, recover)
-}
-
-func pong(w resp.ResponseWriter) error {
-	return pongImpl(w, false)
-}
-
-func pongImpl(w resp.ResponseWriter, recover bool) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	select {
-	case <-pongLimiter:
-		// Quota avaiable or abort.
-	default:
-		return nil
-	}
-
-	log.Debug("POND")
-
-	info := int64(storeId)
-	flag := int64(0)
-	if recover {
-		flag += 0x01
-		log.Debug("Fast recovery requested.")
-	}
-
-	w.AppendBulkString("pong")
-	w.AppendInt(info)
-	w.AppendBulkString(lambdaLife.GetSession().Sid)
-	w.AppendInt(flag)
-	if err := w.Flush(); err != nil {
-		log.Error("Error on PONG flush: %v", err)
-		return err
-	}
-
-	return nil
 }
 
 func recoveredHandler(ctx context.Context, conn net.Conn) error {
@@ -485,8 +415,8 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	}
 
 	// Apply store adapter to coordinate migration and normal requests
-	adapter := session.Migrator.GetStoreAdapter(store)
-	store = adapter
+	adapter := session.Migrator.GetStoreAdapter(Store)
+	Store = adapter
 
 	// Reader will be avaiable after connecting and source being replaced
 	go func(s *lambdaLife.Session) {
@@ -494,9 +424,9 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 		s.Timeout.Busy()
 		defer s.Timeout.DoneBusy()
 
-		s.Migrator.Migrate(reader, store)
+		s.Migrator.Migrate(reader, Store)
 		s.Migrator = nil
-		store = adapter.Restore()
+		Store = adapter.Restore()
 	}(session)
 
 	return true
@@ -550,6 +480,7 @@ func byeHandler(conn net.Conn) error {
 func main() {
 	// Define handlers
 	srv.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
+		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -566,7 +497,7 @@ func main() {
 		reqId := c.Arg(1).String()
 		key := c.Arg(3).String()
 
-		chunkId, stream, ret := store.GetStream(key)
+		chunkId, stream, ret := Store.GetStream(key)
 		if stream != nil {
 			defer stream.Close()
 		}
@@ -613,6 +544,7 @@ func main() {
 	})
 
 	srv.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
+		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -656,7 +588,7 @@ func main() {
 		}
 
 		// Streaming set.
-		ret := store.SetStream(key, chunkId, valReader)
+		ret := Store.SetStream(key, chunkId, valReader)
 		d1 := time.Since(t)
 		if ret.Error() != nil {
 			log.Error("%v", ret.Error())
@@ -691,6 +623,7 @@ func main() {
 	})
 
 	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
+		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -718,7 +651,7 @@ func main() {
 		chunkId := c.Arg(2).String()
 		key := c.Arg(3).String()
 
-		ret = store.Del(key, chunkId)
+		ret = Store.Del(key, chunkId)
 		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
 			response := &types.Response{
@@ -751,6 +684,7 @@ func main() {
 	})
 
 	srv.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
+		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In DATA handler")
@@ -775,7 +709,7 @@ func main() {
 		// No need to close server, it will serve the new connection next time.
 
 		// Reset store
-		store = (*storage.Storage)(nil)
+		Store = (*storage.Storage)(nil)
 	})
 
 	srv.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
@@ -795,7 +729,7 @@ func main() {
 
 		// Ensure the session is setup.
 		session.Setup.Wait()
-		if grant := issuePong(); !grant {
+		if grant := pong.Issue(true); !grant {
 			// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
 			// which means this PING is a legacy from last invocation.
 			log.Debug("PING ignored: request to issue a POND is denied.")
@@ -803,7 +737,7 @@ func main() {
 		}
 
 		log.Debug("PING")
-		pong(w)
+		pong.SendTo(w)
 
 		// Deal with payload
 		if len(payload) > 0 {
@@ -812,7 +746,7 @@ func main() {
 			var pmeta protocol.Meta
 			if err := binary.Unmarshal(payload, &pmeta); err != nil {
 				log.Warn("Error on parse payload of the ping: %v", err)
-			} else if lineage == nil {
+			} else if Lineage == nil {
 				log.Warn("Recovery is requested but lineage is not available.")
 			} else {
 				// For now, only backup request supported.
@@ -821,13 +755,13 @@ func main() {
 					log.Warn("Error on get meta: %v", err)
 				}
 
-				consistent, err := lineage.IsConsistent(meta)
+				consistent, err := Lineage.IsConsistent(meta)
 				if err != nil {
 					log.Warn("Error on check consistency: %v", err)
 				}
 
 				if !consistent {
-					_, chanErr := lineage.Recover(meta)
+					_, chanErr := Lineage.Recover(meta)
 					go func() {
 						waitForRecovery(chanErr)
 						session.Timeout.DoneBusy()
@@ -838,6 +772,7 @@ func main() {
 	})
 
 	srv.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
+		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
 		log.Debug("In MIGRATE handler")
@@ -886,7 +821,7 @@ func main() {
 				// Keep or not? It is a problem.
 				// KEEP: MUST if migration is used for backup
 				// DISCARD: SHOULD if to be reused after migration.
-				// store = storage.New()
+				// lifetime.Store = storage.New()
 
 				// Close session
 				session.Migrator = nil
@@ -913,12 +848,12 @@ func main() {
 
 		// Send key list by access time
 		w.AppendBulkString("mhello")
-		w.AppendBulkString(strconv.Itoa(store.Len()))
+		w.AppendBulkString(strconv.Itoa(Store.Len()))
 
-		delList := make([]string, 0, 2*store.Len())
-		getList := delList[store.Len():store.Len()]
-		for key := range store.Keys() {
-			_, _, ret := store.Get(key)
+		delList := make([]string, 0, 2*Store.Len())
+		getList := delList[Store.Len():Store.Len()]
+		for key := range Store.Keys() {
+			_, _, ret := Store.Get(key)
 			if ret.Error() == types.ErrNotFound {
 				delList = append(delList, key)
 			} else {
@@ -1018,7 +953,7 @@ func main() {
 			storage.Buckets = *buckets
 
 			ready := make(chan struct{})
-			ctx = context.WithValue(ctx, &ContextKeyReady, ready)
+			ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
 			go func() {
 				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
 				log.Info("Start dummy node: %s", lambdacontext.FunctionName)
@@ -1037,7 +972,7 @@ func main() {
 			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
 			session.Timeout.Busy()
 			if tips.Get(protocol.TIP_SERVING_KEY) != "" {
-				if _, _, ret := store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
+				if _, _, ret := Store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
 					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
 				} else {
 					log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
@@ -1046,7 +981,7 @@ func main() {
 			for i := 0; i < *numToInsert; i++ {
 				val := make([]byte, *sizeToInsert)
 				rand.Read(val)
-				if ret := store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
+				if ret := Store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
 					log.Error("Error on set obj-%d: %v", i, ret.Error())
 				}
 			}
