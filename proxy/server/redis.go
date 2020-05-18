@@ -77,7 +77,7 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	_, ok := client.EcSet(key, body)
 	dt := time.Since(t)
 	if !ok {
-		w.AppendErrorf("Failed to set %s.", key)
+		w.AppendErrorf("failed to set %s", key)
 		w.Flush()
 	} else {
 		w.AppendInlineString("OK")
@@ -94,9 +94,11 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 
 	meta, ok := a.proxy.placer.Get(key, 0)
 	if !ok || meta.Deleted {
-		a.log.Warn("KEY %s not found, please set first.", key)
 		w.AppendNil()
 		w.Flush()
+		a.log.Warn("KEY %s not found, please set first.", key)
+		collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, "404",
+			int64(0), time.Now().UnixNano(), int64(0))
 		return
 	}
 
@@ -104,7 +106,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	_, reader, ok := client.EcGet(key, int(meta.Size))
 	dt := time.Since(t)
 	if !ok {
-		w.AppendNil()
+		w.AppendErrorf("failed to get %s", key)
 		w.Flush()
 	} else {
 		if err := w.CopyBulk(reader, meta.Size); err != nil {

@@ -30,6 +30,7 @@ var (
 )
 
 type Storage interface {
+	Id() uint64
 	Init(uint64, bool) (Storage, error)
 	Get(string) (string, []byte, *OpRet)
 	GetStream(string) (string, resp.AllReadCloser, *OpRet)

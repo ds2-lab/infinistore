@@ -103,6 +103,10 @@ func New(id uint64, persistent bool) *Storage {
 	}
 }
 
+func (s *Storage) Id() uint64 {
+	return s.id
+}
+
 func (s *Storage) Init(id uint64, persistent bool) (types.Storage, error) {
 	if s != nil && s.id == id {
 		return s, nil
@@ -244,7 +248,7 @@ func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
 		Key: aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key)),
 	}
 	writer := new(aws.WriteAtBuffer)
-	downloader := s3manager.NewDownloader(s.GetAWSSession())
+	downloader := s3manager.NewDownloader(types.AWSSession())
 	if _, err := downloader.Download(writer, object); err != nil {
 		return types.OpError(err)
 	}

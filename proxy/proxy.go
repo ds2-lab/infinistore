@@ -180,6 +180,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.BoolVar(&options.Evaluation, "enable-evaluation", false, "Enable evaluation settings.")
 	flag.IntVar(&options.NumBackups, "numbak", 0, "EVALUATION ONLY: The number of backups used per node.")
 	flag.BoolVar(&options.NoFirstD, "disable-first-d", false, "EVALUATION ONLY: Disable first-d optimization.")
+	flag.Uint64Var(&options.FuncCapacity, "funcap", 0, "EVALUATION ONLY: Preset capacity(MB) of function instance.")
 
 	flag.Parse()
 	// options.NoDashboard = !*showDashboard
@@ -196,5 +197,10 @@ func checkUsage(options *global.CommandlineOptions) {
 			options.LogFile = "log"
 		}
 		options.NoColor = true
+	}
+
+	if options.Evaluation && options.FuncCapacity == 0 {
+		fmt.Fprintf(os.Stderr, "Since evaluation is enabled, please specify the capacity of function instance with option \"-funcap\".\n")
+		os.Exit(0);
 	}
 }

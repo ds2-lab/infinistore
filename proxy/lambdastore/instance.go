@@ -61,8 +61,10 @@ const (
 var (
 	Registry       InstanceRegistry
 	WarmTimout     = config.InstanceWarmTimout
-	ConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
+	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
+	MaxConnectTimeout = 1 * time.Second
 	RequestTimeout = 1 * time.Second
+	BackoffFactor  = 2
 	timeouts       = sync.Pool{
 		New: func() interface{} {
 			return time.NewTimer(0)
@@ -505,6 +507,7 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 		ins.lastValidated = nil
 		ins.mu.Unlock()
 
+		connectTimeout := DefaultConnectTimeout
 		for {
 			ins.log.Debug("Validating...")
 			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
@@ -522,31 +525,36 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 				ins.cn.Ping(DefaultPingPayload)
 			}
 
-			if atomic.LoadUint32(&ins.awake) == INSTANCE_MAYBE {
-				// Start timeout, ping may get stucked anytime.
-				timeout := timeouts.Get().(*time.Timer)
-				if !timeout.Stop() {
-					select {
-					case <-timeout.C:
-					default:
-					}
-				}
-				timeout.Reset(ConnectTimeout)
-
+			// Start timeout, ping may get stucked anytime.
+			timeout := timeouts.Get().(*time.Timer)
+			if !timeout.Stop() {
 				select {
 				case <-timeout.C:
-					// Set status to dead and revalidate.
-					timeouts.Put(timeout)
-					atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
-					// Close or not? Maybe we can wait until connection incomes.
-					ins.cn.Close()
-					ins.cn = nil
-					ins.log.Warn("Timeout on validating, assuming instance dead and retry...")
-				case <-ins.chanValidated:
-					timeouts.Put(timeout)
-					return ins.validated()
+				default:
 				}
-			} else {
+			}
+			timeout.Reset(connectTimeout)
+
+			select {
+			case <-timeout.C:
+				// Set status to dead and revalidate.
+				timeouts.Put(timeout)
+				// If instance is not invoked by proxy, it may be slept
+				if atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_MAYBE, INSTANCE_SLEEP) {
+					ins.log.Warn("Timeout on validating, assuming instance dead and reinvoke...")
+					// Close or not? Maybe we can wait until a connection comes.
+					// ins.cn.Close()
+					// ins.cn = nil
+				} else {
+					// Exponential backoff
+					connectTimeout *= time.Duration(BackoffFactor)
+					if connectTimeout > MaxConnectTimeout {
+						connectTimeout = MaxConnectTimeout
+					}
+					ins.log.Warn("Timeout on validating, re-ping...")
+				}
+			case <-ins.chanValidated:
+				timeouts.Put(timeout)
 				return ins.validated()
 			}
 		}

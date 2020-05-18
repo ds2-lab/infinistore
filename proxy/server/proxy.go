@@ -308,4 +308,5 @@ func (p *Proxy) dropEvicted(meta *Meta) {
 			Key:   meta.ChunkKey(i),
 		}
 	}
+	p.log.Warn("Evict %s", meta.Key)
 }

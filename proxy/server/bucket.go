@@ -80,7 +80,7 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 func (b *Bucket) initInstance(from, length int) {
 	for i := from; i < from+length; i++ {
 		node := scheduler.GetForGroup(b.group, i)
-		node.Meta.Capacity = config.InstanceCapacity
+		node.Meta.Capacity = global.Options.GetInstanceCapacity()
 		node.Meta.IncreaseSize(config.InstanceOverhead)
 		// assign bucket id to new instance
 		node.BucketId = int64(b.id)
