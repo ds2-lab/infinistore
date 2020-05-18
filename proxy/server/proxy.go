@@ -57,7 +57,7 @@ func New(replica bool) *Proxy {
 			p.log.Info("[Registering lambda store %s%d]", name, i)
 		}
 		node := scheduler.GetForGroup(p.group, i)
-		node.Meta.Capacity = config.InstanceCapacity
+		node.Meta.Capacity = global.Options.GetInstanceCapacity()
 		node.Meta.IncreaseSize(config.InstanceOverhead)
 	}
 	// Something can only be done after all nodes initialized.

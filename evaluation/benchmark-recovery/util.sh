@@ -29,9 +29,10 @@ function start_proxy() {
     echo "starting proxy server"
     # PREFIX=$1
     # BACKUPS=$2
+    # MEM=$3
     LOGFILE=`dirname $1`
     mkdir -p $EVALBASE/$LOGFILE
-    $BINDIR/proxy -debug -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 # -debug
+    $BINDIR/proxy -debug -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 -funcap=$3 # -debug
 }
 
 function bench() {
