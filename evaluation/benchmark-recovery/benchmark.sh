@@ -26,7 +26,7 @@ function perform(){
     BACKUPS=$8
 
     ((NODES=CLUSTER+BACKUPS))
-    ((BYTES=SZ*1024*1024))
+    ((BYTES=SZ*1000000))
     ((BAKOVERHEAD=MEM/MINBACKUPS))   # Reserved.
     ((SETS=(MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
     ((N=SECS*1000/INTERVAL))
@@ -72,13 +72,13 @@ function perform(){
 LASTING=(60)
 # Memory settings
 MEMSET=(512 1024 1536 2048 3008)
-SYSSET=(100 100 200 200 200)
+SYSSET=(100 100 200 200 300)
 # Object size settings
 SZSET=(1 10 50 100)
 # Inter-arrival time settings
 IASET=(200 500 1000 2000)
 # # of backup nodes settings
-BAKSET=(10 20 40 80)
+BAKSET=(40 10 20 80)
 CONCURRENCY=1
 MAXKEY=1          # Occupant
 if [ "$1" != "" ]; then
