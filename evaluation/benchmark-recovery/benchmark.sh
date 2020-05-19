@@ -26,7 +26,7 @@ function perform(){
     BACKUPS=$8
 
     ((NODES=CLUSTER+BACKUPS))
-    ((BYTES=SZ*1024*1024))
+    ((BYTES=SZ*1024000))
     ((BAKOVERHEAD=MEM/MINBACKUPS))   # Reserved.
     ((SETS=(MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
     ((N=SECS*1000/INTERVAL))
@@ -62,6 +62,10 @@ function perform(){
         echo "Getting random $N objects for $SECS seconds, interval: $INTERVAL ms"
         bench $N 1 1 $SETS $BYTES 1 $INTERVAL
         kill -2 `cat /tmp/infinicache.pid`
+        while [ -f /tmp/infinicache.pid ]
+        do
+            sleep 1s
+        done
     done
 }
 
@@ -72,9 +76,9 @@ function perform(){
 LASTING=(60)
 # Memory settings
 MEMSET=(512 1024 1536 2048 3008)
-SYSSET=(100 100 200 200 200)
+SYSSET=(100 100 200 200 300)
 # Object size settings
-SZSET=(1 10 50 100)
+SZSET=(2 10 50 100)
 # Inter-arrival time settings
 IASET=(200 500 1000 2000)
 # # of backup nodes settings
@@ -91,7 +95,7 @@ do
     for sz in {0..3}
     do
       iaIdx=1
-      bak=0
+      bak=1
       #       seconds       concur       keys    object-size  inter-arrival   memory         overhead       num-backups
       perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${SYSSET[mem]} ${BAKSET[bak]}
     done
