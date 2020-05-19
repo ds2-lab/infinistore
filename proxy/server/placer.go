@@ -87,9 +87,11 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 
 	meta.placerMeta.instances = l.instances
 	meta.placerMeta.bucketIdx = l.proxy.movingWindow.getCurrentBucket().id
+	targetInstance := meta.placerMeta.instances[chunkId].LambdaDeployment
 
 	// scaler check
-	if l.AvgSize(l.instances) > config.InstanceCapacity*config.Threshold && l.scaling == false && meta.placerMeta.isScale == false {
+	if (targetInstance.(*lambdastore.Instance).ChunkCounter >= config.MaxChunk ||
+		l.AvgSize(l.instances) > config.InstanceCapacity*config.Threshold) && l.scaling == false && meta.placerMeta.isScale == false {
 		l.log.Debug("large than instance average size")
 		l.scaling = true
 		meta.placerMeta.isScale = true
@@ -97,8 +99,11 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 	}
 
 	// place
-	instanceId := int(meta.placerMeta.instances[chunkId].LambdaDeployment.Id())
+	instanceId := int(targetInstance.Id())
 	meta.Placement[chunkId] = instanceId
+
+	// update instance chunk counter
+	targetInstance.(*lambdastore.Instance).ChunkCounter += 1
 
 	l.updateInstanceSize(instanceId, meta.ChunkSize)
 

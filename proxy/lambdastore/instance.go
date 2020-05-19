@@ -59,13 +59,13 @@ const (
 )
 
 var (
-	Registry       InstanceRegistry
-	WarmTimout     = config.InstanceWarmTimout
+	Registry              InstanceRegistry
+	WarmTimout            = config.InstanceWarmTimout
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
-	MaxConnectTimeout = 1 * time.Second
-	RequestTimeout = 1 * time.Second
-	BackoffFactor  = 2
-	timeouts       = sync.Pool{
+	MaxConnectTimeout     = 1 * time.Second
+	RequestTimeout        = 1 * time.Second
+	BackoffFactor         = 2
+	timeouts              = sync.Pool{
 		New: func() interface{} {
 			return time.NewTimer(0)
 		},
@@ -89,21 +89,22 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
-	BucketId int64
+	BucketId     int64
+	ChunkCounter int
 
-	cn           *Connection
-	chanCmd      chan types.Command
-	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	started      uint32
-	awake        uint32
-	phase        uint32
+	cn            *Connection
+	chanCmd       chan types.Command
+	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	started       uint32
+	awake         uint32
+	phase         uint32
 	chanValidated chan struct{}
 	lastValidated *Connection
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
 	coolTimeout   time.Duration
-	enableSwitch  int32            // If connection swtich is enabled.
+	enableSwitch  int32 // If connection swtich is enabled.
 
 	// Connection management
 	sessions *hashmap.HashMap
@@ -703,7 +704,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 		if ins.cn != nil {
 			allowed := atomic.LoadInt32(&ins.enableSwitch)
 			for allowed > 0 {
-				if atomic.CompareAndSwapInt32(&ins.enableSwitch, allowed, allowed - 1) {
+				if atomic.CompareAndSwapInt32(&ins.enableSwitch, allowed, allowed-1) {
 					break
 				}
 

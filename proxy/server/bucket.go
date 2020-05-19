@@ -84,6 +84,9 @@ func (b *Bucket) initInstance(from, length int) {
 		node.Meta.IncreaseSize(config.InstanceOverhead)
 		// assign bucket id to new instance
 		node.BucketId = int64(b.id)
+		// init instance chunk counter
+		node.ChunkCounter = 0
+
 		b.log.Debug("[adding lambda instance %v]", node.Name())
 
 		// Begin handle requests

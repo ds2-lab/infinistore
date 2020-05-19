@@ -27,7 +27,7 @@ const InstanceDegradeWarmTimout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const InstanceCapacity = 3008 * 1000000    // MB
+const InstanceCapacity = 3008 * 1000000 // MB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
 const InstanceOverhead = 100 * 1000000 // MB
@@ -40,7 +40,7 @@ const ServerPublicIp = "" // Leave it empty if using VPC.
 
 // RecoverRate Empirical S3 download rate for specified InstanceCapacity.
 // 40MB for 512, 1024, 1536MB instance, 70MB for 3008MB instance.
-const RecoverRate = 40 * 1000000           // Not actually used.
+const RecoverRate = 40 * 1000000 // Not actually used.
 
 // BackupsPerInstance  Number of backup instances used for parallel recovery.
 const BackupsPerInstance = 36 // (InstanceCapacity - InstanceOverhead) / RecoverRate
@@ -50,6 +50,9 @@ const BucketDuration = 1 // min
 
 // Async migrate control
 const ActiveReplica = 2 //min
+
+// Maximum chunk per instance
+const MaxChunk = 3000
 
 // ProxyList Ip addresses of proxies.
 var ProxyList []string
