@@ -418,7 +418,9 @@ func (ins *Instance) Close() {
 		ins.cn.Close()
 		ins.cn = nil
 	}
+	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 	ins.flagValidatedLocked(nil)
+	ins.log.Info("Closed")
 }
 
 func (ins *Instance) IsClosed() bool {
@@ -459,7 +461,7 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 		connectTimeout := DefaultConnectTimeout
 		for {
 			ins.log.Debug("Validating...")
-			triggered := ins.awake == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
+			triggered := atomic.LoadUint32(&ins.awake) == INSTANCE_SLEEP && ins.tryTriggerLambda(opt)
 			if triggered {
 				return ins.validated()
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
@@ -641,6 +643,11 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequired bool) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
+
+	if ins.isClosedLocked() {
+		// Simple return, the conn will close itself.
+		return conn
+	}
 
 	ins.flagWarmed()
 	if ins.cn != conn {

@@ -368,11 +368,17 @@ func (s *Storage) TrackLineage() {
 
 	s.log.Debug("Tracking lineage...")
 
+	// This is essential to minimize download memory consumption.
+	bufferProvider := s3manager.NewBufferedReadSeekerWriteToPool(1 * 1024 * 1024)
 	// Initialize s3 uploader
 	smallUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 		u.Concurrency = 1
+		u.BufferProvider = bufferProvider
 	})
-	largeUploader := s3manager.NewUploader(types.AWSSession())
+	largeUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
+		u.Concurrency = Concurrency
+		u.BufferProvider = bufferProvider
+	})
 	attemps := 3
 	persistedOps := make([]*types.OpWrapper, 0, 10)
 	persisted := 0
@@ -1273,18 +1279,22 @@ func (s *Storage) getS3Downloader(smallOnly bool) S3Downloader{
 	if !smallOnly {
 		num += 1	// Add 1 more downloader for large objects
 	}
+	// This is essential to minimize download memory consumption.
+	bufferProvider := s3manager.NewPooledBufferedWriterReadFromProvider(1 * 1024 * 1024)
 
 	downloader := make([]*s3manager.Downloader, num)
 	// Initialize downloaders for small object
 	for i := 0; i < Concurrency; i++ {
 		downloader[i] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = 1
+			d.BufferProvider = bufferProvider
 		})
 	}
 	// Initialize the downloader for large object
 	if !smallOnly {
 		downloader[Concurrency] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
 			d.Concurrency = Concurrency
+			d.BufferProvider = bufferProvider
 		})
 	}
 	return downloader

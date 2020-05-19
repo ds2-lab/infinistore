@@ -21,6 +21,7 @@ import (
 	"runtime"
 	// "runtime/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -258,7 +259,7 @@ func serve(conn net.Conn) {
 
 	// Cross session gorouting
 	err := srv.ServeForeignClient(conn)
-	if err != nil && err != io.EOF {
+	if err != nil && err != io.EOF && strings.Index(err.Error(), "use of closed network connection") < 0 {
 		log.Info("Connection closed: %v", err)
 	} else {
 		err = nil
@@ -710,6 +711,8 @@ func main() {
 
 		// Reset store
 		Store = (*storage.Storage)(nil)
+		Lineage = nil
+		session.Done()
 	})
 
 	srv.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
