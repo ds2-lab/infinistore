@@ -5,7 +5,7 @@ go 1.12
 require (
 	github.com/ScottMansfield/nanolog v0.2.0
 	github.com/aws/aws-lambda-go v1.16.0
-	github.com/aws/aws-sdk-go v1.30.15
+	github.com/aws/aws-sdk-go v1.31.0
 	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/cespare/xxhash v1.1.0
 	github.com/cornelk/hashmap v1.0.1
@@ -24,9 +24,10 @@ require (
 	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d
 	github.com/onsi/ginkgo v1.12.0
 	github.com/onsi/gomega v1.9.0
-	github.com/seiflotfy/cuckoofilter v0.0.0-20200416141329-862a88987de7
+	github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7
 	github.com/stretchr/objx v0.2.0 // indirect
-	github.com/urfave/cli/v2 v2.2.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
+	github.com/urfave/cli v1.22.1 // indirect
+	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f // indirect
+	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 )
