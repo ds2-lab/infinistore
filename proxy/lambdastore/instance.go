@@ -85,7 +85,6 @@ type Instance struct {
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
-	enableSwitch  int32            // If connection swtich is enabled.
 
 	// Connection management
 	sessions      *hashmap.HashMap
@@ -392,7 +391,6 @@ func (ins *Instance) Migrate() error {
 	}
 
 	ins.log.Info("Initiating migration to %s...", dply.Name())
-	atomic.AddInt32(&ins.enableSwitch, 1)
 	ins.chanCmd <- &types.Control{
 		Cmd:        "migrate",
 		Addr:       addr,
@@ -609,7 +607,8 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	ins.Meta.Stale = true
 	output, err := client.Invoke(input)
 	ins.endSession(event.Sid)
-	ins.cn = nil
+	// Don't reset connection here, fronzen but not dead.
+	// ins.cn = nil
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
 	} else {
@@ -655,21 +654,6 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 
 	ins.flagWarmed()
 	if ins.cn != conn {
-		// Is connction switch enabled
-		if ins.cn != nil {
-			allowed := atomic.LoadInt32(&ins.enableSwitch)
-			for allowed > 0 {
-				if atomic.CompareAndSwapInt32(&ins.enableSwitch, allowed, allowed - 1) {
-					break
-				}
-
-				allowed = atomic.LoadInt32(&ins.enableSwitch)
-			}
-			// Deny session
-			if allowed == 0 {
-				return conn
-			}
-		}
 		// Check possible duplicated session
 		if !ins.startSession(sid) {
 			// Deny session
@@ -689,10 +673,11 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 
 			if oldConn.instance == ins {
 				// There are two possibilities for connectio switch:
-				// 1. Migration
-				// 2. Accidential concurrent triggering, usually after lambda returning and before it get reclaimed.
-				// In either case, the status is awake and it indicate the status of the old instance, it is not reliable.
-				atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
+				// 1. Old node get reclaimed
+				atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
+				// 2. Migration, which we have no way to know its status.
+				// TODO: Distinguish with case 1 using sid
+				// atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
 			} else {
 				ins.log.Warn("I can't believe this, you find a misplaced instance: %d", oldConn.instance.Id())
 			}
@@ -700,6 +685,8 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, recoveryRequire
 			atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
 		}
 	} else {
+		ins.startSession(sid)
+
 		// For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
 		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEP, INSTANCE_AWAKE)
 	}
@@ -756,7 +743,6 @@ func (ins *Instance) flagClosed(conn *Connection) {
 	}
 
 	ins.cn = nil
-
 	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 }
 
