@@ -18,10 +18,6 @@ const (
 	OP_MIGRATION   = 91
 	OP_RECOVERY    = 92      // Recover repository
 	OP_COMMIT      = 93      // Commit lineage
-
-	CHUNK_OK       = 0
-	CHUNK_RECOVERING = 1
-	CHUNK_LOCK     = 2
 )
 
 var (
@@ -54,7 +50,7 @@ type Chunk struct {
 	Size     uint64
 	Term     uint64     // Lineage term of last write operation.
 	Deleted  bool
-	Recovering uint32   // Recovering
+	Available uint64    // Bytes available now. Used for recovering
 	Notifier sync.WaitGroup // See benchmarks in github.com/mason-leap-lab/infinicache/common/sync
 	Accessed time.Time
 	Bucket   string
@@ -67,6 +63,7 @@ func NewChunk(key string, id string, body []byte) *Chunk {
 		Id: id,
 		Body: body,
 		Size: uint64(len(body)),
+		Available: uint64(len(body)),
 		Accessed: time.Now(),
 	}
 }

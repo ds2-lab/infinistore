@@ -12,9 +12,10 @@ import (
 
 var (
 	// Provided by amazon.
-	AWSRegion      = os.Getenv("AWS_REGION")
-	Concurrency    = 10
-	awssess         *awsSession.Session
+	AWSRegion           = os.Getenv("AWS_REGION")
+	UploadConcurrency   = 5
+	DownloadConcurrency = 10
+	awssess             *awsSession.Session
 )
 
 func AWSSession() *awsSession.Session {
