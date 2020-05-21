@@ -257,16 +257,20 @@ func (ins *Instance) startRecoveryLocked() int {
 		if alters + i < len(ins.candidates) && !tested[i] && ins.candidates[alters + i].ReserveBacking() {
 			// exchange candidates
 			changes += ins.promoteCandidate(i, alters + i)
+			tested[i] = true
 			continue
 		}
 		// Try find whatever possible
 		for ; offset < len(tested); offset++ {
 			if !tested[offset] && ins.candidates[alters + offset].ReserveBacking() {
-				tested[offset] = true
 				changes += ins.promoteCandidate(i, alters + offset)
+				tested[offset] = true
 				break
+			} else {
+				tested[offset] = true
 			}
 		}
+		// TODO: hole here if not avaiable
 	}
 	if len(ins.backups) != lastnum {
 		// The difference of total changes everything.
