@@ -179,8 +179,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
 	key := c.Arg(0).String()
-	reqId := c.Arg(2).String()
-	dChunkId, _ := c.Arg(1).Int()
+	reqId := c.Arg(1).String()
+	dChunkId, _ := c.Arg(2).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
 	// Start couting time.
