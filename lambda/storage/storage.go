@@ -194,10 +194,11 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 
 func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
 	s.setSafe.Wait()
-
+	s.log.Debug("ready to set key %v", key)
 	// Lock lineage, ensure operation get processed in the term.
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
+	s.log.Debug("in mutex of setting key %v", key)
 
 	chunk := types.NewChunk(key, chunkId, val)
 	chunk.Term = 1
@@ -224,6 +225,7 @@ func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpW
 			op.Persisted = opt.Persisted
 		}
 		s.chanOps <- op
+		s.log.Debug("local set ok, key %v", key)
 		return op.OpRet
 	} else {
 		return types.OpSuccess()
@@ -355,6 +357,8 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) types.Lineage {
 	s.s3bucket = bucket
 	s.s3bucketDefault = fmt.Sprintf(bucket, "")
 	s.s3prefix = prefix
+	s.setSafe = csync.WaitGroup{}
+	s.getSafe = csync.WaitGroup{}
 	s.delaySet()
 	return s
 }

@@ -275,25 +275,26 @@ func (ins *Instance) startRecoveryLocked() int {
 		if ins.candidates[i].ReserveBacking() {
 			changes += ins.promoteCandidate(i, i)
 			continue
+		} else if offset == len(tested) {
+			continue
 		}
 		// Try alter + i to keep backingID stable.
 		if alters+i < len(ins.candidates) && !tested[i] && ins.candidates[alters+i].ReserveBacking() {
 			// exchange candidates
-			changes += ins.promoteCandidate(i, alters + i)
+			changes += ins.promoteCandidate(i, alters+i)
 			tested[i] = true
 			continue
 		}
 		// Try find whatever possible
 		for ; offset < len(tested); offset++ {
-			if !tested[offset] && ins.candidates[alters + offset].ReserveBacking() {
-				changes += ins.promoteCandidate(i, alters + offset)
+			if !tested[offset] && ins.candidates[alters+offset].ReserveBacking() {
+				changes += ins.promoteCandidate(i, alters+offset)
 				tested[offset] = true
 				break
 			} else {
 				tested[offset] = true
 			}
 		}
-		// TODO: hole here if not avaiable
 	}
 	if len(ins.backups) != lastnum {
 		// The difference of total changes everything.

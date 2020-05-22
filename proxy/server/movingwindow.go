@@ -13,11 +13,13 @@ import (
 )
 
 var (
-	ActiveDuration     = 3 // min
-	ExpireDuration     = 6 //min
+	ActiveDuration     = 10 // min
+	ExpireDuration     = 20 //min
 	ActiveBucketsNum   = ActiveDuration / config.BucketDuration
 	ExpireBucketsNum   = ExpireDuration / config.BucketDuration
 	NumBackupInstances = config.BackupsPerInstance * config.NumLambdaClusters
+
+	extraIns = 38
 )
 
 // reuse window and interval should be MINUTES
@@ -63,7 +65,7 @@ func (mw *MovingWindow) Reroute(obj interface{}, chunkId int) *lambdastore.Insta
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
-	group := NewGroup(config.NumLambdaClusters)
+	group := NewGroup(config.NumLambdaClusters + extraIns)
 	return &MovingWindow{
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
@@ -307,13 +309,23 @@ func (mw *MovingWindow) findBackupInstanceStart() int {
 
 // only assign backup for new node in bucket
 func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
-	start := mw.findBackupInstanceStart()
+	//start := mw.findBackupInstanceStart()
 	for i := 0; i < len(instances); i++ {
-		num, candidates := scheduler.getBackupsForNode(mw.group.All[start:], i)
+		num, candidates := scheduler.getBackupsForNode(mw.group.All, i+(mw.getCurrentBucket().end-len(instances)))
 		node := instances[i].LambdaDeployment.(*lambdastore.Instance)
 		mw.log.Debug("in assign backup, instance is %v", node.Name())
 		node.AssignBackups(num, candidates)
 	}
+}
+
+func (mw *MovingWindow) InstanceSum(stats int) int {
+	sum := 0
+	for _, bucket := range mw.buckets {
+		if bucket.state == stats {
+			sum += len(bucket.instances)
+		}
+	}
+	return sum
 }
 
 func (mw *MovingWindow) touch(meta *Meta) {

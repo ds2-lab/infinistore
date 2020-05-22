@@ -46,7 +46,7 @@ const RecoverRate = 40 * 1000000 // Not actually used.
 const BackupsPerInstance = 36 // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 // Each bucket's active duration
-const BucketDuration = 1 // min
+const BucketDuration = 10 // min
 
 // Async migrate control
 const ActiveReplica = 2 //min

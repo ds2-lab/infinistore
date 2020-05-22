@@ -61,7 +61,9 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 
 	// expand
 	if len(args) > 0 {
-		bucket.end = config.NumLambdaClusters
+		bucket.end = config.NumLambdaClusters + extraIns
+		bucket.start = 0
+		num = config.NumLambdaClusters + extraIns
 	} else {
 		bucket.end, err = group.Expand(num)
 		if err != nil {
@@ -69,9 +71,9 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 			bucket = nil
 			return
 		}
+		bucket.start = bucket.end - num
 	}
 
-	bucket.start = bucket.end - num
 	bucket.initInstance(bucket.start, num)
 	bucket.state = BUCKET_ACTIVE
 	return
