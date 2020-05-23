@@ -74,7 +74,7 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	body := c.Arg(1).Bytes()
 
 	t := time.Now()
-	ok := client.Set(key, body)
+	_, ok := client.EcSet(key, body)
 	dt := time.Since(t)
 	if !ok {
 		w.AppendErrorf("failed to set %s", key)
@@ -93,7 +93,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	key := c.Arg(0).String()
 
 	t := time.Now()
-	reader, ok := client.Get(key)
+	_, reader, ok := client.EcGet(key)
 	dt := time.Since(t)
 	code := "500"
 	size := 0
