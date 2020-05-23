@@ -170,28 +170,16 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// key is "key"+"chunkId"
-	//meta, ok := p.metaStore.Get(key, int(dChunkId))
-	//if !ok || meta.Deleted {
-	//	// Object may be deleted.
-	//	p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-	//	w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-	//	w.Flush()
-	//	return
-	//}
-
 	meta, ok := p.placer.Get(key, int(dChunkId))
-	p.log.Debug("ok ? %v", ok)
 	if !ok {
-		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-		w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
+		p.log.Warn("KEY %s@%s not found", chunkId, key)
+		w.AppendNil()
 		w.Flush()
 		return
 	}
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	instance := p.movingWindow.group.Instance(lambdaDest)
-
-	p.log.Debug("chunkId is %v, lambdaDest is %v, instance id is %v", dChunkId, lambdaDest, instance.Name())
 
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	// Send request to lambda channel
@@ -224,7 +212,20 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	switch rsp := wrapper.Response.(type) {
 	case *types.Response:
 		t := time.Now()
-		rsp.PrepareFor(w)
+		switch wrapper.Request.Cmd {
+		case protocol.CMD_RECOVER:
+			// on GET request from reclaimed instances, it will get recovered from new instances,
+			// the response of this cmd_recover's behavior is the same as cmd_get
+			fallthrough
+		case protocol.CMD_GET:
+			rsp.Size = wrapper.Request.Info.(*Meta).Size
+			rsp.PrepareForGet(w)
+		case protocol.CMD_SET:
+			rsp.PrepareForSet(w)
+		default:
+			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)
+			return
+		}
 		d1 := time.Since(t)
 		t2 := time.Now()
 		// flush buffer, return on errors
@@ -280,7 +281,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			instance.C() <- control
 			global.ReqCoordinator.RegisterControl(recoverReqId, control)
 		}
-	// Use more general way to deal error
+		// Use more general way to deal error
 	default:
 		w.AppendErrorf("%v", rsp)
 		w.Flush()

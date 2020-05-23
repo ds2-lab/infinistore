@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	"github.com/mason-leap-lab/redeo/resp"
+	"strconv"
 )
 
 type ProxyResponse struct {
@@ -13,14 +14,23 @@ type ProxyResponse struct {
 type Response struct {
 	Id   Id
 	Cmd  string
+	Size int64
 	Body []byte
 	BodyStream resp.AllReadCloser
 
 	w    resp.ResponseWriter
 }
 
-func (rsp *Response) PrepareFor(w resp.ResponseWriter) {
+func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {
 	w.AppendBulkString(rsp.Id.ReqId)
+	w.AppendBulkString(rsp.Id.ChunkId)
+	w.AppendBulk(rsp.Body)
+	rsp.w = w
+}
+
+func (rsp *Response) PrepareForGet(w resp.ResponseWriter) {
+	w.AppendBulkString(rsp.Id.ReqId)
+	w.AppendBulkString(strconv.FormatInt(rsp.Size, 10))
 	if rsp.Body == nil && rsp.BodyStream == nil {
 		w.AppendBulkString("-1")
 	} else {

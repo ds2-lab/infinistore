@@ -51,6 +51,14 @@ func NewResponseReader(rd io.Reader) resp.ResponseReader {
 	return resp.NewResponseReader(rd)
 }
 
+// New set API
+// Internal error if result is false.
+func (c *Client) Set(key string, val []byte) bool {
+	_, ok := c.EcSet(key, val)
+	return ok
+}
+
+// Internal API
 func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, bool) {
 	// Debuging options
 	var dryrun int
@@ -99,7 +107,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	for i := 0; i < ret.Len(); i++ {
 		//fmt.Println("shards", i, "is", shards[i])
 		wg.Add(1)
-		go c.set(host, key, stats.ReqId, len(val), i, shards[i], index[i], &wg, ret)
+		go c.set(host, key, stats.ReqId, len(val), i, shards[i], index[i], ret, &wg)
 	}
 	wg.Wait()
 	stats.ReqLatency = time.Since(stats.Begin)
@@ -124,7 +132,16 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	return stats.ReqId, true
 }
 
-func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.ReadCloser, bool) {
+// New get API, not size is required.
+// Internal error if the bool is set to false
+func (c *Client) Get(key string) (io.ReadCloser, bool) {
+	_, reader, ok := c.EcGet(key, 0)
+	return reader, ok
+}
+
+// Internal API
+// returns reqId, reader, and a bool indicate error. If not found, the reader will be nil.
+func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, bool) {
 	var dryrun int
 	if len(args) > 0 {
 		dryrun, _ = args[0].(int)
@@ -148,10 +165,15 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.Re
 	ret := newEcRet(c.Shards)
 	for i := 0; i < ret.Len(); i++ {
 		wg.Add(1)
-		go c.get(host, key, stats.ReqId, i, &wg, ret)
+		go c.get(host, key, stats.ReqId, i, ret, &wg)
 	}
 	wg.Wait()
 	stats.RecLatency = time.Since(stats.Begin)
+
+	// Nil check
+	if ret.Size == 0 {
+		return stats.ReqId, nil, true // Set true to differentiate not found and error.
+	}
 
 	// Filter results
 	chunks := make([][]byte, ret.Len())
@@ -166,7 +188,7 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.Re
 	}
 
 	decodeStart := time.Now()
-	reader, err := c.decode(stats, chunks, size)
+	reader, err := c.decode(stats, chunks, ret.Size)
 	if err != nil {
 		return stats.ReqId, nil, false
 	}
@@ -180,7 +202,7 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, io.Re
 
 	// Try recover
 	if len(failed) > 0 {
-		c.recover(host, key, uuid.New().String(), size, failed, chunks)
+		c.recover(host, key, uuid.New().String(), ret.Size, failed, chunks)
 	}
 
 	return stats.ReqId, reader, true
@@ -213,8 +235,10 @@ func (c *Client) setError(ret *ecRet, addr string, i int, err error) {
 	ret.SetError(i, err)
 }
 
-func (c *Client) set(addr string, key string, reqId string, size int, i int, val []byte, lambdaId int, wg *sync.WaitGroup, ret *ecRet) {
-	defer wg.Done()
+func (c *Client) set(addr string, key string, reqId string, size int, i int, val []byte, lambdaId int, ret *ecRet, wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
 
 	if err := c.validate(addr, i); err != nil {
 		c.setError(ret, addr, i, err)
@@ -252,11 +276,13 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	cn.conn.SetWriteDeadline(time.Time{})
 
 	log.Debug("Initiated setting %d@%s(%s)", i, key, addr)
-	c.rec("Set", addr, i, reqId, ret, nil)
+	c.recvSet("Set", addr, reqId, i, ret, nil)
 }
 
-func (c *Client) get(addr string, key string, reqId string, i int, wg *sync.WaitGroup, ret *ecRet) {
-	defer wg.Done()
+func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
 
 	if err := c.validate(addr, i); err != nil {
 		c.setError(ret, addr, i, err)
@@ -282,10 +308,10 @@ func (c *Client) get(addr string, key string, reqId string, i int, wg *sync.Wait
 	cn.conn.SetWriteDeadline(time.Time{})
 
 	log.Debug("Initiated getting %d@%s(%s)", i, key, addr)
-	c.rec("Got", addr, i, reqId, ret, nil)
+	c.recvGet("Got", addr, reqId, i, ret, nil)
 }
 
-func (c *Client) rec(prompt string, addr string, i int, reqId string, ret *ecRet, wg *sync.WaitGroup) {
+func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
 	if wg != nil {
 		defer wg.Done()
 	}
@@ -303,6 +329,7 @@ func (c *Client) rec(prompt string, addr string, i int, reqId string, ret *ecRet
 		return
 	}
 
+	// Check error
 	switch type0 {
 	case resp.TypeError:
 		strErr, err := c.Conns[addr][i].R.ReadError()
@@ -314,27 +341,75 @@ func (c *Client) rec(prompt string, addr string, i int, reqId string, ret *ecRet
 		return
 	}
 
-	respId, err := c.Conns[addr][i].R.ReadBulkString()
-	if err != nil {
-		log.Warn("Failed to read reqId on receiving chunk %d: %v", i, err)
-		c.setError(ret, addr, i, err)
-		return
-	}
-	if respId != reqId {
-		log.Warn("Unexpected response %s, want %s, chunk %d", respId, reqId, i)
-		// Skip fields
-		_, _ = c.Conns[addr][i].R.ReadBulkString()
-		_ = c.Conns[addr][i].R.SkipBulk()
+	// Read fields
+	respId, _ := c.Conns[addr][i].R.ReadBulkString()
+	chunkId, _ := c.Conns[addr][i].R.ReadBulkString()
+	storeId, _ := c.Conns[addr][i].R.ReadBulkString()
+
+	// Match reqId and chunk
+	if respId != reqId || chunkId != strconv.Itoa(i) {
+		log.Warn("Unexpected response %s(%s), expects %s(%d)", respId, chunkId, reqId, i)
 		ret.SetError(i, ErrUnexpectedResponse)
 		return
 	}
 
-	chunkId, err := c.Conns[addr][i].R.ReadBulkString()
+	log.Debug("%s chunk %d", prompt, i)
+	ret.Set(i, storeId)
+}
+
+func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
+
+	cn := c.Conns[addr][i]
+	cn.conn.SetReadDeadline(time.Now().Add(Timeout))  // Set deadline for response
+	defer cn.conn.SetReadDeadline(time.Time{})
+
+	// peeking response type and receive
+	// chunk id
+	type0, err := cn.R.PeekType()
 	if err != nil {
-		log.Warn("Failed to read chunkId on receiving chunk %d: %v", i, err)
+		log.Warn("PeekType error on receiving chunk %d: %v", i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
+
+	// Check error
+	switch type0 {
+	case resp.TypeError:
+		strErr, err := c.Conns[addr][i].R.ReadError()
+		if err == nil {
+			err = errors.New(strErr)
+		}
+		log.Warn("Error on receiving chunk %d: %v", i, err)
+		c.setError(ret, addr, i, err)
+		return
+	case resp.TypeNil:
+		err := c.Conns[addr][i].R.ReadNil()
+		if err != nil {
+			log.Warn("Error on receiving chunk %d: %v", i, err)
+			c.setError(ret, addr, i, err)
+			return
+		}
+		log.Debug("Not found chunk %d", prompt, i)
+		ret.Set(i, nil)
+		return
+	}
+
+	// Read header fields
+	respId, _ := c.Conns[addr][i].R.ReadBulkString()
+	strSize, _ := c.Conns[addr][i].R.ReadBulkString()
+	chunkId, _ := c.Conns[addr][i].R.ReadBulkString()
+
+	// Matching reqId and chunk
+	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
+		log.Warn("Unexpected response %s(%s), expects %s(%d)", respId, chunkId, reqId, i)
+		ret.SetError(i, ErrUnexpectedResponse)
+		return
+	}
+
+	// Abandon?
 	if chunkId == "-1" {
 		log.Debug("Abandon late chunk %d", i)
 		return
@@ -354,6 +429,10 @@ func (c *Client) rec(prompt string, addr string, i int, reqId string, ret *ecRet
 		return
 	}
 
+	if ret.Size == 0 {
+		ret.Size, _ = strconv.Atoi(strSize)   // If err, we can try in another chunk
+	}
+
 	log.Debug("%s chunk %d", prompt, i)
 	ret.Set(i, val)
 }
@@ -364,7 +443,7 @@ func (c *Client) recover(addr string, key string, reqId string, size int, failed
 	for _, i := range failed {
 		wg.Add(1)
 		// lambdaId = 0, for lambdaID of a specified key is fixed on setting.
-		go c.set(addr, key, reqId, size, i, shards[i], 0, &wg, ret)
+		go c.set(addr, key, reqId, size, i, shards[i], 0, ret, &wg)
 	}
 	wg.Wait()
 
@@ -397,7 +476,7 @@ func (c *Client) encode(obj []byte) ([][]byte, error) {
 	return shards, err
 }
 
-func (c *Client) decode(stats *DataEntry, data [][]byte, size int) (io.ReadCloser, error) {
+func (c *Client) decode(stats *DataEntry, data [][]byte, size int) (ReadAllCloser, error) {
 	// var err error
 	stats.AllGood, _ = c.EC.Verify(data)
 	if stats.AllGood {
@@ -422,7 +501,51 @@ func (c *Client) decode(stats *DataEntry, data [][]byte, size int) (io.ReadClose
 		}
 	}
 
+	return NewJoinReader(data, size, c.EC.Join), nil
+}
+
+type Joiner func(io.Writer, [][]byte, int) error
+
+type JoinReader struct {
+	io.ReadCloser
+	writer io.Writer
+	data [][]byte
+	read int
+	size int
+	once sync.Once
+	joiner Joiner
+}
+
+func NewJoinReader(data [][]byte, size int, joiner Joiner) *JoinReader {
 	reader, writer := io.Pipe()
-	go c.EC.Join(writer, data, size)
-	return reader, nil
+	return &JoinReader{
+		ReadCloser: reader,
+		writer: writer,
+		data: data,
+		size: size,
+		joiner: joiner,
+	}
+}
+
+func (r *JoinReader) Read(p []byte) (n int, err error) {
+	r.once.Do(r.join)
+	n, err = r.ReadCloser.Read(p)
+	r.read += n
+	return
+}
+
+func (r *JoinReader) Len() int {
+	return r.size - r.read
+}
+
+func (r *JoinReader) ReadAll() (buf []byte, err error) {
+	buf = make([]byte, r.Len())
+	n, err := io.ReadFull(r.ReadCloser, buf)
+	r.read += n
+	r.ReadCloser.Close()
+	return
+}
+
+func (r *JoinReader) join() {
+	go r.joiner(r.writer, r.data, r.size)
 }

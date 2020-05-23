@@ -6,6 +6,7 @@ import (
 	"github.com/klauspost/reedsolomon"
 	"github.com/mason-leap-lab/redeo/resp"
 	"github.com/seiflotfy/cuckoofilter"
+	"io"
 	"net"
 	"time"
 
@@ -164,9 +165,10 @@ func (c *Client) Close() {
 }
 
 type ecRet struct {
-	Shards int
-	Rets   []interface{}
-	Err    error
+	Shards          int
+	Rets            []interface{}
+	Err             error
+	Size            int    // only for get chunk
 }
 
 func newEcRet(shards int) *ecRet {
@@ -197,4 +199,12 @@ func (r *ecRet) Ret(i int) (ret []byte) {
 func (r *ecRet) Error(i int) (err error) {
 	err, _ = r.Rets[i].(error)
 	return
+}
+
+type ReadAllCloser interface {
+	io.Reader
+	io.Closer
+
+	Len() int
+	ReadAll() ([]byte, error)
 }
