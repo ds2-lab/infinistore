@@ -93,18 +93,19 @@ type Instance struct {
 	ChunkCounter int
 	KeyMap       []string
 
-	cn            *Connection
-	chanCmd       chan types.Command
-	chanPriorCmd  chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	started       uint32
-	awake         uint32
-	phase         uint32
-	chanValidated chan struct{}
-	lastValidated *Connection
-	mu            sync.Mutex
-	closed        chan struct{}
-	coolTimer     *time.Timer
-	coolTimeout   time.Duration
+	cn                *Connection
+	chanCmd           chan types.Command
+	chanPriorCmd      chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	started           uint32
+	awake             uint32
+	phase             uint32
+	chanValidated     chan struct{}
+	lastValidationOpt *ValidateOption
+	lastValidated     *Connection
+	mu                sync.Mutex
+	closed            chan struct{}
+	coolTimer         *time.Timer
+	coolTimeout       time.Duration
 
 	// Connection management
 	sessions *hashmap.HashMap
@@ -513,6 +514,7 @@ func (ins *Instance) endSession(sid string) {
 
 func (ins *Instance) validate(opt *ValidateOption) *Connection {
 	ins.mu.Lock()
+	ins.lastValidationOpt = opt
 
 	select {
 	case <-ins.chanValidated:
@@ -599,6 +601,12 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	for {
 		if !ins.IsValidating() {
 			// Don't overwrite the MAYBE status.
+			atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_AWAKE, INSTANCE_SLEEP)
+			return
+		} else if ins.lastValidationOpt.WarmUp {
+			// not re-try in warm up
+			ins.log.Debug("pong for warmup not received, ignored")
+			ins.flagValidatedLocked(nil)
 			atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_AWAKE, INSTANCE_SLEEP)
 			return
 		}
