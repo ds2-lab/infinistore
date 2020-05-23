@@ -25,6 +25,7 @@ type Request struct {
 	BodyStream   resp.AllReadCloser
 	Client       *redeo.Client
 	EnableCollector bool
+	Info         interface{}
 
 	w                *resp.RequestWriter
 	status        uint32

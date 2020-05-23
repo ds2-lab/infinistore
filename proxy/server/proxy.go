@@ -171,6 +171,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		BodyStream:   bodyStream,
 		Client:       client,
 		EnableCollector: true,
+		Info:         meta,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 }
@@ -192,8 +193,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	meta, ok := p.metaStore.Get(key, int(dChunkId))
 	if !ok || meta.Deleted {
 		// Object may be deleted.
-		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-		w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
+		p.log.Warn("KEY %s@%s not found", chunkId, key)
+		w.AppendNil()
 		w.Flush()
 		return
 	}
@@ -210,6 +211,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		Key:          chunkKey,
 		Client:       client,
 		EnableCollector: true,
+		Info:         meta,
 	}
 	counter.Requests[dChunkId] = req
 	// Unlikely, just to be safe
@@ -230,7 +232,16 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	case *types.Response:
 		t := time.Now()
 
-		rsp.PrepareFor(w)
+		switch wrapper.Request.Cmd {
+		case protocol.CMD_GET_CHUNK:
+			rsp.PrepareForGet(w)
+		case protocol.CMD_SET_CHUNK:
+			rsp.Size = wrapper.Request.Info.(*Meta).Size
+			rsp.PrepareForSet(w)
+		default:
+			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)
+			return
+		}
 		d1 := time.Since(t)
 
 		t2 := time.Now()

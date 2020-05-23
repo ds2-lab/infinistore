@@ -140,14 +140,21 @@ func (conn *Connection) ServeLambda() {
 			if err != nil && err == io.EOF {
 				conn.log.Warn("Lambda store disconnected.")
 				conn.close()
+				break
 			} else if err != nil {
 				conn.log.Warn("Error on read response type: %v", err)
 				break
 			}
 
-			switch cmd {
-			case protocol.CMD_POND:
+			if cmd == protocol.CMD_POND {
 				conn.pongHandler()
+				break
+			} else if conn.instance == nil {
+				// all other commands require instance association, or could be a rougue request.
+				break
+			}
+
+			switch cmd {
 			case protocol.CMD_RECOVERED:
 				conn.recoveredHandler()
 			case protocol.CMD_GET:
@@ -236,13 +243,32 @@ func (conn *Connection) peekResponse() {
 	}
 }
 
+func (conn *Connection) closeIfError(prompt string, err error) bool {
+	if err != nil {
+		conn.log.Warn(prompt, err)
+		conn.close()
+		return true
+	}
+
+	return false
+}
+
 func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda.")
 
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
-	id, _ := conn.r.ReadInt()
-	sid, _ := conn.r.ReadBulkString()
-	flag, _ := conn.r.ReadInt()
+	id, err := conn.r.ReadInt()
+	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
+		return
+	}
+	sid, err := conn.r.ReadBulkString()
+	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
+		return
+	}
+	flag, err := conn.r.ReadInt()
+	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
+		return
+	}
 	recovery := flag & 0x01 > 0
 
 	if conn.instance != nil {
