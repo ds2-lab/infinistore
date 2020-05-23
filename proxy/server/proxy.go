@@ -234,9 +234,9 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 
 		switch wrapper.Request.Cmd {
 		case protocol.CMD_GET:
+			rsp.Size = wrapper.Request.Info.(*Meta).Size
 			rsp.PrepareForGet(w)
 		case protocol.CMD_SET:
-			rsp.Size = wrapper.Request.Info.(*Meta).Size
 			rsp.PrepareForSet(w)
 		default:
 			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)

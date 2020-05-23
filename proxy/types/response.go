@@ -24,6 +24,7 @@ type Response struct {
 func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {
 	w.AppendBulkString(rsp.Id.ReqId)
 	w.AppendBulkString(rsp.Id.ChunkId)
+	w.AppendBulk(rsp.Body)
 	rsp.w = w
 }
 

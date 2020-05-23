@@ -113,7 +113,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 		reader.Close()
 		code = "200"
 	}
-	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, code, size, t.UnixNano(), int64(dt))
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, code, int64(size), t.UnixNano(), int64(dt))
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
