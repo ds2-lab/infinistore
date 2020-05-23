@@ -74,7 +74,7 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	body := c.Arg(1).Bytes()
 
 	t := time.Now()
-	_, ok := client.EcSet(key, body)
+	ok := client.Set(key, body)
 	dt := time.Since(t)
 	if !ok {
 		w.AppendErrorf("failed to set %s", key)
@@ -92,31 +92,28 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 
 	key := c.Arg(0).String()
 
-	meta, ok := a.proxy.metaStore.Get(key, 0)
-	if !ok || meta.Deleted {
-		w.AppendNil()
-		w.Flush()
-		a.log.Warn("KEY %s not found, please set first.", key)
-		collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, "404",
-			int64(0), time.Now().UnixNano(), int64(0))
-		return
-	}
-
 	t := time.Now()
-	_, reader, ok := client.EcGet(key, int(meta.Size))
+	reader, ok := client.Get(key)
 	dt := time.Since(t)
+	code := "500"
+	size := 0
 	if !ok {
 		w.AppendErrorf("failed to get %s", key)
 		w.Flush()
+	} else if reader == nil {
+		w.AppendNil()
+		w.Flush()
+		code = "404"
 	} else {
-		if err := w.CopyBulk(reader, meta.Size); err != nil {
+		size = reader.Len()
+		if err := w.CopyBulk(reader, int64(size)); err != nil {
 			ok = false
 			a.log.Warn("Error on sending %s: %v", key, err)
 		}
 		reader.Close()
+		code = "200"
 	}
-	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, util.Ifelse(ok, "200", "500"),
-		meta.Size, t.UnixNano(), int64(dt))
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, code, size, t.UnixNano(), int64(dt))
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {

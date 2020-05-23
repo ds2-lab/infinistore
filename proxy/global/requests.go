@@ -28,10 +28,11 @@ func NewRequestCoordinator(size uintptr) *RequestCoordinator {
 
 func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64) *RequestCounter {
 	prepared := c.pool.Get().(*RequestCounter)
+	prepared.initialized.Add(1)	// Block in case initalization is need.
+
 	ret, ok := c.registry.GetOrInsert(reqId, prepared)
 	counter := ret.(*RequestCounter)
 	if !ok {
-		counter.initialized.Add(1)
 		// New counter registered, initialize values.
 		counter.Cmd = cmd
 		counter.DataShards = d
@@ -53,9 +54,14 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64
 			}
 			copy(counter.Requests, emptySlice[:l])
 		}
+		// Release initalization lock
 		counter.initialized.Done()
 	} else {
+		// Release unused lock
+		prepared.initialized.Done()
 		c.pool.Put(prepared)
+
+		// Wait for counter to be initalized.
 		counter.initialized.Wait()
 	}
 	return counter
