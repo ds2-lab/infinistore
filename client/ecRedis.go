@@ -133,14 +133,14 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 // New get API, not size is required.
 // Internal error if the bool is set to false
-func (c *Client) Get(key string) (ReadAllCloser, bool) {
+func (c *Client) Get(key string) (io.ReadCloser, bool) {
 	_, reader, ok := c.EcGet(key, 0)
 	return reader, ok
 }
 
 // Internal API
 // returns reqId, reader, and a bool indicate error. If not found, the reader will be nil.
-func (c *Client) EcGet(key string, size int, args ...interface{}) (string, ReadAllCloser, bool) {
+func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, bool) {
 	var dryrun int
 	if len(args) > 0 {
 		dryrun, _ = args[0].(int)
@@ -201,7 +201,7 @@ func (c *Client) EcGet(key string, size int, args ...interface{}) (string, ReadA
 
 	// Try recover
 	if len(failed) > 0 {
-		c.recover(host, key, uuid.New().String(), size, failed, chunks)
+		c.recover(host, key, uuid.New().String(), ret.Size, failed, chunks)
 	}
 
 	return stats.ReqId, reader, true
