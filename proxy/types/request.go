@@ -15,6 +15,8 @@ const (
 	REQUEST_INVOKED   = 0
 	REQUEST_RETURNED  = 1
 	REQUEST_RESPONDED = 2
+
+	CHANGE_PLACEMENT = 0x0001
 )
 
 type Request struct {
@@ -27,7 +29,8 @@ type Request struct {
 	BodyStream      resp.AllReadCloser
 	Client          *redeo.Client
 	EnableCollector bool
-	Obj             interface{}
+	Info            interface{}
+	Changes         int
 
 	w                *resp.RequestWriter
 	status           uint32

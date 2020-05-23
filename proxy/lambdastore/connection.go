@@ -413,12 +413,12 @@ func (conn *Connection) recoverHandler() {
 	reqId, _ := conn.r.ReadBulkString()
 	_, _ = conn.r.ReadBulkString() // chunkId
 
-	ctrl := global.ReqCoordinator.Load(reqId).(*types.Control)
+	ctrl := global.ReqCoordinator.Load(reqId)
 	if ctrl == nil {
 		conn.log.Warn("No control found for %s", reqId)
-	} else if ctrl.Callback == nil {
+	} else if ctrl.(*types.Control).Callback == nil {
 		conn.log.Warn("Control callback not defined for recover request %s", reqId)
 	} else {
-		ctrl.Callback(ctrl, conn.instance)
+		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
 }

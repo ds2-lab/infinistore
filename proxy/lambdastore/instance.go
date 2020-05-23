@@ -929,7 +929,9 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				req.Cmd = protocol.CMD_RECOVER
 				req.RetCommand = protocol.CMD_GET
 				chunkId := req.Id.Chunk()
-				target := Registry.Reroute(req.Obj, chunkId)
+				target := Registry.Reroute(req.Info, chunkId)
+				req.InsId = target.Id()
+				req.Changes = req.Changes | types.CHANGE_PLACEMENT
 				ins.rerouteRequestWithTarget(req, target)
 				// counter := global.ReqCoordinator.Load(req.Id.ReqId).(*global.RequestCounter)
 				// if counter == nil {
