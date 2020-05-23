@@ -104,11 +104,12 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 
 	// update instance chunk counter
 	targetInstance.(*lambdastore.Instance).ChunkCounter += 1
-
+	// store key meta info to instance
+	targetInstance.(*lambdastore.Instance).KeyMap = append(targetInstance.(*lambdastore.Instance).KeyMap, key)
 	l.updateInstanceSize(instanceId, meta.ChunkSize)
 
 	// get current pointer and instance ID
-	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
+	//l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 	// use last arrived chunk to touch meta
 	//l.touch(meta)
 
