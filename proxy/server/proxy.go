@@ -233,9 +233,9 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		t := time.Now()
 
 		switch wrapper.Request.Cmd {
-		case protocol.CMD_GET_CHUNK:
+		case protocol.CMD_GET:
 			rsp.PrepareForGet(w)
-		case protocol.CMD_SET_CHUNK:
+		case protocol.CMD_SET:
 			rsp.Size = wrapper.Request.Info.(*Meta).Size
 			rsp.PrepareForSet(w)
 		default:
