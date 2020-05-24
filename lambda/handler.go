@@ -37,8 +37,6 @@ import (
 
 const (
 	EXPECTED_GOMAXPROCS = 2
-
-	ResponseTimeout = 20 * time.Millisecond
 )
 
 var (
