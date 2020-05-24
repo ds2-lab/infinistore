@@ -2,7 +2,7 @@
 
 PWD=`dirname $0`
 DATA="~/go/src/github.com/mason-leap-lab/infinicache/evaluation/data"
-DOWNLOAD=$PWD/downloaded
+DOWNLOAD=$PWD/downloaded/proxy/
 
 if [ "$1" == "" ] ; then
 	echo "Please specify the data directory, in the form of YYYYMMDDHHmm"

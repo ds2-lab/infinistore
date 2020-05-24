@@ -32,7 +32,7 @@ function start_proxy() {
     # MEM=$3
     LOGFILE=`dirname $1`
     mkdir -p $EVALBASE/$LOGFILE
-    $BINDIR/proxy -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 -funcap=$3 # -debug
+    $BINDIR/proxy -disable-dashboard -enable-evaluation -base=$EVALBASE -log $LOGFILE.log -prefix=$1 -numbak=$2 -funcap=$3 -debug
 }
 
 function bench() {

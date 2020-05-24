@@ -76,11 +76,12 @@ function perform(){
 LASTING=(60)
 # Memory settings
 MEMSET=(512 1024 1536 2048 3008)
-SYSSET=(100 100 200 200 300)
+SYSSET=(150 200 300 400 600)     # For sz <= 2M
+# SYSSET=(100 100 150 200 300)   # For sz >= 10M
 # Object size settings
 SZSET=(2 10 50 100)
 # Inter-arrival time settings
-IASET=(200 500 1000 2000)
+IASET=(500 200 1000 2000)
 # # of backup nodes settings
 BAKSET=(40 10 20 80)
 CONCURRENCY=1
@@ -90,12 +91,14 @@ if [ "$1" != "" ]; then
 fi
 
 mkdir -p $PWD/$ENTRY
-for mem in {0..0}
+for sz in {2..3}
 do
-    for sz in {0..0}
+    for iaIdx in {1..3}
     do
-      iaIdx=1
-      bak=1
+      mem=4
+      # sz=1
+      # iaIdx=0
+      bak=0
       #       seconds       concur       keys    object-size  inter-arrival   memory         overhead       num-backups
       perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${SYSSET[mem]} ${BAKSET[bak]}
     done
