@@ -698,7 +698,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
 			if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
-				if atomic.LoadUint32(&ins.awake) == INSTANCE_AWAKE {
+				if atomic.LoadUint32(&ins.awake) != INSTANCE_MAYBE {
 					ins.Meta.Stale = false
 				} else {
 					uptodate = false
@@ -913,7 +913,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 
 		switch cmd {
 		case protocol.CMD_SET: /*set or two argument cmd*/
-			req.PrepareForSet(conn.w)
+			req.PrepareForSet(conn)
 			// If parallel recovery is triggered, record keys set during recovery.
 			if ins.IsRecovering() {
 				ins.writtens.Set(req.Key, &struct{}{})
@@ -943,15 +943,15 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				// req.Abandon()
 				return nil
 			}
-			req.PrepareForGet(conn.w)
+			req.PrepareForGet(conn)
 			// If parallel recovery is triggered, there is no need to forward the serving key.
 		case protocol.CMD_DEL:
-			req.PrepareForDel(conn.w)
+			req.PrepareForDel(conn)
 			if ins.IsRecovering() {
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
-			req.PrepareForRecover(conn.w)
+			req.PrepareForRecover(conn)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
 			// Unrecoverable
@@ -960,10 +960,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 
 		// In case there is a request already, wait to be consumed (for response).
 		conn.chanWait <- req
-		conn.cn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
-		defer conn.cn.SetWriteDeadline(time.Time{})
-		if err := req.Flush(); err != nil {
-			ins.log.Warn("Flush pipeline error: %v", err)
+		if err := req.Flush(RequestTimeout); err != nil {
+			ins.log.Warn("Flush request error: %v", err)
 			// Remove request.
 			select {
 			case <-conn.chanWait:
@@ -982,25 +980,25 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			// Simply ignore.
 			return nil
 		case protocol.CMD_DATA:
-			ctrl.PrepareForData(conn.w)
+			ctrl.PrepareForData(conn)
 			isDataRequest = true
 		case protocol.CMD_MIGRATE:
-			ctrl.PrepareForMigrate(conn.w)
+			ctrl.PrepareForMigrate(conn)
 		case protocol.CMD_DEL:
-			ctrl.PrepareForDel(conn.w)
+			ctrl.PrepareForDel(conn)
 			if ins.IsRecovering() {
 				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
-			ctrl.PrepareForRecover(conn.w)
+			ctrl.PrepareForRecover(conn)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
 			// Unrecoverable
 			return nil
 		}
 
-		if err := ctrl.Flush(); err != nil {
-			ins.log.Error("Flush pipeline error: %v", err)
+		if err := ctrl.Flush(RequestTimeout); err != nil {
+			ins.log.Error("Flush control error: %v", err)
 			if isDataRequest {
 				global.DataCollected.Done()
 			}

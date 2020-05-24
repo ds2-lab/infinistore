@@ -1,0 +1,105 @@
+package handlers
+
+import (
+	// "errors"
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+	"sync"
+	"time"
+)
+
+type TestPongHandler struct {
+	*PongHandler
+}
+
+func newTestPongHandler(override pong) *TestPongHandler {
+	handler := &TestPongHandler {
+		PongHandler: NewPongHandler(),
+	}
+	handler.pong = override
+	return handler
+}
+
+func succeedPong(rsp *Response, flags int64) error {
+	return nil
+}
+
+func getTimeoutPong(handler *TestPongHandler, failure int) pong {
+	attempt := 0
+	return func(rsp *Response, flags int64) error {
+		failure := attempt < failure
+		attempt++
+		if !failure {
+			go handler.Cancel()
+		}
+		return nil
+	}
+}
+
+var _ = Describe("PongHandler", func() {
+
+	It("should pong implementation be overwriten in test handler", func() {
+		pong := newTestPongHandler(succeedPong)
+		pong.pong = succeedPong
+		pong.Issue(false)
+		Ω(pong.SendTo(nil)).Should(Succeed())
+	})
+
+	It("should pong successed if failure <= 3", func() {
+		pong := newTestPongHandler(succeedPong)
+		pong.pong = getTimeoutPong(pong, 3)
+		pong.Issue(true)
+		Ω(pong.SendTo(nil)).Should(Succeed())
+
+		// Deny more pongs
+		Expect(pong.Issue(false)).To(Equal(false))
+
+		// Wait for retry
+		timeout := time.NewTimer(1 * time.Second)
+		<-timeout.C
+		Expect(pong.canceled).To(Equal(true))
+
+		// Should be ok to send more
+		pong.pong = succeedPong
+		Expect(pong.Issue(false)).To(Equal(true))
+		pong.SendTo(nil)   // Drain pongs
+	})
+
+	It("should pong failed if failure > 3", func() {
+		pong := newTestPongHandler(succeedPong)
+		pong.pong = getTimeoutPong(pong, 4)
+		pong.Issue(true)
+		Ω(pong.SendTo(nil)).Should(Succeed())
+
+		// Deny more pongs
+		Expect(pong.Issue(true)).To(Equal(false))
+
+		timeout := time.NewTimer(1 * time.Second)
+		<-timeout.C
+		Expect(pong.canceled).To(Equal(false))
+
+		// Should be ok to send more
+		pong.pong = succeedPong
+		Expect(pong.Issue(false)).To(Equal(true))
+		pong.SendTo(nil)   // Drain pongs
+	})
+
+	It("should not stuck for concurrent request", func() {
+		pong := newTestPongHandler(succeedPong)
+		pong.pong = getTimeoutPong(pong, 4)
+
+		var allDone sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			allDone.Add(1)
+			go func() {
+				pong.Issue(true)
+				pong.SendTo(nil)
+				allDone.Done()
+			}()
+		}
+
+		allDone.Wait()
+		Expect(true).To(Equal(true))
+		// Ω(pong.SendTo(nil)).ShouldNot(HaveOccurred())
+	})
+})

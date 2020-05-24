@@ -2,9 +2,7 @@ package types
 
 import (
 	"errors"
-	"fmt"
 	"github.com/mason-leap-lab/redeo/resp"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -79,28 +77,4 @@ func (c *Chunk) Op() uint32 {
 	} else {
 		return OP_SET
 	}
-}
-
-type ResponseError struct {
-	error
-	StatusCode int
-}
-
-func NewResponseError(status int, msg interface{}, args ...interface{}) *ResponseError {
-	switch msg.(type) {
-	case error:
-		return &ResponseError{
-			error: msg.(error),
-			StatusCode: status,
-		}
-	default:
-		return &ResponseError{
-			error: errors.New(fmt.Sprintf(msg.(string), args...)),
-			StatusCode: status,
-		}
-	}
-}
-
-func (e *ResponseError) Status() string {
-	return strconv.Itoa(e.StatusCode)
 }

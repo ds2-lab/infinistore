@@ -27,9 +27,10 @@ var (
 )
 
 type Connection struct {
+	net.Conn
+
 	instance *Instance
 	log      logger.ILogger
-	cn       net.Conn
 	w        *resp.RequestWriter
 	r        resp.ResponseReader
 	mu       sync.Mutex
@@ -40,8 +41,8 @@ type Connection struct {
 
 func NewConnection(c net.Conn) *Connection {
 	conn := &Connection{
+		Conn:  c,
 		log: defaultConnectionLog,
-		cn:  c,
 		// wrap writer and reader
 		w:        resp.NewRequestWriter(c),
 		r:        resp.NewResponseReader(c),
@@ -53,20 +54,25 @@ func NewConnection(c net.Conn) *Connection {
 	return conn
 }
 
-func (conn *Connection) Close() {
+func (conn *Connection) Writer() *resp.RequestWriter {
+	return conn.w
+}
+
+func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
 	select {
 	case <-conn.closed:
 		// already closed
-		return
+		return nil
 	default:
 	}
 
 	// Signal colosed only. This allow ongoing transmission to finish.
 	close(conn.closed)
 	conn.log.Debug("Signal to close.")
+	return nil
 }
 
 func (conn *Connection) close() {
@@ -76,8 +82,8 @@ func (conn *Connection) close() {
 	conn.Close()
 	conn.bye()
 	// Don't use c.Close(), it will stuck and wait for lambda.
-	conn.cn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
-	conn.cn.Close()
+	conn.Conn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	conn.Conn.Close()
 	conn.clearResponses()
 	conn.log.Debug("Closed.")
 }
@@ -105,7 +111,7 @@ func (conn *Connection) ServeLambda() {
 			}
 		case retPeek = <-conn.respType:
 			// Got response, reset read deadline.
-			conn.cn.SetReadDeadline(time.Time{})
+			conn.Conn.SetReadDeadline(time.Time{})
 		}
 
 		var respType resp.ResponseType
@@ -185,9 +191,11 @@ func (conn *Connection) Ping(payload []byte) {
 	conn.w.WriteMultiBulkSize(2)
 	conn.w.WriteBulkString(protocol.CMD_PING)
 	conn.w.WriteBulk(payload)
+	conn.SetWriteDeadline(time.Now().Add(RequestTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
 	err := conn.w.Flush()
 	if err != nil {
-		conn.log.Warn("Flush pipeline error(ping): %v", err)
+		conn.log.Warn("Flush ping error: %v", err)
 	}
 }
 

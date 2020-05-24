@@ -2,8 +2,8 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
+	"time"
 )
 
 type ControlCallback func(*Control, interface{})
@@ -15,7 +15,7 @@ type Control struct {
 	Id         uint64
 	Payload    []byte
 	*Request
-	w          *resp.RequestWriter
+	conn       Conn
 	Callback   ControlCallback
 }
 
@@ -31,32 +31,36 @@ func (req *Control) Retriable() bool {
 	return true
 }
 
-func (ctrl *Control) PrepareForData(w *resp.RequestWriter) {
-	w.WriteCmdString(ctrl.Cmd)
-	ctrl.w = w
+func (ctrl *Control) PrepareForData(conn Conn) {
+	conn.Writer().WriteCmdString(ctrl.Cmd)
+	ctrl.conn = conn
 }
 
-func (ctrl *Control) PrepareForMigrate(w *resp.RequestWriter) {
-	w.WriteCmdString(ctrl.Cmd, ctrl.Addr, ctrl.Deployment, strconv.FormatUint(ctrl.Id, 10))
-	ctrl.w = w
+func (ctrl *Control) PrepareForMigrate(conn Conn) {
+	conn.Writer().WriteCmdString(ctrl.Cmd, ctrl.Addr, ctrl.Deployment, strconv.FormatUint(ctrl.Id, 10))
+	ctrl.conn = conn
 }
 
-func (ctrl *Control) PrepareForDel(w *resp.RequestWriter) {
-	ctrl.Request.PrepareForDel(w)
-	ctrl.w = w
+func (ctrl *Control) PrepareForDel(conn Conn) {
+	ctrl.Request.PrepareForDel(conn)
+	ctrl.Request.conn = nil
+	ctrl.conn = conn
 }
 
-func (ctrl *Control) PrepareForRecover(w *resp.RequestWriter) {
-	ctrl.Request.PrepareForRecover(w)
-	ctrl.w = w
+func (ctrl *Control) PrepareForRecover(conn Conn) {
+	ctrl.Request.PrepareForRecover(conn)
+	ctrl.Request.conn = nil
+	ctrl.conn = conn
 }
 
-func (ctrl *Control) Flush() (err error) {
-	if ctrl.w == nil {
-		return errors.New("Writer for request not set.")
+func (ctrl *Control) Flush(timeout time.Duration) (err error) {
+	if ctrl.conn == nil {
+		return errors.New("Connection for control not set.")
 	}
-	w := ctrl.w
-	ctrl.w = nil
+	conn := ctrl.conn
+	ctrl.conn = nil
 
-	return w.Flush()
+	conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
+	defer conn.SetWriteDeadline(time.Time{})
+	return conn.Writer().Flush()
 }

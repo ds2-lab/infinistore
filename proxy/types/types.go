@@ -2,7 +2,10 @@ package types
 
 import (
 	"errors"
+	"github.com/mason-leap-lab/redeo/resp"
+	"net"
 	"strconv"
+	"time"
 )
 
 var ErrNoSpareDeployment = errors.New("No spare deployment")
@@ -23,11 +26,16 @@ func (id *Id) Chunk() int {
 	return id.chunk
 }
 
+type Conn interface {
+	net.Conn
+	Writer() *resp.RequestWriter
+}
+
 type Command interface {
 	String() string
 	GetRequest() *Request
 	Retriable() bool
-	Flush() error
+	Flush(time.Duration) error
 }
 
 type LambdaDeployment interface {
