@@ -3,16 +3,18 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
+	"sync"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"math"
-	"sync"
-	"time"
 )
 
 const (
+
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
 	ROLE = "arn:aws:iam::022127035044:role/lambda-store"
 	// AWS region, change it if necessary.
@@ -94,7 +96,7 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	input := &lambda.UpdateFunctionCodeInput{
 		FunctionName: aws.String(name),
-		S3Bucket:     bucket,
+		S3Bucket:     aws.String(*bucket),
 		S3Key:        aws.String(fmt.Sprintf("%s.zip", *key)),
 	}
 	result, err := svc.UpdateFunctionCode(input)
@@ -138,7 +140,7 @@ func createFunction(name string, svc *lambda.Lambda) {
 	}
 	input := &lambda.CreateFunctionInput{
 		Code: &lambda.FunctionCode{
-			S3Bucket: bucket,
+			S3Bucket: aws.String(*bucket),
 			S3Key:    aws.String(fmt.Sprintf("%s.zip", *key)),
 		},
 		FunctionName: aws.String(name),
@@ -221,7 +223,7 @@ func main() {
 			fmt.Println(j)
 			var wg sync.WaitGroup
 			//for i := j*(*batch) + *from; i < (j+1)*(*batch); i++ {
-			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to ; i++ {
+			for i := int64(0); i < *batch && j*(*batch)+*from+i < *to; i++ {
 				wg.Add(1)
 				go updateCode(fmt.Sprintf("%s%d", *prefix, j*(*batch)+*from+i), svc, &wg)
 			}

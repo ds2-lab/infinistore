@@ -9,6 +9,7 @@ import (
 
 var (
 	Store   types.Storage = (*storage.Storage)(nil)
+	Persist types.PersistentStorage
 	Lineage types.Lineage
 	Log     = &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false}
 )

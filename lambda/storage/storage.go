@@ -7,18 +7,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	awsSession "github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/cespare/xxhash"
-	"github.com/cornelk/hashmap"
-	"github.com/kelindar/binary"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	csync "github.com/mason-leap-lab/infinicache/common/sync"
-	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"math"
 	"regexp"
@@ -30,29 +18,42 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/aws/aws-sdk-go/aws"
+	awsSession "github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/cespare/xxhash"
+	"github.com/cornelk/hashmap"
+	"github.com/kelindar/binary"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	csync "github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/redeo/resp"
+
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 const (
-	CHUNK_KEY = "%schunks/%s"
-	LINEAGE_KEY = "%s%s/lineage-%d"
+	CHUNK_KEY    = "%schunks/%s"
+	LINEAGE_KEY  = "%s%s/lineage-%d"
 	SNAPSHOT_KEY = "%s%s/snapshot-%d.gz"
 
-	RECOVERING_MAIN uint32 = 0x01
+	RECOVERING_MAIN   uint32 = 0x01
 	RECOVERING_BACKUP uint32 = 0x02
 )
 
 var (
-	Backups        = 10
-	Concurrency    = types.DownloadConcurrency
-	Buckets        = 1
-	FunctionPrefix string
+	Backups               = 10
+	Concurrency           = types.DownloadConcurrency
+	Buckets               = 1
+	FunctionPrefix        string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
 
 	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
-	ContextKeyLog = "log"
+	ContextKeyLog           = "log"
 )
 
 // Storage with lineage
@@ -60,32 +61,32 @@ type Storage struct {
 	// IMOC repository, operations are supposed to be serialized.
 	// NOTE: If serialization of operations can not be guarenteed, reconsider the implementation
 	//       of "repo" and "mu"
-	id         uint64
-	repo       *hashmap.HashMap
-	log        logger.ILogger
+	id   uint64
+	repo *hashmap.HashMap
+	log  logger.ILogger
 
 	// Lineage
-	lineage    *types.LineageTerm       // The lineage of current/recent term. The lineage is updated to recent term while recovering.
-	recovered  *types.LineageTerm       // Stores recovered lineage if it is not fully recovered, and will replace lineage on returning.
-	snapshot   *types.LineageTerm       // The latest snapshot of the lineage.
-	diffrank   LineageDifferenceRank
-	getSafe    csync.WaitGroup
-	setSafe    csync.WaitGroup
-	safenote   uint32                   // Flag what's going on
-	chanOps    chan *types.OpWrapper    // NOTE: implement an unbounded channel if neccessary.
+	lineage       *types.LineageTerm // The lineage of current/recent term. The lineage is updated to recent term while recovering.
+	recovered     *types.LineageTerm // Stores recovered lineage if it is not fully recovered, and will replace lineage on returning.
+	snapshot      *types.LineageTerm // The latest snapshot of the lineage.
+	diffrank      LineageDifferenceRank
+	getSafe       csync.WaitGroup
+	setSafe       csync.WaitGroup
+	safenote      uint32                // Flag what's going on
+	chanOps       chan *types.OpWrapper // NOTE: implement an unbounded channel if neccessary.
 	signalTracker chan *types.CommitOption
-	committed  chan *types.CommitOption
-	lineageMu  sync.RWMutex             // Mutex for lienage commit.
+	committed     chan *types.CommitOption
+	lineageMu     sync.RWMutex // Mutex for lienage commit.
 
 	// backup
-	backup     *hashmap.HashMap        // Just a index, all will be available to repo
-	backupMeta *types.LineageMeta      // Only one backup is effective at a time.
+	backup     *hashmap.HashMap   // Just a index, all will be available to repo
+	backupMeta *types.LineageMeta // Only one backup is effective at a time.
 
 	// Persistency backpack
-	s3bucket   string
+	s3bucket        string
 	s3bucketDefault string
-	s3prefix   string
-	awsSession *awsSession.Session
+	s3prefix        string
+	awsSession      *awsSession.Session
 }
 
 func New(id uint64, persistent bool) *Storage {
@@ -93,15 +94,15 @@ func New(id uint64, persistent bool) *Storage {
 		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte("")))
 	}
 	return &Storage{
-		id: id,
-		repo: hashmap.New(10000),
+		id:     id,
+		repo:   hashmap.New(10000),
 		backup: hashmap.New(1000), // Initilize early to buy time for fast backup recovery.
 		lineage: util.Ifelse(!persistent, (*types.LineageTerm)(nil), &types.LineageTerm{
-			Term: 1,  // Term start with 1 to avoid uninitialized term ambigulous.
-			Ops: make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
+			Term: 1,                             // Term start with 1 to avoid uninitialized term ambigulous.
+			Ops:  make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
 		}).(*types.LineageTerm),
 		diffrank: NewSimpleDifferenceRank(Backups),
-		log: &logger.ColorLogger{ Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Storage:" },
+		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Storage:"},
 	}
 }
 
@@ -110,7 +111,7 @@ func (s *Storage) Id() uint64 {
 }
 
 func (s *Storage) Init(id uint64, persistent bool) (types.Storage, error) {
-	if s != nil {
+	if s != nil && s.id == id {
 		return s, nil
 	} else {
 		return New(id, persistent), nil
@@ -145,9 +146,9 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 		doubleCheck = true
 	} else {
 		note := atomic.LoadUint32(&s.safenote)
-		if ((!chunk.Backup && (note & RECOVERING_MAIN) > 0) ||
-				(chunk.Backup && (note & RECOVERING_BACKUP) > 0)) {
-			// Corresponding lineage is recovering.
+		if (!chunk.Backup && (note&RECOVERING_MAIN) > 0) && chunk.Term <= s.lineage.Term ||
+			(chunk.Backup && (note&RECOVERING_BACKUP) > 0) {
+			// Corresponding lineage is recovering, and the chunk is not just set
 			doubleCheck = true
 		}
 		// else: We are ok to continue.
@@ -192,12 +193,13 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 	}
 }
 
-func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
+func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
 	s.setSafe.Wait()
-
+	s.log.Debug("ready to set key %v", key)
 	// Lock lineage, ensure operation get processed in the term.
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
+	s.log.Debug("in mutex of setting key %v", key)
 
 	chunk := types.NewChunk(key, chunkId, val)
 	chunk.Term = 1
@@ -209,21 +211,30 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
 			LineageOp: types.LineageOp{
-				Op: types.OP_SET,
-				Key: key,
-				Id: chunkId,
-				Size: chunk.Size,
+				Op:       types.OP_SET,
+				Key:      key,
+				Id:       chunkId,
+				Size:     chunk.Size,
 				Accessed: chunk.Accessed,
-				Bucket: chunk.Bucket,
+				Bucket:   chunk.Bucket,
 			},
 			OpRet: types.OpDelayedSuccess(),
-			Body: val,
+			Body:  val,
+		}
+		// Copy options. Field "Persisted" only so far.
+		if opt != nil {
+			op.Persisted = opt.Persisted
 		}
 		s.chanOps <- op
+		s.log.Debug("local set ok, key %v", key)
 		return op.OpRet
 	} else {
 		return types.OpSuccess()
 	}
+}
+
+func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
+	return s.setImpl(key, chunkId, val, nil)
 }
 
 func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) *types.OpRet {
@@ -232,7 +243,26 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 		return types.OpError(errors.New(fmt.Sprintf("Error on read stream: %v", err)))
 	}
 
-	return s.Set(key, chunkId, val)
+	return s.setImpl(key, chunkId, val, nil)
+}
+
+func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
+	_, _, err := s.Get(key)
+	if err.Error() == nil {
+		return err
+	}
+	bucket := s.getBucket(key)
+	object := &s3.GetObjectInput{
+		Bucket: s.bucket(&bucket),
+		Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key)),
+	}
+	writer := new(aws.WriteAtBuffer)
+	downloader := s3manager.NewDownloader(types.AWSSession())
+	if _, err := downloader.Download(writer, object); err != nil {
+		return types.OpError(err)
+	}
+
+	return s.setImpl(key, chunkId, writer.Bytes(), &types.OpWrapper{Persisted: true})
 }
 
 func (s *Storage) Del(key string, chunkId string) *types.OpRet {
@@ -249,7 +279,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
 
-	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term + 1, 1).(uint64) // Add one to reflect real term.
+	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term+1, 1).(uint64) // Add one to reflect real term.
 	chunk.Access()
 	chunk.Deleted = true
 	chunk.Body = nil
@@ -257,10 +287,10 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
 			LineageOp: types.LineageOp{
-				Op: types.OP_DEL,
-				Key: key,
-				Id: chunkId,
-				Size: chunk.Size,
+				Op:       types.OP_DEL,
+				Key:      key,
+				Id:       chunkId,
+				Size:     chunk.Size,
 				Accessed: chunk.Accessed,
 				// Ret: make(chan error, 1),
 				Bucket: chunk.Bucket,
@@ -312,7 +342,7 @@ func (s *Storage) getBucket(key string) string {
 	if s.lineage != nil || Buckets == 1 {
 		return ""
 	}
-	return fmt.Sprintf(s.s3bucket, strconv.FormatUint(xxhash.Sum64([]byte(key)) % uint64(Buckets), 10))
+	return fmt.Sprintf(s.s3bucket, strconv.FormatUint(xxhash.Sum64([]byte(key))%uint64(Buckets), 10))
 }
 
 func (s *Storage) bucket(b *string) *string {
@@ -332,6 +362,8 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) types.Lineage {
 	s.s3bucket = bucket
 	s.s3bucketDefault = fmt.Sprintf(bucket, "")
 	s.s3prefix = prefix
+	s.setSafe = csync.WaitGroup{}
+	s.getSafe = csync.WaitGroup{}
 	s.delaySet()
 	return s
 }
@@ -412,7 +444,7 @@ func (s *Storage) TrackLineage() {
 				token <- nil
 			}
 
-			// Try to get token to continue
+			// Try to get token to continue, if a previously operation persisted, handle that first.
 			persistedOp := <-token
 			if persistedOp != nil {
 				// Accept result
@@ -425,7 +457,7 @@ func (s *Storage) TrackLineage() {
 						// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
 						if !s.getSafe.IsWaiting() {
 							s.diffrank.AddOp(&op.LineageOp)
-						}	// else: Skip
+						} // else: Skip
 					}
 				}
 			}
@@ -437,11 +469,11 @@ func (s *Storage) TrackLineage() {
 
 			// Upload to s3
 			var failure error
-			if op.LineageOp.Op == types.OP_SET {
+			if op.LineageOp.Op == types.OP_SET && !op.Persisted {
 				go func() {
 					for i := 0; i < attemps; i++ {
 						if i > 0 {
-							s.log.Info("Attemp %d - uploading %s ...", i + 1, op.Key)
+							s.log.Info("Attemp %d - uploading %s ...", i+1, op.Key)
 						}
 
 						upParams := &s3manager.UploadInput{
@@ -456,7 +488,7 @@ func (s *Storage) TrackLineage() {
 						}
 						_, failure = uploader.Upload(upParams)
 						if failure != nil {
-							s.log.Warn("Attemp %d - failed to upload %s: %v", i + 1, op.Key, failure)
+							s.log.Warn("Attemp %d - failed to upload %s: %v", i+1, op.Key, failure)
 						} else {
 							// success
 							failure = nil
@@ -543,7 +575,7 @@ func (s *Storage) Commit() (*types.CommitOption, error) {
 	// and it takes roughly same time to download a snapshot or up to 10 lineage terms.
 	// So snapshot every 5 - 10 terms will be appropriate.
 	// Hard-coded to 5, noted s.lineage.Term is one term smaller before commit
-	option.Full = s.recovered == nil && s.lineage.Term - snapshotTerm >= 4
+	option.Full = s.recovered == nil && s.lineage.Term-snapshotTerm >= 4
 
 	// Signal and wait for committed.
 	s.signalTracker <- option
@@ -564,7 +596,7 @@ func (s *Storage) StopTracker(option *types.CommitOption) types.LineageStatus {
 
 		// Clean up
 		close(s.chanOps)
-		runtime.Gosched()   // Take time to finalize.
+		runtime.Gosched() // Take time to finalize.
 		if s.recovered != nil {
 			// The recovery is not complete, discard current term and replaced with whatever recovered.
 			// The node will try recovery in next invocation.
@@ -578,12 +610,12 @@ func (s *Storage) StopTracker(option *types.CommitOption) types.LineageStatus {
 }
 
 func (s *Storage) Status() types.LineageStatus {
-	meta := &protocol.Meta {
-		Id: s.id,
-		Term: s.lineage.Term,
-		Updates: s.lineage.Updates,
+	meta := &protocol.Meta{
+		Id:       s.id,
+		Term:     s.lineage.Term,
+		Updates:  s.lineage.Updates,
 		DiffRank: s.diffrank.Rank(),
-		Hash: s.lineage.Hash,
+		Hash:     s.lineage.Hash,
 	}
 	if s.snapshot != nil {
 		meta.SnapshotTerm = s.snapshot.Term
@@ -591,9 +623,9 @@ func (s *Storage) Status() types.LineageStatus {
 		meta.SnapshotSize = s.snapshot.Size
 	}
 	if s.backupMeta != nil {
-		return types.LineageStatus{ meta, s.backupMeta.Meta }
+		return types.LineageStatus{meta, s.backupMeta.Meta}
 	} else {
-		return types.LineageStatus{ meta }
+		return types.LineageStatus{meta}
 	}
 }
 
@@ -610,13 +642,13 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 	var old *types.LineageTerm
 	if !meta.Backup {
 		old = &types.LineageTerm{
-			Term: s.lineage.Term,
+			Term:    s.lineage.Term,
 			Updates: s.lineage.Updates,
 		}
 		s.lineage.Term = meta.Term
 		s.lineage.Updates = meta.Updates
 		s.lineage.Hash = meta.Hash
-		s.log.Debug("During recovery, write operations enabled at term %d", s.lineage.Term + 1)
+		s.log.Debug("During recovery, write operations enabled at term %d", s.lineage.Term+1)
 	} else if s.backupMeta != nil &&
 		s.backupMeta.Meta.Id == meta.Meta.Id &&
 		s.backupMeta.BackupId == meta.BackupId &&
@@ -677,7 +709,7 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 		// This time, ignore argument "full" if snapshotted.
 		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
-		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes + ssBytes)
+		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes+ssBytes)
 		collector.AddCommit(
 			types.OP_COMMIT, false, s.id, int(term),
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
@@ -708,9 +740,9 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.U
 
 	// Construct the term.
 	term := &types.LineageTerm{
-		Term: lineage.Term + 1,
+		Term:    lineage.Term + 1,
 		Updates: lineage.Updates, // Stores "Updates" of the last term, don't forget to fix this on recovery.
-		RawOps: raw,
+		RawOps:  raw,
 	}
 	hash := new(bytes.Buffer)
 	hashBinder := binary.NewEncoder(hash)
@@ -736,7 +768,7 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.U
 	lineage.Size = uint64(buf.Len())
 	lineage.Ops = lineage.Ops[:0]
 	lineage.Term = term.Term
-	lineage.Updates += lineage.Size   // Fix local "Updates"
+	lineage.Updates += lineage.Size // Fix local "Updates"
 	lineage.Hash = term.Hash
 	lineage.DiffRank = s.diffrank.Rank() // Store for snapshot use.
 	// Unlock lineage, the storage can server next term while uploading
@@ -763,9 +795,9 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Upl
 		chunk := keyChunk.Value.(*types.Chunk)
 		if !chunk.Backup && chunk.Term <= lineage.Term {
 			allOps = append(allOps, types.LineageOp{
-				Op: chunk.Op(),
-				Key: chunk.Key,
-				Id: chunk.Id,
+				Op:   chunk.Op(),
+				Key:  chunk.Key,
+				Id:   chunk.Id,
 				Size: chunk.Size,
 			})
 		}
@@ -773,10 +805,10 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Upl
 
 	// Construct the snapshot.
 	ss := &types.LineageTerm{
-		Term: lineage.Term,
-		Updates: lineage.Updates,
-		Ops: allOps,
-		Hash: lineage.Hash,
+		Term:     lineage.Term,
+		Updates:  lineage.Updates,
+		Ops:      allOps,
+		Hash:     lineage.Hash,
 		DiffRank: lineage.DiffRank,
 	}
 
@@ -824,7 +856,7 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	if len(terms) == 0 {
 		// No term recovered
 		if !meta.Backup {
-			s.recovered = lineage   // Flag for incomplete recovery
+			s.recovered = lineage // Flag for incomplete recovery
 		}
 		s.log.Error("No term is recovered for node %d.", meta.Meta.Id)
 
@@ -874,7 +906,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	// meta.Updates - meta.SnapshotUpdates + meta.SnapshotSize < meta.Updates - lineage.Updates
 	baseTerm := lineage.Term
 	snapshot := false
-	if meta.SnapshotUpdates - meta.SnapshotSize > lineage.Updates {
+	if meta.SnapshotUpdates-meta.SnapshotSize > lineage.Updates {
 		// Recover lineage from snapshot
 		baseTerm = meta.SnapshotTerm - 1
 		snapshot = true
@@ -901,7 +933,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 		input := &S3BatchDownloadObject{}
 		input.Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
-			Key: aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + 1)), // meta.SnapshotTerm
+			Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm+1)), // meta.SnapshotTerm
 		}
 		input.Writer = aws.NewWriteAtBuffer(make([]byte, 0, meta.SnapshotSize))
 		input.After = s.getReadyNotifier(input, chanNotify)
@@ -917,7 +949,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 			input := &S3BatchDownloadObject{}
 			input.Object = &s3.GetObjectInput{
 				Bucket: aws.String(s.s3bucketDefault),
-				Key: aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm + uint64(from) + 1)),
+				Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm+uint64(from)+1)),
 			}
 			input.Writer = new(aws.WriteAtBuffer)
 			input.After = s.getReadyNotifier(input, chanNotify)
@@ -926,7 +958,6 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 			from++
 		}
 	}(from)
-
 
 	// Start downloading.
 	go func() {
@@ -984,7 +1015,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 						return receivedBytes, receivedTerms, receivedOps, err
 					}
 					// Fix "Updates"
-					term.RawOps = nil   // Release
+					term.RawOps = nil // Release
 					term.Updates += term.Size
 				}
 
@@ -1006,13 +1037,13 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		fromSnapshot = terms[0].Term
 		numOps -= s.len() + s.backup.Len() // Because snapshot includes what have been in repo, exclued them as estimation.
 		if numOps < 10 {
-			numOps = 10	// Arbitary 10 minimum.
+			numOps = 10 // Arbitary 10 minimum.
 		}
 	}
-	tbds := make([]*types.Chunk, 0, numOps)  // To be downloaded. Initial capacity is estimated by the # of ops.
+	tbds := make([]*types.Chunk, 0, numOps) // To be downloaded. Initial capacity is estimated by the # of ops.
 
 	s.lineageMu.Lock()
-  defer s.lineageMu.Unlock()
+	defer s.lineageMu.Unlock()
 
 	// Deal with the key that is currently serving.
 	servingKey := meta.Tips.Get(protocol.TIP_SERVING_KEY)
@@ -1020,8 +1051,8 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
 		if chunk, existed := s.get(servingKey); !existed {
 			chunk = &types.Chunk{
-				Key: servingKey,
-				Body: nil,
+				Key:    servingKey,
+				Body:   nil,
 				Backup: meta.Backup,
 			}
 			// Occupy the repository, details will be filled later.
@@ -1034,7 +1065,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 	// Replay operations
 	if !meta.Backup && fromSnapshot > 0 {
 		// Diffrank is supposed to be a moving value, we should replay it as long as possible.
-		s.diffrank.Reset(terms[0].DiffRank)	// Reset diffrank if recover from the snapshot
+		s.diffrank.Reset(terms[0].DiffRank) // Reset diffrank if recover from the snapshot
 	}
 	// allKeys := make([]string, 0, numOps)
 	for _, term := range terms {
@@ -1046,11 +1077,11 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 
 			// Replay diffrank, skip ops in snapshot.
 			// Condition: !fromSnapshot || term.Term > meta.SnapshotTerm
-			if !meta.Backup && term.Term > fromSnapshot {   // Simplified.
+			if !meta.Backup && term.Term > fromSnapshot { // Simplified.
 				s.diffrank.AddOp(op)
 			}
 
-			chunk, existed := s.get(op.Key);
+			chunk, existed := s.get(op.Key)
 			if existed {
 				if chunk.Term > s.lineage.Term {
 					// Skip new incoming write operations during recovery.
@@ -1072,21 +1103,21 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 					// Reset
 					// Although unlikely, dealing reset by deleting it first and add it later.
 					chunk.Deleted = true
-					chunk = nil           // Reset so it can be added back later.
+					chunk = nil // Reset so it can be added back later.
 				}
 			}
 			// New or reset chunk
 			if chunk == nil && s.isRecoverable(op.Key, meta, false) {
 				// Main repository or backup repository if backup ID matches.
 				chunk := &types.Chunk{
-					Key: op.Key,
-					Id: op.Id,
-					Body: nil,
-					Size: op.Size,
-					Term: term.Term,
+					Key:      op.Key,
+					Id:       op.Id,
+					Body:     nil,
+					Size:     op.Size,
+					Term:     term.Term,
 					Accessed: op.Accessed,
-					Bucket: op.Bucket,
-					Backup: meta.Backup,
+					Bucket:   op.Bucket,
+					Backup:   meta.Backup,
 				}
 				// New chunk can't be a deleted chunk, just in case something wrong.
 				if op.Op != types.OP_DEL {
@@ -1105,9 +1136,9 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 			s.snapshot.Updates = term.Updates // Assert: fixed in doRecoverLineage
 			s.snapshot.Hash = term.Hash
 			if fromSnapshot > 0 {
-				s.snapshot.Size = term.Size     // Use real value
+				s.snapshot.Size = term.Size // Use real value
 			} else {
-				s.snapshot.Size = meta.SnapshotSize  // We didn't start from a snapshot, copy passed from the proxy.
+				s.snapshot.Size = meta.SnapshotSize // We didn't start from a snapshot, copy passed from the proxy.
 			}
 			s.snapshot.DiffRank = s.diffrank.Rank()
 		}
@@ -1121,7 +1152,7 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 	}
 
 	// Update local lineage.
-	lastTerm := terms[len(terms) - 1]
+	lastTerm := terms[len(terms)-1]
 	if !meta.Backup {
 		if lastTerm.Term < meta.Term {
 			// Incomplete recovery, store result to s.recovered.
@@ -1164,9 +1195,9 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 
 	pool := &sync.Pool{
 		New: func() interface{} {
-				return &S3BatchDownloadObject{
-					Object: &s3.GetObjectInput{},
-				}
+			return &S3BatchDownloadObject{
+				Object: &s3.GetObjectInput{},
+			}
 		},
 	}
 
@@ -1182,7 +1213,7 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 
 			bucket := s.bucket(&tbds[i].Bucket)
 			key := aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key))
-			tbds[i].Body = make([]byte, tbds[i].Size)          // Pre-allocate fixed sized buffer.
+			tbds[i].Body = make([]byte, tbds[i].Size) // Pre-allocate fixed sized buffer.
 
 			if tbds[i].Size <= downloader.GetDownloadPartSize() {
 				input := pool.Get().(*S3BatchDownloadObject)
@@ -1199,11 +1230,11 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 				parts := math.Ceil(float64(tbds[i].Size) / float64(downloader.GetDownloadPartSize()))
 				partSize := uint64(math.Ceil(float64(tbds[i].Size) / parts))
 				for offset < tbds[i].Size {
-					end := offset + Uint64Min(partSize, tbds[i].Size - offset)
+					end := offset + Uint64Min(partSize, tbds[i].Size-offset)
 					input := pool.Get().(*S3BatchDownloadObject)
 					input.Object.Bucket = bucket
 					input.Object.Key = key
-					input.Object.Range = aws.String(fmt.Sprintf("bytes=%d-%d", offset, end - 1))
+					input.Object.Range = aws.String(fmt.Sprintf("bytes=%d-%d", offset, end-1))
 					input.Writer = aws.NewWriteAtBuffer(tbds[i].Body[offset:end])
 					input.After = s.getReadyNotifier(input, chanNotify)
 					input.Meta = tbds[i]
@@ -1237,7 +1268,7 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			return receivedBytes, err
 		case input := <-chanNotify:
 			received++
-			dobj :=  input.(*S3BatchDownloadObject)
+			dobj := input.(*S3BatchDownloadObject)
 			bytes := len(dobj.Writer.(*aws.WriteAtBuffer).Bytes())
 			tbd := dobj.Meta.(*types.Chunk)
 			receivedBytes += bytes
@@ -1283,7 +1314,7 @@ func (s *Storage) resetSet() {
 
 func (s *Storage) delayGet(flag uint32) {
 	old := atomic.LoadUint32(&s.safenote)
-	for !atomic.CompareAndSwapUint32(&s.safenote, old, old | flag) {
+	for !atomic.CompareAndSwapUint32(&s.safenote, old, old|flag) {
 		old = atomic.LoadUint32(&s.safenote)
 	}
 	s.getSafe.Add(1)
@@ -1292,7 +1323,7 @@ func (s *Storage) delayGet(flag uint32) {
 func (s *Storage) resetGet(flag uint32) {
 	s.getSafe.Done()
 	old := atomic.LoadUint32(&s.safenote)
-	for !atomic.CompareAndSwapUint32(&s.safenote, old, old &^ flag) {
+	for !atomic.CompareAndSwapUint32(&s.safenote, old, old&^flag) {
 		old = atomic.LoadUint32(&s.safenote)
 	}
 }
@@ -1307,14 +1338,14 @@ func (S *Storage) functionName(id uint64) string {
 type S3Downloader []*s3manager.Downloader
 
 type S3BatchDownloadObject struct {
-	Object  *s3.GetObjectInput
-	Writer  io.WriterAt
-	After   func() error
-	Meta    interface{}
+	Object     *s3.GetObjectInput
+	Writer     io.WriterAt
+	After      func() error
+	Meta       interface{}
 	Downloaded int64
 }
 
-func (s *Storage) getS3Downloader(concurrency int) S3Downloader{
+func (s *Storage) getS3Downloader(concurrency int) S3Downloader {
 	// This is essential to minimize download memory consumption.
 	bufferProvider := s3manager.NewPooledBufferedWriterReadFromProvider(1 * 1024 * 1024)
 
@@ -1369,7 +1400,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 	var err error
 	for object := range ch {
 		if object.Downloaded, err = downloader.Download(object.Writer, object.Object); err != nil {
-			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
+			errs <- s3manager.Error{OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key}
 		}
 
 		// log := ctx.Value(&ContextKeyLog).(logger.ILogger)
@@ -1384,7 +1415,7 @@ func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader
 		}
 
 		if err = object.After(); err != nil {
-			errs <- s3manager.Error{ OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key }
+			errs <- s3manager.Error{OrigErr: err, Bucket: object.Object.Bucket, Key: object.Object.Key}
 		}
 	}
 }
@@ -1397,7 +1428,7 @@ func IntMin(a int, b int) int {
 	}
 }
 
-func IntMax(a int, b int) int{
+func IntMax(a int, b int) int {
 	if a > b {
 		return a
 	} else {
@@ -1405,7 +1436,7 @@ func IntMax(a int, b int) int{
 	}
 }
 
-func Uint64Min(a uint64, b uint64) uint64{
+func Uint64Min(a uint64, b uint64) uint64 {
 	if a < b {
 		return a
 	} else {
@@ -1413,7 +1444,7 @@ func Uint64Min(a uint64, b uint64) uint64{
 	}
 }
 
-func Uint64Max(a uint64, b uint64) uint64{
+func Uint64Max(a uint64, b uint64) uint64 {
 	if a > b {
 		return a
 	} else {

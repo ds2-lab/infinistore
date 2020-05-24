@@ -2,34 +2,39 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
-	REQUEST_INVOKED = 0
-	REQUEST_RETURNED = 1
+	REQUEST_INVOKED   = 0
+	REQUEST_RETURNED  = 1
 	REQUEST_RESPONDED = 2
+
+	CHANGE_PLACEMENT = 0x0001
 )
 
 type Request struct {
-	Id           Id
-	InsId        uint64   // Instance the request targeted.
-	Cmd          string
-	Key          string
-	Body         []byte
-	BodyStream   resp.AllReadCloser
-	Client       *redeo.Client
+	Id              Id
+	InsId           uint64 // Instance the request targeted.
+	Cmd             string
+	Key             string
+	RetCommand      string
+	Body            []byte
+	BodyStream      resp.AllReadCloser
+	Client          *redeo.Client
 	EnableCollector bool
-	Info         interface{}
+	Info            interface{}
+	Changes         int
 
-	conn         Conn
-	status        uint32
+	conn            Conn
+	status          uint32
 	streamingStarted bool
 }
 
@@ -75,6 +80,17 @@ func (req *Request) PrepareForDel(conn Conn) {
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
+	req.conn = conn
+}
+
+func (req *Request) PrepareForRecover(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString("") // Obsoleted. ConnId.
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString("") // Keep consistent with GET
+	conn.Writer().WriteBulkString(req.Key)
+	conn.Writer().WriteBulkString(req.RetCommand)
 	req.conn = conn
 }
 
@@ -133,7 +149,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return false
 	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{ rsp, req })
+		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
@@ -148,5 +164,5 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
-	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
+	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }

@@ -22,6 +22,10 @@ func (i *InputEvent) IsPersistencyEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
 }
 
+func (i *InputEvent) IsBackingOnly() bool {
+	return (i.Flags & FLAG_BACKING_ONLY) > 0
+}
+
 type Status []Meta
 
 type Meta struct {
@@ -73,21 +77,29 @@ const (
 	FLAG_WARMUP_REPLICA = 0x0030
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
+	// FLAG_EXPIRED Disable recovery for main repository
+	FLAG_BACKING_ONLY = 0x1000
 
-	CMD_GET = "get"
-	CMD_GET_CHUNK = "get chunk"
-	CMD_SET = "set"
-	CMD_SET_CHUNK = "set chunk"
-	CMD_DEL = "del"
-	CMD_WARMUP = "warmup"
-	CMD_PING = "ping"
-	CMD_POND = "pong"
-	CMD_RECOVERED = "recovered"
-	CMD_INITMIGRATE = "initMigrate"
-	CMD_MIGRATE = "migrate"
-	CMD_MHELLO = "mhello"
-	CMD_DATA = "data"
-	CMD_BYE = "bye"
+	// PONG_RECOVERY Pong with parallel recovery requested
+	PONG_RECOVERY = 0x0001
+	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
+	PONG_RECLAIMED = 0x0002
+
+	CMD_GET = "get"              // Redis and Lambda command
+	CMD_GET_CHUNK = "get chunk"  // Client command
+	CMD_SET = "set"              // Redis and Lambda command
+	CMD_SET_CHUNK = "set chunk"  // Client command
+	CMD_RECOVER = "recover"      // Control command
+	CMD_DEL = "del"              // Control command
+	CMD_WARMUP = "warmup"        // Control command
+	CMD_PING = "ping"            // Control command
+	CMD_POND = "pong"            // Control command
+	CMD_RECOVERED = "recovered"  // Control command
+	CMD_INITMIGRATE = "initMigrate" // Control command
+	CMD_MIGRATE = "migrate"      // Control command
+	CMD_MHELLO = "mhello"        // Control command
+	CMD_DATA = "data"            // Control command
+	CMD_BYE = "bye"              // Control command
 
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"

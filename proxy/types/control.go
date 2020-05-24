@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+type ControlCallback func(*Control, interface{})
+
 type Control struct {
 	Cmd        string
 	Addr       string
@@ -14,6 +16,7 @@ type Control struct {
 	Payload    []byte
 	*Request
 	conn       Conn
+	Callback   ControlCallback
 }
 
 func (req *Control) String() string {
@@ -40,6 +43,12 @@ func (ctrl *Control) PrepareForMigrate(conn Conn) {
 
 func (ctrl *Control) PrepareForDel(conn Conn) {
 	ctrl.Request.PrepareForDel(conn)
+	ctrl.Request.conn = nil
+	ctrl.conn = conn
+}
+
+func (ctrl *Control) PrepareForRecover(conn Conn) {
+	ctrl.Request.PrepareForRecover(conn)
 	ctrl.Request.conn = nil
 	ctrl.conn = conn
 }

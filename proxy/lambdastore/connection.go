@@ -3,19 +3,18 @@ package lambdastore
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"net"
-	"math"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
@@ -175,6 +174,8 @@ func (conn *Connection) ServeLambda() {
 				go conn.initMigrateHandler()
 			case protocol.CMD_BYE:
 				conn.bye()
+			case protocol.CMD_RECOVER:
+				conn.recoverHandler()
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
 			}
@@ -273,24 +274,23 @@ func (conn *Connection) pongHandler() {
 	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
 		return
 	}
-	flag, err := conn.r.ReadInt()
+	flags, err := conn.r.ReadInt()
 	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
 		return
 	}
-	recovery := flag & 0x01 > 0
 
 	if conn.instance != nil {
-		conn.instance.flagValidated(conn, sid, recovery)
+		conn.instance.flagValidated(conn, sid, flags)
 		return
 	}
 
 	// Lock up lambda instance
-	instance, exists := Registry.Instance(uint64(math.Abs(float64(id))))
+	instance, exists := Registry.Instance(uint64(id))
 	if !exists {
 		conn.log.Error("Failed to match lambda: %d", id)
 		return
 	}
-	if instance.flagValidated(conn, sid, recovery).instance != nil {
+	if instance.flagValidated(conn, sid, flags).instance != nil {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
 		conn.log.Warn("Discard rouge POND for %d.", id)
@@ -316,8 +316,8 @@ func (conn *Connection) getHandler(start time.Time) {
 	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter, ok := global.ReqCoordinator.Load(reqId)
-	if ok == false {
+	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
 		if err := conn.r.SkipBulk(); err != nil {
@@ -332,9 +332,9 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ChunkId = chunkId
 	chunk, _ := strconv.Atoi(chunkId)
 
-	returned := counter.AddReturned(chunk)
+	status := counter.AddSucceeded(chunk)
 	// Check if chunks are enough? Shortcut response if YES.
-	if counter.IsLate(returned) {
+	if counter.IsLate(status) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		req, _ := conn.SetResponse(rsp)
@@ -344,9 +344,7 @@ func (conn *Connection) getHandler(start time.Time) {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if counter.IsAllReturned(returned) {
-			global.ReqCoordinator.Clear(reqId, counter)
-		}
+		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
@@ -374,7 +372,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 	// Abandon rest chunks.
-	if counter.IsFulfilled(returned) {
+	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
 		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
 		for _, req := range counter.Requests {
 			if req != nil && !req.IsReturnd() {
@@ -439,5 +437,22 @@ func (conn *Connection) bye() {
 	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
 		conn.instance.bye(conn)
+	}
+}
+
+func (conn *Connection) recoverHandler() {
+	conn.log.Debug("RECOVER from lambda.")
+
+	_, _ = conn.r.ReadBulkString() // connId
+	reqId, _ := conn.r.ReadBulkString()
+	_, _ = conn.r.ReadBulkString() // chunkId
+
+	ctrl := global.ReqCoordinator.Load(reqId)
+	if ctrl == nil {
+		conn.log.Warn("No control found for %s", reqId)
+	} else if ctrl.(*types.Control).Callback == nil {
+		conn.log.Warn("Control callback not defined for recover request %s", reqId)
+	} else {
+		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
 }

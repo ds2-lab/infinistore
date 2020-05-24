@@ -3,11 +3,7 @@ package client
 import (
 	"bytes"
 	"errors"
-	"github.com/ScottMansfield/nanolog"
-	"github.com/cespare/xxhash"
-	"github.com/google/uuid"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo/resp"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -15,7 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ScottMansfield/nanolog"
+	"github.com/cespare/xxhash"
+	"github.com/google/uuid"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
@@ -88,7 +89,6 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 		}
 		return stats.ReqId, true
 	}
-
 	//addr, ok := c.getHost(key)
 	//fmt.Println("in SET, key is: ", key)
 	member := c.Ring.LocateKey([]byte(key))
@@ -127,6 +127,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 			placements[i], _ = strconv.Atoi(string(ret.([]byte)))
 		}
 	}
+	fmt.Println("placements is", index)
 
 	return stats.ReqId, true
 }
@@ -221,7 +222,7 @@ func (c *Client) getHost(key string) (addr string, ok bool) {
 
 // random will generate random sequence within the lambda stores
 // index and get top n id
-func random(cluster,n int) []int {
+func random(cluster, n int) []int {
 	return rand.Perm(cluster)[:n]
 }
 
@@ -245,7 +246,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		return
 	}
 	cn := c.Conns[addr][i]
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout))  // Set deadline for request
+	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	w := cn.W
@@ -289,7 +290,7 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		return
 	}
 	cn := c.Conns[addr][i]
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout))  // Set deadline for request
+	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	// tGet := time.Now()
@@ -316,7 +317,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	cn := c.Conns[addr][i]
-	cn.conn.SetReadDeadline(time.Now().Add(Timeout))  // Set deadline for response
+	cn.conn.SetReadDeadline(time.Now().Add(Timeout)) // Set deadline for response
 	defer cn.conn.SetReadDeadline(time.Time{})
 
 	// peeking response type and receive
@@ -477,13 +478,13 @@ func (c *Client) encode(obj []byte) ([][]byte, error) {
 
 func (c *Client) decode(stats *DataEntry, data [][]byte, size int) (ReadAllCloser, error) {
 	// var err error
-	stats.AllGood, _  = c.EC.Verify(data)
+	stats.AllGood, _ = c.EC.Verify(data)
 	if stats.AllGood {
 		log.Debug("No reconstruction needed.")
-	// } else if err != nil {
-	// 	stats.Corrupted = true
-	// 	log.Debug("Verification error, impossible to reconstructing data: %v", err)
-	// 	return nil, err
+		// } else if err != nil {
+		// 	stats.Corrupted = true
+		// 	log.Debug("Verification error, impossible to reconstructing data: %v", err)
+		// 	return nil, err
 	} else {
 		log.Debug("Verification failed. Reconstructing data...")
 		err := c.EC.Reconstruct(data)

@@ -6,6 +6,7 @@ import (
 	"time"
 	"net"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	. "github.com/mason-leap-lab/infinicache/lambda/store"
 )
@@ -58,19 +59,19 @@ func (p *PongHandler) Issue(retry bool) bool {
 	}
 }
 
-func (p *PongHandler) SendToConnection(ctx context.Context, conn net.Conn, recover bool) error {
+func (p *PongHandler) SendToConnection(ctx context.Context, conn net.Conn, flags int64) error {
 	if conn == nil {
-		log.Debug("Issue pong, request fast recovery: %v", recover)
+		pongLog(flags)
 		ready := ctx.Value(&ContextKeyReady)
 		close(ready.(chan struct{}))
 		return nil
 	}
 	writer := NewResponse(conn, nil)   // One time per connection, so be it.
-	return p.sendImpl(writer, recover)
+	return p.sendImpl(writer, flags)
 }
 
 func (p *PongHandler) SendTo(rsp *Response) error {
-	return p.sendImpl(rsp, false)
+	return p.sendImpl(rsp, 0)
 }
 
 func (p *PongHandler) Cancel() {
@@ -93,7 +94,7 @@ func (p *PongHandler) IsCancelled() bool {
 	return p.canceled
 }
 
-func (p *PongHandler) sendImpl(rsp *Response, recover bool) error {
+func (p *PongHandler) sendImpl(rsp *Response, flags int64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -105,12 +106,7 @@ func (p *PongHandler) sendImpl(rsp *Response, recover bool) error {
 		return nil
 	}
 
-	log.Debug("POND")
-
-	flags := int64(0)
-	if recover {
-		flags += 0x01
-	}
+	pongLog(flags)
 
 	if err := p.pong(rsp, flags); err != nil {
 		return err
@@ -141,7 +137,7 @@ func (p *PongHandler) sendImpl(rsp *Response, recover bool) error {
 			case <-p.timeout.C:
 				// Timeout. retry
 				log.Warn("retry PONG")
-				p.sendImpl(rsp, recover)
+				p.sendImpl(rsp, flags)
 			case <-p.done:
 				return
 			}
@@ -149,6 +145,19 @@ func (p *PongHandler) sendImpl(rsp *Response, recover bool) error {
 	}
 
 	return nil
+}
+
+func pongLog(flags int64) {
+	var claim string
+	if flags > 0 {
+		// These two claims are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
+		if flags & protocol.PONG_RECOVERY > 0 {
+			claim = " with fast recovery requested."
+		} else if flags & protocol.PONG_RECLAIMED > 0 {
+			claim = " with claiming the node has experienced reclaimation."
+		}
+	}
+	log.Debug("POND%s", claim)
 }
 
 func (p *PongHandler) sendPong(rsp *Response, flags int64) (err error) {

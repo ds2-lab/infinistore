@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 	//	"github.com/wangaoone/s3gof3r"
@@ -84,6 +85,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	storage.Backups = input.Backups
 	Store, _ = Store.Init(input.Id, input.IsPersistencyEnabled())
 	Lineage = Store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
+	Persist = util.Ifelse(Lineage == nil, nil, Store.(*storage.Storage)).(types.PersistentStorage)
 
 	// Initialize session.
 	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
@@ -143,10 +145,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	var recoverErrs []chan error
-	var recoverFast bool
+	var flags int64
 	if Lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
-		pong.SendToConnection(ctx, session.Connection, false)
+		pong.SendToConnection(ctx, session.Connection, 0)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
@@ -170,27 +172,35 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			if err != nil {
 				return Lineage.Status().ProtocolStatus(), err
 			} else if !metas[i].Consistent {
-				inconsistency++
+				if input.IsBackingOnly() && i > 0 {
+					// In backing only mode, we will not try to recover main repository.
+					// And any data loss will be regarded as signs of reclaimation.
+					flags |= protocol.PONG_RECLAIMED
+				} else {
+					inconsistency++
+				}
 			}
 		}
 
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// POND represents the node is ready to serve, no fast recovery required.
-			pong.SendToConnection(ctx, session.Connection, false)
+			pong.SendToConnection(ctx, session.Connection, flags)
 		} else {
 			session.Timeout.Busy()
 			recoverErrs = make([]chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
-			if !metas[0].Consistent {
+			if !input.IsBackingOnly() && !metas[0].Consistent {
 				fast, chanErr := Lineage.Recover(metas[0])
 				// POND represents the node is ready to serve, request fast recovery.
-				pong.SendToConnection(ctx, session.Connection, fast)
+				if fast {
+					flags |= protocol.PONG_RECOVERY
+				}
+				pong.SendToConnection(ctx, session.Connection, flags)
 				recoverErrs = append(recoverErrs, chanErr)
-				recoverFast = fast
 			} else {
-				pong.SendToConnection(ctx, session.Connection, false)
+				pong.SendToConnection(ctx, session.Connection, flags)
 			}
 
 			// Recovery backup
@@ -210,7 +220,8 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
 		// Signal proxy the recover procedure is done.
-		if recoverFast {
+		// Normally the recovery of main repository is longer than backup, so we just wait all is done.
+		if flags & protocol.PONG_RECOVERY > 0 {
 			recoveredHandler(ctx, session.Connection)
 		}
 		session.Timeout.DoneBusy()
@@ -609,7 +620,7 @@ func main() {
 		response := &handlers.Response{
 			ResponseWriter: w,
 			Conn:           session.Connection,
-			Cmd:            "set",
+			Cmd:            c.Name,
 			ConnId:         connId,
 			ReqId:          reqId,
 			ChunkId:        chunkId,
@@ -625,6 +636,92 @@ func main() {
 		dt := time.Since(t)
 		log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
 		finalize(ret, false, d1, d2, dt)
+	})
+
+	srv.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
+		session := lambdaLife.GetSession()
+		session.Timeout.Busy()
+		session.Requests++
+		extension := lambdaLife.TICK_ERROR
+		if session.Requests > 1 {
+			extension = lambdaLife.TICK
+		}
+		var ret *types.OpRet
+		defer func() {
+			if ret == nil || !ret.IsDelayed() {
+				session.Timeout.DoneBusyWithReset(extension)
+			} else {
+				go func() {
+					ret.Wait()
+					session.Timeout.DoneBusyWithReset(extension)
+				}()
+			}
+		}()
+
+		t := time.Now()
+		log.Debug("In RECOVER handler")
+
+		rspErr := handlers.NewResponse(session.Connection, w)
+		connId := c.Arg(0).String()
+		reqId := c.Arg(1).String()
+		chunkId := c.Arg(2).String()
+		key := c.Arg(3).String()
+		retCmd := c.Arg(4).String()
+
+		if Persist == nil {
+			rspErr.AppendErrorf("Recover is not supported")
+			if err := rspErr.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
+
+		// Recover.
+		ret = Persist.SetRecovery(key, chunkId)
+		if ret.Error() != nil {
+			log.Error("%v", ret.Error())
+			rspErr.AppendErrorf("%v", ret.Error())
+			if err := rspErr.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+				// Ignore
+			}
+			return
+		}
+
+		// Immediate get, unlikely to error, don't overwrite ret.
+		var stream resp.AllReadCloser
+		if retCmd == protocol.CMD_GET {
+			_, stream, _ = Store.GetStream(key)
+			if stream != nil {
+				defer stream.Close()
+			}
+		}
+		d1 := time.Since(t)
+
+		// write Key, clientId, chunkId, body back to proxy
+		response := &handlers.Response{
+			ResponseWriter: w,
+			Conn:           session.Connection,
+			Cmd:            retCmd,
+			ConnId:         connId,
+			ReqId:          reqId,
+			ChunkId:        chunkId,
+			BodyStream:     stream,
+		}
+		response.Prepare()
+
+		t2 := time.Now()
+		if err := response.Flush(); err != nil {
+			log.Error("Error on recover::flush(recover key %s): %v", key, err)
+			// Ignore
+		}
+		d2 := time.Since(t2)
+
+		dt := time.Since(t)
+		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
+		if retCmd == protocol.CMD_GET {
+			collector.AddRequest(types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
+		}
 	})
 
 	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {

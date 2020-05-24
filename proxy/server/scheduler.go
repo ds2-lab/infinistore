@@ -1,15 +1,17 @@
 package server
 
-import(
+import (
 	"errors"
 	"fmt"
-	"github.com/cornelk/hashmap"
+	"math/rand"
 
+	"github.com/cornelk/hashmap"
+	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/migrator"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const DEP_STATUS_POOLED = 0
@@ -18,17 +20,18 @@ const DEP_STATUS_ACTIVATING = 2
 const IN_DEPLOYMENT_MIGRATION = true
 
 var (
-	scheduler    *Scheduler
+	scheduler *Scheduler
 )
 
 type Scheduler struct {
-	pool           chan *lambdastore.Deployment
-	actives        *hashmap.HashMap
+	pool    chan *lambdastore.Deployment
+	actives *hashmap.HashMap
 }
 
+// numCluster = small number, numDeployment = large number
 func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 	s := &Scheduler{
-		pool: make(chan *lambdastore.Deployment, numDeployment + 1), // Allocate extra 1 buffer to avoid blocking
+		pool:    make(chan *lambdastore.Deployment, numDeployment+1), // Allocate extra 1 buffer to avoid blocking
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
@@ -42,7 +45,7 @@ func newScheduler() *Scheduler {
 }
 
 func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {
-	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.pool))
+	ins := g.Reserve(g.Base(idx), lambdastore.NewInstanceFromDeployment(<-s.pool))
 	s.actives.Set(ins.Id(), ins)
 	g.Set(ins)
 	return ins.LambdaDeployment.(*lambdastore.Instance)
@@ -73,6 +76,23 @@ func (s *Scheduler) ReserveForInstance(insId uint64) (types.LambdaDeployment, er
 	}
 }
 
+func (s *Scheduler) getBackupsForNode(instances []*GroupInstance, i int) (int, []*lambdastore.Instance) {
+	numBaks := config.BackupsPerInstance
+	numTotal := numBaks * 2
+	distance := len(instances) / (numTotal + 1) // main + double backup candidates
+	if distance == 0 {
+		// In case 2 * total >= g.Len()
+		distance = 1
+		numBaks = util.Ifelse(numBaks >= len(instances), len(instances)-1, numBaks).(int) // Use all
+		numTotal = util.Ifelse(numTotal >= len(instances), len(instances)-1, numTotal).(int)
+	}
+	candidates := make([]*lambdastore.Instance, numTotal)
+	for j := 0; j < numTotal; j++ {
+		candidates[j] = instances[(i+j*distance+rand.Int()%distance+1)%len(instances)].LambdaDeployment.(*lambdastore.Instance) // Random to avoid the same backup set.
+	}
+	return numBaks, candidates
+}
+
 func (s *Scheduler) Recycle(dp types.LambdaDeployment) {
 	s.actives.Del(dp.Id())
 	switch dp.(type) {
@@ -93,23 +113,23 @@ func (s *Scheduler) Deployment(id uint64) (types.LambdaDeployment, bool) {
 	}
 }
 
-func (s *Scheduler) Instance(id uint64) (*lambdastore.Instance, bool) {
-	got, exists := s.actives.Get(id)
-	if !exists {
-		return nil, exists
-	}
-
-	ins := got.(*GroupInstance)
-	validated := ins.group.Validate(ins)
-	if validated != ins {
-		// Switch keys
-		s.actives.Set(validated.Id(), validated)
-		s.actives.Set(ins.Id(), ins)
-		// Recycle ins
-		s.Recycle(ins.LambdaDeployment)
-	}
-	return validated.LambdaDeployment.(*lambdastore.Instance), exists
-}
+//func (s *Scheduler) Instance(id uint64) (*lambdastore.Instance, bool) {
+//	got, exists := s.actives.Get(id)
+//	if !exists {
+//		return nil, exists
+//	}
+//
+//	ins := got.(*GroupInstance)
+//	validated := ins.group.Validate(ins)
+//	if validated != ins {
+//		// Switch keys
+//		s.actives.Set(validated.Id(), validated)
+//		s.actives.Set(ins.Id(), ins)
+//		// Recycle ins
+//		s.Recycle(ins.LambdaDeployment)
+//	}
+//	return validated.LambdaDeployment.(*lambdastore.Instance), exists
+//}
 
 func (s *Scheduler) Clear(g *Group) {
 	for item := range s.actives.Iter() {
@@ -128,7 +148,7 @@ func (s *Scheduler) ClearAll() {
 
 // MigrationScheduler implementations
 func (s *Scheduler) StartMigrator(lambdaId uint64) (string, error) {
-	m := migrator.New(global.BaseMigratorPort + int(lambdaId), true)
+	m := migrator.New(global.BaseMigratorPort+int(lambdaId), true)
 	err := m.Listen()
 	if err != nil {
 		return "", err
@@ -146,8 +166,8 @@ func (s *Scheduler) GetDestination(lambdaId uint64) (types.LambdaDeployment, err
 func init() {
 	scheduler = newScheduler()
 
-	lambdastore.Registry = scheduler
 	global.Migrator = scheduler
+
 }
 
 func CleanUpScheduler() {

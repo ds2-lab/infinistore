@@ -51,9 +51,9 @@ type Client struct {
 	MappingTable map[string]*cuckoo.Filter
 	Ring         *consistent.Consistent
 	Data         DataEntry
-	DataShards     int
-	ParityShards   int
-	Shards         int
+	DataShards   int
+	ParityShards int
+	Shards       int
 }
 
 func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
@@ -174,7 +174,7 @@ type ecRet struct {
 func newEcRet(shards int) *ecRet {
 	return &ecRet{
 		Shards: shards,
-		Rets: make([]interface{}, shards),
+		Rets:   make([]interface{}, shards),
 	}
 }
 

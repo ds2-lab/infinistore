@@ -3,10 +3,11 @@ package collector
 import (
 	"errors"
 	"fmt"
-	"github.com/ScottMansfield/nanolog"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/ScottMansfield/nanolog"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
