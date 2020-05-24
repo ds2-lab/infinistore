@@ -1,11 +1,11 @@
 package lifetime
 
 import (
-	"net"
 	"sync"
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
 )
 
@@ -23,7 +23,7 @@ type Session struct {
 	CleanUp   sync.WaitGroup            // Used to wait for cleanup on ending invocation
 	Migrator  *migrator.Client
 	Timeout   *Timeout
-	Connection net.Conn
+	Connection *types.ProxyConnection
 
 	done      chan struct{}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mason-leap-lab/redeo/resp"
+	"net"
 	"strconv"
 	"sync"
 	"time"
@@ -73,6 +74,11 @@ func (c *Chunk) Op() uint32 {
 	} else {
 		return OP_SET
 	}
+}
+
+type ProxyConnection struct {
+	net.Conn
+	writer resp.ResponseWriter
 }
 
 type ResponseError struct {

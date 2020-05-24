@@ -37,6 +37,8 @@ import (
 
 const (
 	EXPECTED_GOMAXPROCS = 2
+
+	ResponseTimeout = 20 * time.Millisecond
 )
 
 var (
@@ -47,7 +49,7 @@ var (
 
 	// Proxy that links stores as a system
 	proxy     string // Passed from proxy dynamically.
-	proxyConn net.Conn
+	proxyConn *types.ProxyConnection
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
 	log       = Log
@@ -238,8 +240,8 @@ func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
 	proxy = input.Proxy
 	log.Debug("Ready to connect %s, id %d", proxy, Store.Id())
 
-	var connErr error
-	session.Connection, connErr = net.Dial("tcp", proxy)
+	conn, connErr := net.Dial("tcp", proxy)
+	session.Connection = &types.ProxyConnection{ Conn: conn }
 	if connErr != nil {
 		log.Error("Failed to connect proxy %s: %v", proxy, connErr)
 		return connErr
@@ -376,10 +378,10 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	return
 }
 
-func recoveredHandler(ctx context.Context, conn net.Conn) error {
-	w := resp.NewResponseWriter(conn)
-	w.AppendBulkString(protocol.CMD_RECOVERED)
-	if err := w.Flush(); err != nil {
+func recoveredHandler(ctx context.Context, conn *types.ProxyConnection) error {
+	rsp := types.NewResponse(conn, nil)
+	rsp.AppendBulkString(protocol.CMD_RECOVERED)
+	if err := rsp.Flush(ResponseTimeout); err != nil {
 		log.Error("Error on RECOVERED flush: %v", err)
 		return err
 	}
@@ -433,22 +435,21 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	return true
 }
 
-func initMigrateHandler(conn net.Conn) error {
-	writer := resp.NewResponseWriter(conn)
+func initMigrateHandler(conn *types.ProxyConnection) error {
+	rsp := types.NewResponse(conn, nil)
 	// init backup cmd
-	writer.AppendBulkString("initMigrate")
-	return writer.Flush()
+	rsp.AppendBulkString("initMigrate")
+	return rsp.Flush(ResponseTimeout)
 }
 
-func byeHandler(conn net.Conn) error {
+func byeHandler(conn *types.ProxyConnection) error {
 	if conn == nil && DRY_RUN {
 		log.Info("Bye")
 		return nil
 	}
-	writer := resp.NewResponseWriter(conn)
-	// init backup cmd
-	writer.AppendBulkString("bye")
-	return writer.Flush()
+	rsp := types.NewResponse(conn, nil)
+	rsp.AppendBulkString("bye")
+	return rsp.Flush(ResponseTimeout)
 }
 
 // func remoteGet(bucket string, key string) []byte {
@@ -508,6 +509,7 @@ func main() {
 			// construct lambda store response
 			response := &types.Response{
 				ResponseWriter: w,
+				Conn:           session.Connection,
 				Cmd:            c.Name,
 				ConnId:         connId,
 				ReqId:          reqId,
@@ -517,7 +519,7 @@ func main() {
 			response.Prepare()
 
 			t2 := time.Now()
-			if err := response.Flush(); err != nil {
+			if err := response.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on flush(get key %s): %v", key, err)
 				return
 			}
@@ -536,8 +538,9 @@ func main() {
 			}
 
 			log.Warn("Failed to get %s: %v", key, respError)
-			w.AppendErrorf("Failed to get %s: %v", key, respError)
-			if err := w.Flush(); err != nil {
+			rspError := types.NewResponse(session.Connection, w)
+			rspError.AppendErrorf("Failed to get %s: %v", key, respError)
+			if err := rspError.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 			collector.AddRequest(types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
@@ -573,6 +576,7 @@ func main() {
 			session.Timeout.DoneBusyWithReset(extension)
 		}
 
+		rspErr := types.NewResponse(session.Connection, w)
 		connId, _ := c.NextArg().String()
 		reqId, _ = c.NextArg().String()
 		chunkId, _ = c.NextArg().String()
@@ -580,8 +584,8 @@ func main() {
 		valReader, err := c.Next()
 		if err != nil {
 			log.Error("Error on get value reader: %v", err)
-			w.AppendErrorf("Error on get value reader: %v", err)
-			if err := w.Flush(); err != nil {
+			rspErr.AppendErrorf("Error on get value reader: %v", err)
+			if err := rspErr.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 			}
 			finalize(nil, false)
@@ -593,8 +597,8 @@ func main() {
 		d1 := time.Since(t)
 		if ret.Error() != nil {
 			log.Error("%v", ret.Error())
-			w.AppendErrorf("%v", ret.Error())
-			if err := w.Flush(); err != nil {
+			rspErr.AppendErrorf("%v", ret.Error())
+			if err := rspErr.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 				// Ignore
 			}
@@ -605,6 +609,7 @@ func main() {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &types.Response{
 			ResponseWriter: w,
+			Conn:           session.Connection,
 			Cmd:            "set",
 			ConnId:         connId,
 			ReqId:          reqId,
@@ -612,7 +617,7 @@ func main() {
 		}
 		response.Prepare()
 		t2 := time.Now()
-		if err := response.Flush(); err != nil {
+		if err := response.Flush(ResponseTimeout); err != nil {
 			log.Error("Error on set::flush(set key %s): %v", key, err)
 			// Ignore
 		}
@@ -657,13 +662,14 @@ func main() {
 			// write Key, clientId, chunkId, body back to proxy
 			response := &types.Response{
 				ResponseWriter: w,
+				Conn:           session.Connection,
 				Cmd:            "del",
 				ConnId:         connId,
 				ReqId:          reqId,
 				ChunkId:        chunkId,
 			}
 			response.Prepare()
-			if err := response.Flush(); err != nil {
+			if err := response.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on del::flush(set key %s): %v", key, err)
 				return
 			}
@@ -677,8 +683,9 @@ func main() {
 			}
 
 			log.Warn("Failed to del %s: %v", key, respError)
-			w.AppendErrorf("Failed to del %s: %v", key, respError)
-			if err := w.Flush(); err != nil {
+			rspErr := types.NewResponse(session.Connection, w)
+			rspErr.AppendErrorf("Failed to del %s: %v", key, respError)
+			if err := rspErr.Flush(ResponseTimeout); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 		}
@@ -699,9 +706,10 @@ func main() {
 		// put DATA to s3
 		collector.Save()
 
-		w.AppendBulkString("data")
-		w.AppendBulkString("OK")
-		if err := w.Flush(); err != nil {
+		rsp := types.NewResponse(session.Connection, w)
+		rsp.AppendBulkString("data")
+		rsp.AppendBulkString("OK")
+		if err := rsp.Flush(ResponseTimeout); err != nil {
 			log.Error("Error on data::flush: %v", err)
 			return
 		}
@@ -740,7 +748,7 @@ func main() {
 		}
 
 		log.Debug("PING")
-		pong.SendTo(w)
+		pong.SendTo(types.NewResponse(session.Connection, w))
 
 		// Deal with payload
 		if len(payload) > 0 {
