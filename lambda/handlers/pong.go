@@ -2,10 +2,9 @@ package handlers
 
 import (
 	"context"
-	"github.com/mason-leap-lab/redeo/resp"
-	"net"
 	"sync"
 	"time"
+	"net"
 
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	. "github.com/mason-leap-lab/infinicache/lambda/store"
@@ -18,6 +17,8 @@ var (
 	log = Log
 )
 
+type pong func(*Response, int64) error
+
 type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
@@ -25,26 +26,31 @@ type PongHandler struct {
 	timeout *time.Timer
 	mu      sync.Mutex
 	done    chan struct{}
+	pong    pong
+	canceled bool
 }
 
 func NewPongHandler() *PongHandler {
-	return &PongHandler{
+	handler := &PongHandler{
 		limiter: make(chan int, 1),
 		timeout: time.NewTimer(0),
 		done: make(chan struct{}, 1),
 	}
+	handler.pong = handler.sendPong
+	return handler
 }
 
 func (p *PongHandler) Issue(retry bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	retryTime := 0
+	retries := 0
 	if retry {
-		retryTime = DefaultRetry
+		retries = DefaultRetry
 	}
 	select {
-	case p.limiter <- retryTime:
+	case p.limiter <- retries:
+		p.canceled = false
 		return true
 	default:
 		// if limiter is full, move on
@@ -59,16 +65,17 @@ func (p *PongHandler) SendToConnection(ctx context.Context, conn net.Conn, recov
 		close(ready.(chan struct{}))
 		return nil
 	}
-	writer := resp.NewResponseWriter(conn)   // One time per connection, so be it.
+	writer := NewResponse(conn, nil)   // One time per connection, so be it.
 	return p.sendImpl(writer, recover)
 }
 
-func (p *PongHandler) SendTo(w resp.ResponseWriter) error {
-	return p.sendImpl(w, false)
+func (p *PongHandler) SendTo(rsp *Response) error {
+	return p.sendImpl(rsp, false)
 }
 
 func (p *PongHandler) Cancel() {
 	p.mu.Lock()
+	p.canceled = true
 	select {
 	case p.done <- struct{}{}:
 	default:
@@ -82,7 +89,11 @@ func (p *PongHandler) Cancel() {
 	p.mu.Unlock()
 }
 
-func (p *PongHandler) sendImpl(w resp.ResponseWriter, recover bool) error {
+func (p *PongHandler) IsCancelled() bool {
+	return p.canceled
+}
+
+func (p *PongHandler) sendImpl(rsp *Response, recover bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -96,17 +107,12 @@ func (p *PongHandler) sendImpl(w resp.ResponseWriter, recover bool) error {
 
 	log.Debug("POND")
 
-	flag := int64(0)
+	flags := int64(0)
 	if recover {
-		flag += 0x01
+		flags += 0x01
 	}
 
-	w.AppendBulkString("pong")
-	w.AppendInt(int64(Store.Id()))
-	w.AppendBulkString(lambdaLife.GetSession().Sid)
-	w.AppendInt(flag)
-	if err := w.Flush(); err != nil {
-		log.Error("Error on PONG flush: %v", err)
+	if err := p.pong(rsp, flags); err != nil {
 		return err
 	}
 
@@ -135,7 +141,7 @@ func (p *PongHandler) sendImpl(w resp.ResponseWriter, recover bool) error {
 			case <-p.timeout.C:
 				// Timeout. retry
 				log.Warn("retry PONG")
-				p.sendImpl(w, recover)
+				p.sendImpl(rsp, recover)
 			case <-p.done:
 				return
 			}
@@ -143,4 +149,15 @@ func (p *PongHandler) sendImpl(w resp.ResponseWriter, recover bool) error {
 	}
 
 	return nil
+}
+
+func (p *PongHandler) sendPong(rsp *Response, flags int64) (err error) {
+	rsp.AppendBulkString("pong")
+	rsp.AppendInt(int64(Store.Id()))
+	rsp.AppendBulkString(lambdaLife.GetSession().Sid)
+	rsp.AppendInt(flags)
+	if err = rsp.Flush(); err != nil {
+		log.Error("Error on PONG flush: %v", err)
+	}
+	return
 }

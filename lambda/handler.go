@@ -377,9 +377,10 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 }
 
 func recoveredHandler(ctx context.Context, conn net.Conn) error {
-	w := resp.NewResponseWriter(conn)
-	w.AppendBulkString(protocol.CMD_RECOVERED)
-	if err := w.Flush(); err != nil {
+	log.Debug("Send recovered notification.")
+	rsp := handlers.NewResponse(conn, nil)
+	rsp.AppendBulkString(protocol.CMD_RECOVERED)
+	if err := rsp.Flush(); err != nil {
 		log.Error("Error on RECOVERED flush: %v", err)
 		return err
 	}
@@ -434,10 +435,10 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 }
 
 func initMigrateHandler(conn net.Conn) error {
-	writer := resp.NewResponseWriter(conn)
+	rsp := handlers.NewResponse(conn, nil)
 	// init backup cmd
-	writer.AppendBulkString("initMigrate")
-	return writer.Flush()
+	rsp.AppendBulkString("initMigrate")
+	return rsp.Flush()
 }
 
 func byeHandler(conn net.Conn) error {
@@ -445,10 +446,9 @@ func byeHandler(conn net.Conn) error {
 		log.Info("Bye")
 		return nil
 	}
-	writer := resp.NewResponseWriter(conn)
-	// init backup cmd
-	writer.AppendBulkString("bye")
-	return writer.Flush()
+	rsp := handlers.NewResponse(conn, nil)
+	rsp.AppendBulkString("bye")
+	return rsp.Flush()
 }
 
 // func remoteGet(bucket string, key string) []byte {
@@ -506,8 +506,9 @@ func main() {
 
 		if ret.Error() == nil {
 			// construct lambda store response
-			response := &types.Response{
+			response := &handlers.Response{
 				ResponseWriter: w,
+				Conn:           session.Connection,
 				Cmd:            c.Name,
 				ConnId:         connId,
 				ReqId:          reqId,
@@ -527,17 +528,18 @@ func main() {
 			log.Debug("Get key:%s, chunk:%s, duration:%v, transmission:%v", key, chunkId, dt, d1)
 			collector.AddRequest(types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		} else {
-			var respError *types.ResponseError
+			var respError *handlers.ResponseError
 			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, ret.Error())
+				respError = handlers.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, ret.Error())
+				respError = handlers.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to get %s: %v", key, respError)
-			w.AppendErrorf("Failed to get %s: %v", key, respError)
-			if err := w.Flush(); err != nil {
+			rspError := handlers.NewResponse(session.Connection, w)
+			rspError.AppendErrorf("Failed to get %s: %v", key, respError)
+			if err := rspError.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 			collector.AddRequest(types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
@@ -573,6 +575,7 @@ func main() {
 			session.Timeout.DoneBusyWithReset(extension)
 		}
 
+		rspErr := handlers.NewResponse(session.Connection, w)
 		connId, _ := c.NextArg().String()
 		reqId, _ = c.NextArg().String()
 		chunkId, _ = c.NextArg().String()
@@ -580,8 +583,8 @@ func main() {
 		valReader, err := c.Next()
 		if err != nil {
 			log.Error("Error on get value reader: %v", err)
-			w.AppendErrorf("Error on get value reader: %v", err)
-			if err := w.Flush(); err != nil {
+			rspErr.AppendErrorf("Error on get value reader: %v", err)
+			if err := rspErr.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 			}
 			finalize(nil, false)
@@ -593,8 +596,8 @@ func main() {
 		d1 := time.Since(t)
 		if ret.Error() != nil {
 			log.Error("%v", ret.Error())
-			w.AppendErrorf("%v", ret.Error())
-			if err := w.Flush(); err != nil {
+			rspErr.AppendErrorf("%v", ret.Error())
+			if err := rspErr.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 				// Ignore
 			}
@@ -603,8 +606,9 @@ func main() {
 		}
 
 		// write Key, clientId, chunkId, body back to proxy
-		response := &types.Response{
+		response := &handlers.Response{
 			ResponseWriter: w,
+			Conn:           session.Connection,
 			Cmd:            "set",
 			ConnId:         connId,
 			ReqId:          reqId,
@@ -655,8 +659,9 @@ func main() {
 		ret = Store.Del(key, chunkId)
 		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
-			response := &types.Response{
+			response := &handlers.Response{
 				ResponseWriter: w,
+				Conn:           session.Connection,
 				Cmd:            "del",
 				ConnId:         connId,
 				ReqId:          reqId,
@@ -668,17 +673,18 @@ func main() {
 				return
 			}
 		} else {
-			var respError *types.ResponseError
+			var respError *handlers.ResponseError
 			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = types.NewResponseError(404, ret.Error())
+				respError = handlers.NewResponseError(404, ret.Error())
 			} else {
-				respError = types.NewResponseError(500, ret.Error())
+				respError = handlers.NewResponseError(500, ret.Error())
 			}
 
 			log.Warn("Failed to del %s: %v", key, respError)
-			w.AppendErrorf("Failed to del %s: %v", key, respError)
-			if err := w.Flush(); err != nil {
+			rspErr := handlers.NewResponse(session.Connection, w)
+			rspErr.AppendErrorf("Failed to del %s: %v", key, respError)
+			if err := rspErr.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 		}
@@ -699,9 +705,10 @@ func main() {
 		// put DATA to s3
 		collector.Save()
 
-		w.AppendBulkString("data")
-		w.AppendBulkString("OK")
-		if err := w.Flush(); err != nil {
+		rsp := handlers.NewResponse(session.Connection, w)
+		rsp.AppendBulkString("data")
+		rsp.AppendBulkString("OK")
+		if err := rsp.Flush(); err != nil {
 			log.Error("Error on data::flush: %v", err)
 			return
 		}
@@ -740,7 +747,7 @@ func main() {
 		}
 
 		log.Debug("PING")
-		pong.SendTo(w)
+		pong.SendTo(handlers.NewResponse(session.Connection, w))
 
 		// Deal with payload
 		if len(payload) > 0 {
