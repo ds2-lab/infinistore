@@ -4,7 +4,6 @@ import (
 	// "errors"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
 	"sync"
 	"time"
 )
@@ -21,13 +20,13 @@ func newTestPongHandler(override pong) *TestPongHandler {
 	return handler
 }
 
-func succeedPong(rsp *types.Response, flags int64) error {
+func succeedPong(rsp *Response, flags int64) error {
 	return nil
 }
 
 func getTimeoutPong(handler *TestPongHandler, failure int) pong {
 	attempt := 0
-	return func(rsp *types.Response, flags int64) error {
+	return func(rsp *Response, flags int64) error {
 		failure := attempt < failure
 		attempt++
 		if !failure {

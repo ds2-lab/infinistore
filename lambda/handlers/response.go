@@ -1,14 +1,19 @@
-package types
+package handlers
 
 import (
 	"bytes"
 	"github.com/mason-leap-lab/redeo/resp"
+	"net"
 	"time"
+)
+
+var (
+	RequestTimeout = 1 * time.Second
 )
 
 type Response struct {
 	resp.ResponseWriter
-	Conn *ProxyConnection
+	Conn net.Conn
 
 	Cmd string
 	ConnId string
@@ -19,12 +24,9 @@ type Response struct {
 	BodyStream resp.AllReadCloser
 }
 
-func NewResponse(conn *ProxyConnection, writer resp.ResponseWriter) *Response {
+func NewResponse(conn net.Conn, writer resp.ResponseWriter) *Response {
 	if writer == nil {
-		if conn.writer == nil {
-			conn.writer = resp.NewResponseWriter(conn)
-		}
-		writer = conn.writer
+		writer = resp.NewResponseWriter(conn)
 	}
 	return &Response{
 		ResponseWriter: writer,
@@ -68,8 +70,8 @@ func (r *Response) PrepareByResponse(reader resp.ResponseReader) (err error) {
 	return
 }
 
-func (r *Response) Flush(timeout time.Duration) error {
-	r.Conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
+func (r *Response) Flush() error {
+	r.Conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
 	defer r.Conn.SetWriteDeadline(time.Time{})
 	r.ResponseWriter.Flush()
 
@@ -93,7 +95,7 @@ func (r *Response) Flush(timeout time.Duration) error {
 	}
 
 	if hasBulk {
-		r.Conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
+		r.Conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
 		return r.ResponseWriter.Flush()
 	}
 
