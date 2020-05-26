@@ -90,8 +90,7 @@ type Instance struct {
 	sessions      *hashmap.HashMap
 
 	// Backup fields
-	candidates    []*Instance       // Must be initialized before invoke lambda. Stores pointers instead of ids for query, so legacy instances may be used.
-	backups       []*Instance       // Actual backups in use.
+	backups       Backups
 	recovering    uint32            // # of backups in use, also if the recovering > 0, the instance is recovering.
 	writtens      *hashmap.HashMap  // Whitelist, write opertions will be added to it during parallel recovery.
 	backing       uint32            // backing status, 0 for non backing, 1 for reserved, 2 for backing.
@@ -147,8 +146,7 @@ func (ins *Instance) Status() uint64 {
 }
 
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
-	ins.candidates = candidates
-	ins.backups = make([]*Instance, 0, numBak)
+	ins.backups.Reset(numBak, candidates)
 }
 
 func (ins *Instance) C() chan types.Command {
@@ -239,59 +237,39 @@ func (ins *Instance) startRecoveryLocked() int {
 		return int(recovering)
 	}
 
-	// Reset backups
-	lastnum := len(ins.backups)
-	changes := 0
-	ins.backups = ins.backups[:0]
-	// Reserve backups so we can know how many backups are available
-	alters := cap(ins.backups)    // If failed to reserve a backup, select one start from alters.
-	for i := 0; i < cap(ins.backups); i++ {
-		if ins.candidates[i].ReserveBacking() {
-			changes += ins.promoteCandidate(i, i)
-			continue
-		}
-		// Try find whatever possible
-		for ; alters < len(ins.candidates); alters++ {
-			if ins.candidates[alters].ReserveBacking() {
-				changes += ins.promoteCandidate(i, alters)
-				break
-			}
-		}
-		// Nothing left
-		if alters == len(ins.candidates) {
-			break
-		}
-	}
-	if len(ins.backups) != lastnum {
-		// The difference of total changes everything.
-		changes = len(ins.backups)
-	}
+	// Reserve available backups
+	changes := ins.backups.Reserve(nil)
 
 	// Start backups.
 	var msg strings.Builder
-	for i, candid := range ins.backups {
-		candid.StartBacking(ins, i, len(ins.backups))
+	for i := 0; i < ins.backups.Len(); i++ {
 		msg.WriteString(" ")
-		msg.WriteString(strconv.FormatUint(candid.Id(), 10))
+		backup, ok := ins.backups.StartByIndex(i, ins)
+		if ok {
+			msg.WriteString(strconv.FormatUint(backup.Id(), 10))
+		} else {
+			msg.WriteString("N/A")
+		}
 	}
 
-	atomic.StoreUint32(&ins.recovering, uint32(len(ins.backups)))
-	if len(ins.backups) > 0 {
-		ins.log.Debug("Parallel recovery started with %d backup instances: %s, changes: %d", len(ins.backups), msg.String(), changes)
+	available := ins.backups.Availables()
+	atomic.StoreUint32(&ins.recovering, uint32(available))
+	if available > ins.backups.Len() / 2 {
+		ins.log.Debug("Parallel recovery started with %d backup instances:%s, changes: %d", available, msg.String(), changes)
+	} else if available == 0{
+		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
-		ins.log.Warn("Unable to start parallel recovery due to no backup instances available")
+		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%s, changes: %d", available, msg.String(), changes)
 	}
 
-	return len(ins.backups)
+	return available
 }
 
 // Resume serving
 func (ins *Instance) ResumeServing() {
 	ins.mu.Lock()
 	atomic.StoreUint32(&ins.recovering, 0)
-	for _, backup := range ins.backups {
-		backup.StopBacking(ins)
-	}
+	ins.backups.Stop(ins)
 	// Clear whitelist during fast recovery.
 	if ins.writtens.Len() > 0 {
 		ins.writtens = hashmap.New(TEMP_MAP_SIZE)
@@ -580,7 +558,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		Prefix: global.Options.Prefix,
 		Log:    global.Log.GetLevel(),
 		Flags:  global.Flags,
-		Backups:len(ins.candidates),
+		Backups:config.BackupsPerInstance,
 		Status: status,
 	}
 	if opt.WarmUp {
@@ -795,12 +773,17 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
-	ins.backups[bakId].chanPriorCmd <- req	 // Rerouted request should not be queued again.
-	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
+	// Thread safe
+	backup, ok := ins.backups.GetByHash(xxhash.Sum64([]byte(req.Key)))
+	if !ok {
+		// Backup is not available, can be recovered or simply not available.
+		return false
+	}
+
+	backup.chanPriorCmd <- req	 // Rerouted request should not be queued again.
+	ins.log.Debug("Rerouted %s to node %d as backup %d of %d.", req.Key, backup.Id(), backup.backingId, backup.backingTotal)
 	return true
 }
-
 
 func (ins *Instance) request(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
 	switch cmd.(type) {
@@ -926,21 +909,6 @@ func (ins *Instance) resetCoolTimer() {
 		}
 	}
 	ins.coolTimer.Reset(WarmTimout)
-}
-
-func (ins *Instance) promoteCandidate(dest int, src int) int {
-	if dest != src {
-		// Exchange candidates to keep the next elections get a stable result
-		ins.candidates[dest], ins.candidates[src] = ins.candidates[src], ins.candidates[dest]
-	}
-	ins.backups = ins.backups[:dest + 1]
-	change := ins.backups[dest] != nil && ins.backups[dest].Id() != ins.candidates[dest].Id()
-	ins.backups[dest] = ins.candidates[dest]
-	if change {
-		return 1
-	} else {
-		return 0
-	}
 }
 
 func (ins *Instance) CollectData() {
