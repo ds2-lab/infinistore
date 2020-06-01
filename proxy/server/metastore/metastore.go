@@ -1,4 +1,4 @@
-package server
+package metastore
 
 import (
 	"github.com/cornelk/hashmap"
@@ -7,17 +7,17 @@ import (
 type MetaPostProcess func(MetaDoPostProcess)
 
 //type MetaDoPostProcess func(*Meta)
-type MetaDoPostProcess func([]*Meta)
+type MetaDoPostProcess func(*Meta)
 
 type MetaStore struct {
 	metaMap *hashmap.HashMap
 }
 
-func NewMataStore() *MetaStore {
+func New() *MetaStore {
 	return &MetaStore{metaMap: hashmap.New(1024)}
 }
 
-func NewMataStoreWithCapacity(size uintptr) *MetaStore {
+func NewWithCapacity(size uintptr) *MetaStore {
 	return &MetaStore{metaMap: hashmap.New(size)}
 }
 

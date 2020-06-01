@@ -59,7 +59,7 @@ const (
 )
 
 var (
-	Registry              InstanceRegistry
+	IM                    InstanceManager
 	WarmTimout            = config.InstanceWarmTimout
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	MaxConnectTimeout     = 1 * time.Second
@@ -76,9 +76,10 @@ var (
 	}))
 )
 
-type InstanceRegistry interface {
+type InstanceManager interface {
 	Instance(uint64) (*Instance, bool)
-	Reroute(interface{}, int) *Instance
+	TryRelocate(interface{}, int) (*Instance, bool)
+	Relocate(interface{}, int) *Instance
 }
 
 type ValidateOption struct {
@@ -89,7 +90,6 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
-	BucketId     int64
 	ChunkCounter int
 	KeyMap       []string
 
@@ -133,7 +133,11 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 
 	return &Instance{
 		Deployment:    dp,
-		Meta:          Meta{Term: 1}, // Term start with 1 to avoid uninitialized term ambigulous.
+		Meta:          Meta{
+			Term:     1,
+			Capacity: global.Options.GetInstanceCapacity(),
+			size:     config.InstanceOverhead,
+		}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awake:         INSTANCE_SLEEP,
 		chanCmd:       make(chan types.Command, 1),
 		chanPriorCmd:  make(chan types.Command, 1),
@@ -144,7 +148,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 
-		KeyMap: make([]string, 0, 3000),
+		KeyMap:        make([]string, 0, 3000),
 	}
 }
 
@@ -897,7 +901,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				req.Cmd = protocol.CMD_RECOVER
 				req.RetCommand = protocol.CMD_GET
 				chunkId := req.Id.Chunk()
-				target := Registry.Reroute(req.Info, chunkId)
+				target := IM.Relocate(req.Info, chunkId)
 				req.InsId = target.Id()
 				req.Changes = req.Changes | types.CHANGE_PLACEMENT
 				ins.rerouteRequestWithTarget(req, target)

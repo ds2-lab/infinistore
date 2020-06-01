@@ -79,6 +79,7 @@ github.com/onsi/gomega v1.9.0/go.mod h1:Ho0h+IUsWyvy1OpqCwxlQ/21gkhVunqlU8fDGcoT
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/russross/blackfriday/v2 v2.0.1/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7 h1:XnGUZV4RnUhngAco2rrTC0Nh8i8TjuohWxNJZfylm24=
 github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7/go.mod h1:ET5mVvNjwaGXRgZxO9UZr7X+8eAf87AfIYNwRSp9s4Y=
 github.com/seiflotfy/cuckoofilter v0.0.0-20200416141329-862a88987de7 h1:bcqjj3Ltf0ox4J/ZtiH7+f/2ZwfkMpcm6eLHe/NSxxY=
 github.com/seiflotfy/cuckoofilter v0.0.0-20200416141329-862a88987de7/go.mod h1:ET5mVvNjwaGXRgZxO9UZr7X+8eAf87AfIYNwRSp9s4Y=

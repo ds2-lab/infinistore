@@ -22,6 +22,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/server"
+	"github.com/mason-leap-lab/infinicache/proxy/server/cluster"
 )
 
 var (
@@ -94,7 +95,7 @@ func main() {
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
-		dash.ConfigCluster(prxy.GetStatsProvider(), server.ExpireBucketsNum)
+		dash.ConfigCluster(prxy.GetStatsProvider(), cluster.ExpireBucketsNum)
 	}
 
 	// config server
@@ -155,7 +156,6 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
-	server.CleanUpScheduler()
 	if dash != nil {
 		dash.Update()
 		time.Sleep(time.Second)
@@ -172,7 +172,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
 	flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
-	// showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
+	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
 	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
 	flag.StringVar(&options.LogPath, "base", "", "Path to the log file.")
@@ -183,7 +183,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.Uint64Var(&options.FuncCapacity, "funcap", 0, "EVALUATION ONLY: Preset capacity(MB) of function instance.")
 
 	flag.Parse()
-	// options.NoDashboard = !*showDashboard
+	options.NoDashboard = !*showDashboard
 
 	if printInfo {
 		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
