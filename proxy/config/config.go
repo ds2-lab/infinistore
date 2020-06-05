@@ -10,7 +10,13 @@ const AWSRegion = "us-east-1"
 // LambdaMaxDeployments Number of Lambda function deployments available.
 const LambdaMaxDeployments = 400
 
+// Mode of cluster.
+const StaticCluster = "static"
+const WindowCluster = "window"
+const Cluster = StaticCluster
+
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
+// For window cluster, this must be at least D+P
 const NumLambdaClusters = 12
 
 // LambdaStoreName Obsoleted. Name of Lambda function for replica version.
@@ -27,13 +33,16 @@ const InstanceDegradeWarmTimout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const InstanceCapacity = 3008 * 1000000 // MB
+const DefaultInstanceCapacity = 3008 * 1000000 // MB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
 const InstanceOverhead = 100 * 1000000 // MB
 
 // Threshold Scaling out avg instance size threshold
-const Threshold = 0.8
+const Threshold = 0.8                  // Don't set beyond 0.8
+
+// Maximum chunk per instance
+const ChunkThreshold = 125000          // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = "" // Leave it empty if using VPC.
@@ -50,9 +59,6 @@ const BucketDuration = 10 // min
 
 // Async migrate control
 const ActiveReplica = 2 //min
-
-// Maximum chunk per instance
-const MaxChunk = 3000
 
 // ProxyList Ip addresses of proxies.
 var ProxyList []string

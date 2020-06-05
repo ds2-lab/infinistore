@@ -18,14 +18,33 @@ type CommandlineOptions struct {
 	NumBackups    int
 	NoFirstD      bool
 	FuncCapacity  uint64
+	FuncThreshold uint64
+	FuncChunkThreshold int
 }
 
 func (o *CommandlineOptions) GetInstanceCapacity() uint64 {
 	if o.FuncCapacity == 0 {
-		return config.InstanceCapacity
+		// Reset as default value
+		o.FuncCapacity = config.DefaultInstanceCapacity
 	} else if o.FuncCapacity < 128000000 {
-		return o.FuncCapacity * 1000000
-	} else {
-		return o.FuncCapacity
+		// Normalize to bytes
+		o.FuncCapacity = o.FuncCapacity * 1000000
 	}
+	return o.FuncCapacity
+}
+
+func (o *CommandlineOptions) GetInstanceThreshold() uint64 {
+	if o.FuncThreshold == 0 {
+		o.FuncThreshold = uint64(float64(o.GetInstanceCapacity()) * config.Threshold)
+	}
+
+	return o.FuncThreshold
+}
+
+func (o *CommandlineOptions) GetInstanceChunkThreshold() int {
+	if o.FuncChunkThreshold == 0 {
+		o.FuncChunkThreshold = int(o.GetInstanceCapacity() / config.ChunkThreshold)
+	}
+
+	return o.FuncChunkThreshold
 }

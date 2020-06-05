@@ -12,50 +12,49 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/mason-leap-lab/infinicache/proxy/server/cluster"
+	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
 )
 
 type Proxy struct {
 	log logger.ILogger
-	//group        *Group
-	movingWindow *MovingWindow
-	placer       *Placer
+	cluster  cluster.Cluster
+	placer   metastore.Placer
 
-	initialized int32
 	ready       sync.WaitGroup
 }
 
 // initial lambda group
 func New(replica bool) *Proxy {
 	p := &Proxy{
-		log: &logger.ColorLogger{
-			Prefix: "Proxy ",
-			Level:  global.Log.GetLevel(),
-			Color:  !global.Options.NoColor,
-		},
-		//group:        group,
-		movingWindow: NewMovingWindow(10, 1),
-		placer:       NewPlacer(NewMataStore()),
+		log:          global.GetLogger("Proxy: "),
 	}
+	switch config.Cluster {
+	case config.StaticCluster:
+		p.cluster = cluster.NewStaticCluster(config.NumLambdaClusters)
+	default:
+		p.cluster = cluster.NewMovingWindow(10, 1)
+	}
+	p.placer = p.cluster.GetPlacer()
 
-	p.placer.proxy = p
-	p.movingWindow.placer = p.placer
 	// first group init
-	p.movingWindow.start()
-
-	// start moving-window and auto-scaling Daemon
-	go p.movingWindow.Daemon()
-
-	lambdastore.Registry = p.movingWindow
+	err := p.cluster.Start()
+	if err != nil {
+		p.log.Error("Failed to start cluster: %v", err)
+	}
+	
+	lambdastore.IM = p.cluster
 
 	return p
 }
 
-func (p *Proxy) GetStatsProvider() types.GroupedClusterStats {
-	return p.movingWindow
+func (p *Proxy) GetStatsProvider() interface{} {
+	return p.cluster
 }
 
 func (p *Proxy) Serve(lis net.Listener) {
@@ -71,8 +70,7 @@ func (p *Proxy) Serve(lis net.Listener) {
 }
 
 func (p *Proxy) WaitReady() {
-	//p.ready.Wait()
-	p.movingWindow.waitReady()
+	p.cluster.WaitReady()
 	p.log.Info("[Proxy is ready]")
 }
 
@@ -81,11 +79,8 @@ func (p *Proxy) Close(lis net.Listener) {
 }
 
 func (p *Proxy) Release() {
-	for i, node := range p.movingWindow.group.All {
-		scheduler.Recycle(node.LambdaDeployment)
-		p.movingWindow.group.All[i] = nil
-	}
-	scheduler.Clear(p.movingWindow.group)
+	p.cluster.Close()
+	cluster.CleanUpPool()
 }
 
 // from client
@@ -120,28 +115,29 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	prepared := p.placer.NewMeta(
 		key, size, dataChunks, parityChunks, dChunkId, int64(bodyStream.Len()), int(lambdaId), int(randBase))
 
-	meta, _ := p.placer.GetOrInsert(key, prepared)
-
-	p.log.Debug("chunkId id is %v, placement is %v", chunkId, meta.Placement)
-	//if meta.Deleted {
-	//	// Object may be evicted in some cases:
-	//	// 1: Some chunks were set.
-	//	// 2: Placer evicted this object (unlikely).
-	//	// 3: We got evicted meta.
-	//	p.log.Warn("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
-	//	w.AppendErrorf("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
-	//	w.Flush()
-	//	return
-	//}
-	//if postProcess != nil {
-	//	postProcess(p.dropEvicted)
-	//}
+	meta, _, postProcess := p.placer.GetOrInsert(key, prepared)
+	if meta.Deleted {
+		// Object may be evicted in some cases:
+		// 1: Some chunks were set.
+		// 2: Placer evicted this object (unlikely).
+		// 3: We got evicted meta.
+		p.log.Warn("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
+		w.AppendErrorf("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
+		w.Flush()
+		return
+	}
+	if postProcess != nil {
+		postProcess(p.dropEvicted)
+	}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
 
+	p.log.Debug("chunkId id is %v, placement is %v", chunkId, meta.Placement)
+
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
-	p.movingWindow.group.Instance(lambdaDest).C() <- &types.Request{
+	instance, _ := p.cluster.Instance(uint64(lambdaDest))
+	instance.C() <- &types.Request{
 		Id:              types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
 		InsId:           uint64(lambdaDest),
 		Cmd:             protocol.CMD_SET,
@@ -179,7 +175,10 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
-	instance := p.movingWindow.group.Instance(lambdaDest)
+	instance, exists := p.cluster.Instance(uint64(lambdaDest))
+	if !exists {
+		// TODO: Need relocation
+	}
 
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	// Send request to lambda channel
@@ -218,7 +217,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			// the response of this cmd_recover's behavior is the same as cmd_get
 			fallthrough
 		case protocol.CMD_GET:
-			rsp.Size = wrapper.Request.Info.(*Meta).Size
+			rsp.Size = wrapper.Request.Info.(*metastore.Meta).Size
 			rsp.PrepareForGet(w)
 		case protocol.CMD_SET:
 			rsp.PrepareForSet(w)
@@ -250,7 +249,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// update placement at reroute
 		if wrapper.Request.Cmd == protocol.CMD_RECOVER {
 			if wrapper.Request.Changes&types.CHANGE_PLACEMENT > 0 {
-				meta := wrapper.Request.Info.(*Meta)
+				meta := wrapper.Request.Info.(*metastore.Meta)
 				meta.Placement[rsp.Id.Chunk()] = int(wrapper.Request.InsId)
 			}
 		}
@@ -258,13 +257,12 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// Async logic
 		if wrapper.Request.Cmd == protocol.CMD_GET {
 			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
-			instance, ok := p.movingWindow.Refresh(wrapper.Request.Info.(*Meta), wrapper.Request.Id.Chunk())
+			instance, ok := p.cluster.TryRelocate(wrapper.Request.Info, wrapper.Request.Id.Chunk())
 			if !ok {
 				return
 			}
 			recoverReqId := uuid.New().String()
 			p.log.Debug("selected instance id is %v", instance.Id())
-			//p.movingWindow.group.Instance(int(instanceId)).C() <- &types.Control{
 
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
@@ -286,43 +284,30 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		w.AppendErrorf("%v", rsp)
 		w.Flush()
 	}
-
 }
 
 func (p *Proxy) CollectData() {
-	// for _, ins := range p.movingWindow.group.All {
-	// 	p.log.Debug("active instance in proxy %v", ins.Name())
-	// }
-
-	for i, _ := range p.movingWindow.group.All {
-		// send data command
-		p.movingWindow.group.Instance(i).CollectData()
-	}
-	p.log.Info("Waiting data from Lambda")
-	global.DataCollected.Wait()
-	if err := collector.Flush(); err != nil {
-		p.log.Error("Failed to save data from lambdas: %v", err)
-	} else {
-		p.log.Info("Data collected.")
-	}
+	p.cluster.CollectData()
 }
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
 	instance := arg.(*lambdastore.Instance)
-	ctrl.Info.(*Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
+	ctrl.Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
 	p.log.Debug("async updated instance %v", int(instance.Id()))
 }
 
-func (p *Proxy) dropEvicted(meta *Meta) {
+func (p *Proxy) dropEvicted(meta *metastore.Meta) {
 	reqId := uuid.New().String()
 	for i, lambdaId := range meta.Placement {
-		instance := p.movingWindow.group.Instance(lambdaId)
-		instance.C() <- &types.Request{
-			Id:    types.Id{ConnId: 0, ReqId: reqId, ChunkId: strconv.Itoa(i)},
-			InsId: uint64(lambdaId),
-			Cmd:   protocol.CMD_DEL,
-			Key:   meta.ChunkKey(i),
-		}
+		instance, exists := p.cluster.Instance(uint64(lambdaId))
+		if exists {
+			instance.C() <- &types.Request{
+				Id:    types.Id{ConnId: 0, ReqId: reqId, ChunkId: strconv.Itoa(i)},
+				InsId: uint64(lambdaId),
+				Cmd:   protocol.CMD_DEL,
+				Key:   meta.ChunkKey(i),
+			}
+		} // Or it has been expired.
 	}
 	p.log.Warn("Evict %s", meta.Key)
 }

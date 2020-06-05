@@ -1,4 +1,4 @@
-package server
+package metastore
 
 import (
 	"fmt"
@@ -26,7 +26,7 @@ type Meta struct {
 	Deleted   bool
 
 	Balanced   int32
-	placerMeta *PlacerMeta
+	placerMeta interface{}
 	lastChunk  int64
 	mu         sync.Mutex
 }

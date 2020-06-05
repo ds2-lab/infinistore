@@ -41,3 +41,11 @@ func init() {
 func IsWarmupWithFixedInterval() bool {
 	return Flags & protocol.FLAG_FIXED_INTERVAL_WARMUP > 0
 }
+
+func GetLogger(prefix string) logger.ILogger {
+	return &logger.ColorLogger{
+		Prefix: prefix,
+		Level:  Log.GetLevel(),
+		Color:  !Options.NoColor,
+	}
+}
