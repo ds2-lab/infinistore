@@ -133,7 +133,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 // New get API, not size is required.
 // Internal error if the bool is set to false
-func (c *Client) Get(key string) (io.ReadCloser, bool) {
+func (c *Client) Get(key string) (ReadAllCloser, bool) {
 	_, reader, ok := c.EcGet(key, 0)
 	return reader, ok
 }
@@ -539,9 +539,8 @@ func (r *JoinReader) Len() int {
 
 func (r *JoinReader) ReadAll() (buf []byte, err error) {
 	buf = make([]byte, r.Len())
-	n, err := io.ReadFull(r.ReadCloser, buf)
-	r.read += n
-	r.ReadCloser.Close()
+	_, err = io.ReadFull(r, buf)
+	r.Close()
 	return
 }
 
