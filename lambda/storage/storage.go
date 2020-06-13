@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"compress/gzip"
+
 	// "context"
 	"crypto/sha256"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+
 	// "strings"
 	"sync"
 	"sync/atomic"
@@ -233,10 +235,12 @@ func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpW
 	}
 }
 
+// Set chunk
 func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 	return s.setImpl(key, chunkId, val, nil)
 }
 
+// Set chunk using stream
 func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) *types.OpRet {
 	val, err := valReader.ReadAll()
 	if err != nil {
@@ -1384,10 +1388,16 @@ func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter chan *S3BatchDo
 		for err := range chanErr {
 			errs = append(errs, err)
 		}
+		wg.Done()
 	}()
 
 	wg.Wait()
+
+	// Wait for chanErr
+	wg.Add(1)
 	close(chanErr)
+	wg.Wait()
+
 	if len(errs) > 0 {
 		return s3manager.NewBatchError("BatchedDownloadIncomplete", "some objects have failed to download.", errs)
 	}
