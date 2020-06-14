@@ -2,16 +2,17 @@ package client
 
 import (
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/klauspost/reedsolomon"
 )
 
 var (
-	ErrNotImplemented = errors.New("Not implemented")
+	// ErrNotImplemented The error indicates specified function is not implemented.
+	ErrNotImplemented = errors.New("not implemented")
 )
 
+// NewEncoder Helper function to create a encoder
 func NewEncoder(dataShards int, parityShards int, ecMaxGoroutine int) reedsolomon.Encoder {
 	if parityShards == 0 {
 		return &DummyEncoder{DataShards: dataShards}
@@ -19,19 +20,23 @@ func NewEncoder(dataShards int, parityShards int, ecMaxGoroutine int) reedsolomo
 
 	enc, err := reedsolomon.New(dataShards, parityShards, reedsolomon.WithMaxGoroutines(ecMaxGoroutine))
 	if err != nil {
-		fmt.Println("newEncoder err", err)
+		log.Error("newEncoder err", err)
+		return nil
 	}
 	return enc
 }
 
+// DummyEncoder Dummpy encoder to support 0 parity.
 type DummyEncoder struct {
 	DataShards int
 }
 
+// Encode reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Encode(shards [][]byte) error {
 	return nil
 }
 
+// Verify reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Verify(shards [][]byte) (bool, error) {
 	if len(shards) != enc.DataShards {
 		return false, reedsolomon.ErrTooFewShards
@@ -45,20 +50,24 @@ func (enc *DummyEncoder) Verify(shards [][]byte) (bool, error) {
 	return true, nil
 }
 
+// Reconstruct reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Reconstruct(shards [][]byte) (err error) {
 	_, err = enc.Verify(shards)
 	return
 }
 
+// ReconstructData reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) ReconstructData(shards [][]byte) (err error) {
 	_, err = enc.Verify(shards)
 	return
 }
 
+// Update reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Update(shards [][]byte, newDatashards [][]byte) error {
 	return ErrNotImplemented
 }
 
+// Split reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Split(data []byte) ([][]byte, error) {
 	if len(data) == 0 {
 		return nil, reedsolomon.ErrShortData
@@ -81,6 +90,7 @@ func (enc *DummyEncoder) Split(data []byte) ([][]byte, error) {
 	return dst, nil
 }
 
+// Join reedsolomon.Encoder implmentation
 func (enc *DummyEncoder) Join(dst io.Writer, shards [][]byte, outSize int) error {
 	// Do we have enough shards?
 	if len(shards) < enc.DataShards {

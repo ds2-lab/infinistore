@@ -26,14 +26,16 @@ var (
 
 // Options Options definition
 type Options struct {
-	path        string
-	output      string
-	merge       bool
-	processor   string
-	fileFilter  string
-	fileMatcher *regexp.Regexp
-	lineFilter  string
-	lineMatcher *regexp.Regexp
+	path            string
+	output          string
+	merge           bool
+	processor       string
+	fileFilter      string
+	fileMatcher     *regexp.Regexp
+	lineFilter      string
+	lineMatcher     *regexp.Regexp
+	lastLineFilter  string
+	lastLineMatcher *regexp.Regexp
 }
 
 func main() {
@@ -132,6 +134,7 @@ func checkUsage(options *Options) {
 	flag.StringVar(&options.processor, "processor", "csv", "Function to process one file: csv, nanolog, recovery.")
 	flag.StringVar(&options.fileFilter, "filter-files", "", "Regexp to filter files to process.")
 	flag.StringVar(&options.lineFilter, "filter-lines", "", "Regexp to filter lines to output.")
+	flag.StringVar(&options.lastLineFilter, "filter-previous-line", "", "Regexp to filter lines that has specified previous line to output.")
 
 	flag.Parse()
 
@@ -146,14 +149,19 @@ func checkUsage(options *Options) {
 
 	if options.fileFilter != "" {
 		options.fileMatcher = regexp.MustCompile(options.fileFilter)
-		log.Info("Will filter files with %v", options.fileMatcher)
+		log.Info("Will filter files matching %v", options.fileMatcher)
 	} else if options.processor == "recovery" {
 		options.fileMatcher = recoveryFilenameMatcher
 	}
 
 	if options.lineFilter != "" {
 		options.lineMatcher = regexp.MustCompile(options.lineFilter)
-		log.Info("Will filter lines with %v", options.lineMatcher)
+		log.Info("Will filter lines matching %v", options.lineMatcher)
+	}
+
+	if options.lastLineFilter != "" {
+		options.lastLineMatcher = regexp.MustCompile(options.lastLineFilter)
+		log.Info("Will filter last line matching %v", options.lastLineMatcher)
 	}
 }
 
@@ -229,13 +237,19 @@ func nanologProcessor(df string, file io.Writer, prepend string, opts *Options) 
 
 	s := bufio.NewScanner(reader)
 	s.Split(bufio.ScanLines)
+	lastLine := ""
 	for s.Scan() {
 		line := s.Text()
+		last := lastLine
+		lastLine = line
 
 		if len(line) == 0 {
 			continue
 		}
 		if opts.lineMatcher != nil && !opts.lineMatcher.Match([]byte(line)) {
+			continue
+		}
+		if opts.lastLineMatcher != nil && !opts.lastLineMatcher.Match([]byte(last)) {
 			continue
 		}
 		io.WriteString(file, prepend)
