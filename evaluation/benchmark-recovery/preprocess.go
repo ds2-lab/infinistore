@@ -40,17 +40,35 @@ func main() {
 	options := &Options{}
 	checkUsage(options)
 
+	flags := os.O_CREATE | os.O_WRONLY
+	if options.merge {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(options.output, flags, 0644)
+	if err != nil {
+		panic(err)
+		return
+	}
+	defer file.Close()
+
 	all := make(chan string, 1)
-	if err := collectAll(options.output, all, options); err != nil {
-		log.Error("%v", all)
-		os.Exit(1)
-	}
+	go func() {
+		root, err := os.Stat(options.path)
+		if err != nil {
+			log.Error("Error on get stat %s: %v", options.path, err)
+		} else if !root.IsDir() {
+			log.Info("Collecting %s", options.path)
+			all <- options.path
+		} else if err := iterateDir(options.path, options.fileMatcher, all); err != nil {
+			log.Error("Error on iterating path: %v", err)
+		}
 
-	if err := iterateDir(options.path, options.fileMatcher, all); err != nil {
-		log.Error("Error on iterating path: %v", err)
-	}
+		close(all)
+	}()
 
-	close(all)
+	collectAll(all, file, options)
 }
 
 func iterateDir(root string, filter *regexp.Regexp, collectors ...chan string) error {
@@ -75,50 +93,33 @@ func iterateDir(root string, filter *regexp.Regexp, collectors ...chan string) e
 	return nil
 }
 
-func collectAll(output string, dataFiles chan string, opts *Options) error {
-	flags := os.O_CREATE | os.O_WRONLY
-	if opts.merge {
-		flags |= os.O_APPEND
-	} else {
-		flags |= os.O_TRUNC
-	}
-	file, err := os.OpenFile(output, flags, 0644)
-	if err != nil {
-		return err
-	}
+func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
+	writeTitle(file, opts)
+	for df := range dataFiles {
+		prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
 
-	go func() {
-		defer file.Close()
+		var err error
+		switch opts.processor {
+		case "csv":
+			err = csvProcessor(df, file, prepend, opts)
+		case "nanolog":
+			err = nanologProcessor(df, file, prepend, opts)
+		case "recovery":
+			err = recoveryProcessor(df, file, prepend, opts)
+		default:
 
-		writeTitle(file, opts)
-		for df := range dataFiles {
-			prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
-
-			var err error
-			switch opts.processor {
-			case "csv":
-				err = csvProcessor(df, file, prepend, opts)
-			case "nanolog":
-				err = nanologProcessor(df, file, prepend, opts)
-			case "recovery":
-				err = recoveryProcessor(df, file, prepend, opts)
-			default:
-
-				log.Error("Unsupported processor: %s", opts.processor)
-				return
-			}
-			if err != nil {
-				log.Warn("Failed to process %s: %v", df, err)
-			}
+			log.Error("Unsupported processor: %s", opts.processor)
+			return
 		}
-	}()
-
-	return nil
+		if err != nil {
+			log.Warn("Failed to process %s: %v", df, err)
+		}
+	}
 }
 
-func writeTitle(f *os.File, opts *Options) {
+func writeTitle(f io.Writer, opts *Options) {
 	if opts.processor == "recovery" {
-		f.WriteString("no,mem,numbackups,objsize,interval,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
+		io.WriteString(f, "no,mem,numbackups,objsize,interval,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
 	}
 }
 
@@ -230,6 +231,7 @@ func nanologProcessor(df string, file io.Writer, prepend string, opts *Options) 
 	s.Split(bufio.ScanLines)
 	for s.Scan() {
 		line := s.Text()
+
 		if len(line) == 0 {
 			continue
 		}
