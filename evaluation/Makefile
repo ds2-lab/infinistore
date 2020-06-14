@@ -6,12 +6,11 @@ prepare:
 	mkdir -p bin/
 
 build: prepare
-	go build ../proxy/
-	mv proxy bin/
+	go build -o bin/proxy ../proxy/
+	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
-	go build $(GOPATH)/src/github.com/wangaoone/redbench/
-	mv redbench bin/
+	go build -o bin/redbench ${GOPATH}/src/github.com/wangaoone/redbench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &

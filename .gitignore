@@ -10,3 +10,4 @@ evaluation/downloaded
 evaluation/data
 log
 *.clog
+evaluation/bin
