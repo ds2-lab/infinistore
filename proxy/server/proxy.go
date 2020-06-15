@@ -12,27 +12,27 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/server/cluster"
 	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Proxy struct {
-	log logger.ILogger
-	cluster  cluster.Cluster
-	placer   metastore.Placer
+	log     logger.ILogger
+	cluster cluster.Cluster
+	placer  metastore.Placer
 
-	ready       sync.WaitGroup
+	ready sync.WaitGroup
 }
 
 // initial lambda group
 func New(replica bool) *Proxy {
 	p := &Proxy{
-		log:          global.GetLogger("Proxy: "),
+		log: global.GetLogger("Proxy: "),
 	}
 	switch config.Cluster {
 	case config.StaticCluster:
@@ -47,7 +47,7 @@ func New(replica bool) *Proxy {
 	if err != nil {
 		p.log.Error("Failed to start cluster: %v", err)
 	}
-	
+
 	lambdastore.IM = p.cluster
 
 	return p
@@ -83,7 +83,7 @@ func (p *Proxy) Release() {
 	cluster.CleanUpPool()
 }
 
-// from client
+// HandleSet "set chunk" handler
 func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
@@ -107,9 +107,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 
 	// Start counting time.
-	if err := collector.Collect(collector.LogStart, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano()); err != nil {
-		p.log.Warn("Fail to record start of request: %v", err)
-	}
+	collectEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano())
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.placer.NewMeta(
@@ -138,20 +136,21 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	instance, _ := p.cluster.Instance(uint64(lambdaDest))
 	instance.C() <- &types.Request{
-		Id:              types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
-		InsId:           uint64(lambdaDest),
-		Cmd:             protocol.CMD_SET,
-		Key:             chunkKey,
-		BodyStream:      bodyStream,
-		Client:          client,
-		EnableCollector: true,
-		Info:            meta,
+		Id:             types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
+		InsId:          uint64(lambdaDest),
+		Cmd:            protocol.CMD_SET,
+		Key:            chunkKey,
+		BodyStream:     bodyStream,
+		Client:         client,
+		CollectorEntry: collectEntry,
+		Info:           meta,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 	temp, _ := p.placer.Get(key, int(dChunkId))
 	p.log.Debug("get test placement is %v", temp.Placement)
 }
 
+// HandleGet "get chunk" handler
 func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
@@ -161,9 +160,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
 	// Start couting time.
-	if err := collector.Collect(collector.LogStart, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano()); err != nil {
-		p.log.Warn("Fail to record start of request: %v", err)
-	}
+	collectorEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano())
 
 	// key is "key"+"chunkId"
 	meta, ok := p.placer.Get(key, int(dChunkId))
@@ -185,13 +182,13 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 
 	req := &types.Request{
-		Id:              types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
-		InsId:           uint64(lambdaDest),
-		Cmd:             protocol.CMD_GET,
-		Key:             chunkKey,
-		Client:          client,
-		EnableCollector: true,
-		Info:            meta,
+		Id:             types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
+		InsId:          uint64(lambdaDest),
+		Cmd:            protocol.CMD_GET,
+		Key:            chunkKey,
+		Client:         client,
+		CollectorEntry: collectorEntry,
+		Info:           meta,
 	}
 	counter.Requests[dChunkId] = req
 
@@ -206,6 +203,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 }
 
+// HandleCallback callback handler
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	wrapper := r.(*types.ProxyResponse)
 	switch rsp := wrapper.Response.(type) {
@@ -239,11 +237,9 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		//	"Server Flush time is", time2,
 		//	"Chunk body len is ", len(rsp.Body))
 		tgg := time.Now()
-		if wrapper.Request.EnableCollector {
-			err := collector.Collect(collector.LogServer2Client, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano())
-			if err != nil {
-				p.log.Warn("LogServer2Client err %v", err)
-			}
+		if _, err := collector.CollectRequest(collector.LogServer2Client, wrapper.Request.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId,
+			int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano()); err != nil {
+			p.log.Warn("LogServer2Client err %v", err)
 		}
 
 		// update placement at reroute
@@ -267,7 +263,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
 				Request: &types.Request{
-					Id:         types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId,},
+					Id:         types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
 					InsId:      instance.Id(),
 					Cmd:        protocol.CMD_RECOVER,
 					RetCommand: protocol.CMD_RECOVER,
@@ -286,6 +282,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	}
 }
 
+// CollectData Trigger data collection.
 func (p *Proxy) CollectData() {
 	p.cluster.CollectData()
 }

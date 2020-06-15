@@ -111,13 +111,13 @@ type Instance struct {
 	sessions *hashmap.HashMap
 
 	// Backup fields
-	backups       Backups
-	recovering    uint32            // # of backups in use, also if the recovering > 0, the instance is recovering.
-	writtens      *hashmap.HashMap  // Whitelist, write opertions will be added to it during parallel recovery.
-	backing       uint32            // backing status, 0 for non backing, 1 for reserved, 2 for backing.
-	backingIns    *Instance
-	backingId     int               // Identifier for backup, ranging from [0, # of backups)
-	backingTotal  int               // Total # of backups ready for backing instance.
+	backups      Backups
+	recovering   uint32           // # of backups in use, also if the recovering > 0, the instance is recovering.
+	writtens     *hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
+	backing      uint32           // backing status, 0 for non backing, 1 for reserved, 2 for backing.
+	backingIns   *Instance
+	backingId    int // Identifier for backup, ranging from [0, # of backups)
+	backingTotal int // Total # of backups ready for backing instance.
 	doneBacking  sync.WaitGroup
 }
 
@@ -132,8 +132,8 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 	close(chanValidated)
 
 	return &Instance{
-		Deployment:    dp,
-		Meta:          Meta{
+		Deployment: dp,
+		Meta: Meta{
 			Term:     1,
 			Capacity: global.Options.GetInstanceCapacity(),
 			size:     config.InstanceOverhead,
@@ -148,7 +148,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 
-		KeyMap:        make([]string, 0, 3000),
+		KeyMap: make([]string, 0, 3000),
 	}
 }
 
@@ -286,9 +286,9 @@ func (ins *Instance) startRecoveryLocked() int {
 
 	available := ins.backups.Availables()
 	atomic.StoreUint32(&ins.recovering, uint32(available))
-	if available > ins.backups.Len() / 2 {
+	if available > ins.backups.Len()/2 {
 		ins.log.Debug("Parallel recovery started with %d backup instances:%s, changes: %d", available, msg.String(), changes)
-	} else if available == 0{
+	} else if available == 0 {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
 		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%s, changes: %d", available, msg.String(), changes)
@@ -859,7 +859,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	backup.chanPriorCmd <- req	 // Rerouted request should not be queued again.
+	backup.chanPriorCmd <- req // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d of %d.", req.Key, backup.Id(), backup.backingId, backup.backingTotal)
 	return true
 }
@@ -876,12 +876,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 		req := cmd.(*types.Request)
 
 		cmd := strings.ToLower(req.Cmd)
-		if req.EnableCollector {
-			err := collector.Collect(collector.LogValidate, cmd, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
-			if err != nil {
-				ins.log.Warn("Fail to record validate duration: %v", err)
-			}
-		}
+		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), cmd, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
 
 		switch cmd {
 		case protocol.CMD_SET: /*set or two argument cmd*/

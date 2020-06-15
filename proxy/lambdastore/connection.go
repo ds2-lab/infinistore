@@ -41,8 +41,8 @@ type Connection struct {
 
 func NewConnection(c net.Conn) *Connection {
 	conn := &Connection{
-		Conn:  c,
-		log: defaultConnectionLog,
+		Conn: c,
+		log:  defaultConnectionLog,
 		// wrap writer and reader
 		w:        resp.NewRequestWriter(c),
 		r:        resp.NewResponseReader(c),
@@ -338,8 +338,8 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		req, _ := conn.SetResponse(rsp)
-		if req != nil && req.EnableCollector {
-			err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
+		if req != nil {
+			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 			if err != nil {
 				conn.log.Warn("LogProxy err %v", err)
 			}
@@ -365,11 +365,8 @@ func (conn *Connection) getHandler(start time.Time) {
 	if req, ok := conn.SetResponse(rsp); !ok {
 		// Failed to set response, release hold.
 		rsp.BodyStream.(resp.Holdable).Unhold()
-	} else if req.EnableCollector {
-		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
-		if err != nil {
-			conn.log.Warn("LogProxy err %v", err)
-		}
+	} else {
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 	}
 	// Abandon rest chunks.
 	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
@@ -394,11 +391,8 @@ func (conn *Connection) setHandler(start time.Time) {
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
 	req, ok := conn.SetResponse(rsp)
-	if ok && req.EnableCollector {
-		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
-		if err != nil {
-			conn.log.Warn("LogProxy err %v", err)
-		}
+	if ok {
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 	}
 }
 

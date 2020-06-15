@@ -21,20 +21,20 @@ const (
 )
 
 type Request struct {
-	Id              Id
-	InsId           uint64 // Instance the request targeted.
-	Cmd             string
-	Key             string
-	RetCommand      string
-	Body            []byte
-	BodyStream      resp.AllReadCloser
-	Client          *redeo.Client
-	EnableCollector bool
-	Info            interface{}
-	Changes         int
+	Id             Id
+	InsId          uint64 // Instance the request targeted.
+	Cmd            string
+	Key            string
+	RetCommand     string
+	Body           []byte
+	BodyStream     resp.AllReadCloser
+	Client         *redeo.Client
+	Info           interface{}
+	Changes        int
+	CollectorEntry interface{}
 
-	conn            Conn
-	status          uint32
+	conn             Conn
+	status           uint32
 	streamingStarted bool
 }
 
