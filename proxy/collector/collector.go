@@ -13,22 +13,28 @@ import (
 )
 
 var (
-	LastActivity     = time.Now()
+	Enable           bool
 	LogServer2Client nanolog.Handle
 	//LogServer        nanolog.Handle
 	//LogServerBufio   nanolog.Handle
-	LogProxy         nanolog.Handle = 10001
-	LogChunk         nanolog.Handle = 10002
-	LogStart         nanolog.Handle = 10003
-	LogLambda        nanolog.Handle = 10004
-	LogValidate      nanolog.Handle = 10005
-	LogEndtoEnd      nanolog.Handle = 20000
-	ErrorNoEntry     = errors.New("No collector log entry found.")
+	LogProxy           nanolog.Handle = 10001
+	LogChunk           nanolog.Handle = 10002
+	LogStart           nanolog.Handle = 10003
+	LogLambda          nanolog.Handle = 10004
+	LogValidate        nanolog.Handle = 10005
+	LogEndtoEnd        nanolog.Handle = 20000
+	ErrUnexpectedEntry                = errors.New("unexpected log entry")
 
-	logMu   sync.Mutex
-	ticker  *time.Ticker
-	stopped bool
-	reqMap  = make(map[string]*dataEntry)
+	logMu        sync.Mutex
+	ticker       *time.Ticker
+	stopped      bool
+	lastActivity = time.Now()
+	pool         = sync.Pool{
+		New: func() interface{} {
+			return &DataEntry{}
+		},
+	}
+	defaultDataEntry DataEntry
 )
 
 func init() {
@@ -52,11 +58,12 @@ func Create(prefix string) {
 		panic(err)
 	}
 
+	Enable = true
 	go func() {
 		ticker = time.NewTicker(1 * time.Second)
 		for {
 			<-ticker.C
-			if stopped || time.Since(LastActivity) >= 10*time.Second {
+			if stopped || time.Since(lastActivity) >= 10*time.Second {
 				if err := nanolog.Flush(); err != nil {
 					global.Log.Warn("Failed to save data: %v", err)
 				}
@@ -79,7 +86,7 @@ func Flush() error {
 	return nanolog.Flush()
 }
 
-type dataEntry struct {
+type DataEntry struct {
 	cmd           string
 	reqId         string
 	chunkId       string
@@ -92,66 +99,74 @@ type dataEntry struct {
 	appendBulk    int64
 	flush         int64
 	validate      int64
+	mu            sync.Mutex
+}
+
+func (e *DataEntry) reset() *DataEntry {
+	e.cmd = ""
+	e.reqId = ""
+	e.chunkId = ""
+	e.start = 0
+	e.duration = 0
+	e.firstByte = 0
+	e.lambda2Server = 0
+	e.server2Client = 0
+	e.readBulk = 0
+	e.appendBulk = 0
+	e.flush = 0
+	e.validate = 0
+	return e
 }
 
 func Collect(handle nanolog.Handle, args ...interface{}) error {
-	LastActivity = time.Now()
-	if handle == LogStart {
-		key := fmt.Sprintf("%s-%s-%s", args[0], args[1], args[2])
-		logMu.Lock()
-		reqMap[key] = &dataEntry{
-			cmd:     args[0].(string),
-			reqId:   args[1].(string),
-			chunkId: args[2].(string),
-			start:   args[3].(int64),
-		}
-		logMu.Unlock()
-		return nil
-	} else if handle == LogProxy {
-		key := fmt.Sprintf("%s-%s-%s", args[0], args[1], args[2])
-		logMu.Lock()
-		entry, exist := reqMap[key]
-		logMu.Unlock()
+	lastActivity = time.Now()
+	return nanolog.Log(handle, args...)
+}
 
-		if !exist {
-			return ErrorNoEntry
-		}
+func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}) (*DataEntry, error) {
+	lastActivity = time.Now()
+	if !Enable {
+		return nil, nil
+	}
+
+	if handle == LogStart {
+		entry := pool.Get().(*DataEntry).reset()
+		entry.cmd = args[0].(string)
+		entry.reqId = args[1].(string)
+		entry.chunkId = args[2].(string)
+		entry.start = args[3].(int64)
+		return entry, nil
+	} else if handle == LogValidate {
+		entry.validate = args[3].(int64)
+		return entry, nil
+	} else if handle == LogProxy {
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
 		entry.firstByte = args[3].(int64) - entry.start
-		args[3] = entry.firstByte
 		entry.lambda2Server = args[4].(int64)
 		entry.readBulk = args[5].(int64)
-		return nil
-	} else if handle == LogServer2Client {
-		key := fmt.Sprintf("%s-%s-%s", args[0], args[1], args[2])
-		logMu.Lock()
-		entry, exist := reqMap[key]
-		//delete(reqMap, key)
-		logMu.Unlock()
-
-		if !exist {
-			return ErrorNoEntry
+		// For late request, duration must be set.
+		if entry.duration == 0 {
+			return entry, nil
 		}
+	} else if handle == LogServer2Client {
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
 		entry.server2Client = args[3].(int64)
 		entry.appendBulk = args[4].(int64)
 		entry.flush = args[5].(int64)
 		entry.duration = args[6].(int64) - entry.start
-
-		return nanolog.Log(LogChunk, fmt.Sprintf("%schunk", entry.cmd), entry.reqId, entry.chunkId,
-			entry.start, entry.duration,
-			entry.firstByte, entry.lambda2Server, entry.server2Client,
-			entry.readBulk, entry.appendBulk, entry.flush, entry.validate)
-	} else if handle == LogValidate {
-		key := fmt.Sprintf("%s-%s-%s", args[0], args[1], args[2])
-		logMu.Lock()
-		entry, exist := reqMap[key]
-		logMu.Unlock()
-
-		if !exist {
-			return ErrorNoEntry
+		// For normal request, firstByte must be set.
+		if entry.firstByte == 0 {
+			return entry, nil
 		}
-		entry.validate = args[3].(int64)
-		return nil
+	} else {
+		return nil, ErrUnexpectedEntry
 	}
 
-	return nanolog.Log(handle, args...)
+	pool.Put(entry)
+	return nil, nanolog.Log(LogChunk, fmt.Sprintf("%schunk", entry.cmd), entry.reqId, entry.chunkId,
+		entry.start, entry.duration,
+		entry.firstByte, entry.lambda2Server, entry.server2Client,
+		entry.readBulk, entry.appendBulk, entry.flush, entry.validate)
 }
