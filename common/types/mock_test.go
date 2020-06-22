@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	shortcutAddress = "shortcut:%s"
+	shortcutAddress = "shortcut:%d:%s"
 )
 
 var _ = Describe("Mock", func() {
@@ -52,11 +52,11 @@ var _ = Describe("Mock", func() {
 		ip := "10.23.4.5"
 		fullip := ip + ":6378"
 
-		addr, ok := shortcut.Validate(fmt.Sprintf(shortcutAddress, ip))
+		addr, ok := shortcut.Validate(fmt.Sprintf(shortcutAddress, 1, ip))
 		Expect(ok).To(Equal(true))
 		Expect(addr).To(Equal(ip))
 
-		addr, ok = shortcut.Validate(fmt.Sprintf(shortcutAddress, fullip))
+		addr, ok = shortcut.Validate(fmt.Sprintf(shortcutAddress, 1, fullip))
 		Expect(ok).To(Equal(true))
 		Expect(addr).To(Equal(fullip))
 

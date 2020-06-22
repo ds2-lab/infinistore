@@ -119,7 +119,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
-	shortcut := protocol.Shortcut.Prepare(a.localAddr, a.d + a.p)
+	shortcut := protocol.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d + a.p)
 	if shortcut.Client == nil {
 		var addresses []string
 		if len(a.addresses) == 0 {
