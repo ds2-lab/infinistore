@@ -17,13 +17,14 @@ import (
 )
 
 type RedisAdapter struct {
-	server    *redeo.Server
-	proxy     *Proxy
-	d         int
-	p         int
-	addresses []string
-	local     int
-	log       logger.ILogger
+	server       *redeo.Server
+	proxy        *Proxy
+	d            int
+	p            int
+	addresses    []string
+	localAddr    string
+	localIdx     int
+	log          logger.ILogger
 }
 
 var (
@@ -34,10 +35,10 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 	protocol.InitShortcut()
 
 	addresses := config.ProxyList
-	localhost := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
+	localAddr := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
 	included := -1
 	for i, address := range addresses {
-		if address == localhost {
+		if address == localAddr {
 			included = i
 			break
 		}
@@ -53,7 +54,8 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 		d:         d,
 		p:         p,
 		addresses: addresses,
-		local:     included,
+		localAddr: localAddr,
+		localIdx:  included,
 		log: &logger.ColorLogger{
 			Prefix: "RedisAdapter ",
 			Level:  global.Log.GetLevel(),
@@ -118,7 +120,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
-	shortcut := protocol.Shortcut.Prepare(int(redeoClient.ID()), a.d+a.p)
+	shortcut := protocol.Shortcut.Prepare(a.localAddr, a.d + a.p)
 	if shortcut.Client == nil {
 		var addresses []string
 		if len(a.addresses) == 0 {
@@ -126,7 +128,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 		} else {
 			addresses = make([]string, len(a.addresses))
 			copy(addresses, a.addresses)
-			addresses[a.local] = shortcut.Address
+			addresses[a.localIdx] = shortcut.Address
 		}
 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
