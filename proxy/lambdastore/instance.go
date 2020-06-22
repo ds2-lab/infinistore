@@ -849,6 +849,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 
 	// Written keys during recovery will not be rerouted.
 	if _, ok := ins.writtens.Get(req.Key); ok {
+		ins.log.Debug("Detected reroute override for key %s", req.Key)
 		return false
 	}
 
@@ -883,6 +884,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			req.PrepareForSet(conn)
 			// If parallel recovery is triggered, record keys set during recovery.
 			if ins.IsRecovering() {
+				ins.log.Debug("Override rerouting for key %s due to set", req.Key)
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_GET: /*get or one argument cmd*/
@@ -915,6 +917,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 		case protocol.CMD_DEL:
 			req.PrepareForDel(conn)
 			if ins.IsRecovering() {
+				ins.log.Debug("Override rerouting for key %s due to del", req.Key)
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
@@ -954,6 +957,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 		case protocol.CMD_DEL:
 			ctrl.PrepareForDel(conn)
 			if ins.IsRecovering() {
+				ins.log.Debug("Override rerouting for key %s due to del", ctrl.Request.Key)
 				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
