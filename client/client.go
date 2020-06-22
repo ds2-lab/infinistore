@@ -80,14 +80,16 @@ func (c *Client) Dial(addrArr []string) bool {
 	}
 	members := make([]consistent.Member, len(addrArr))
 	for i, addr := range addrArr {
-		members[i] = Member(addr)
 		log.Debug("Dialing %s...", addr)
-		if err := c.initDial(addr); err != nil {
+		newaddr, err := c.initDial(addr)
+		members[i] = Member(newaddr)
+		if err != nil {
 			log.Error("Fail to dial %s: %v", addr, err)
 			c.Close()
 			return false
 		}
 	}
+	log.Debug("Creating consistent ring %v...", members)
 	c.Ring = consistent.New(members, cfg)
 	//time0 := time.Since(t0)
 	//fmt.Println("Dial all goroutines are done!")
@@ -98,16 +100,20 @@ func (c *Client) Dial(addrArr []string) bool {
 }
 
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
-func (c *Client) initDial(address string) (err error) {
+func (c *Client) initDial(address string) (addr string, err error) {
 	// initialize parallel connections under address
 	connect := c.connect
-	if protocol.Shortcut.Validate(address) {
+	addr, ok := protocol.Shortcut.Validate(address)
+	if ok {
 		connect = c.connectShortcut
+	} else {
+		addr = address
 	}
-	c.Conns[address], err = connect(address, c.Shards)
+	// Connect use original address
+	c.Conns[addr], err = connect(address, c.Shards)
 	if err == nil {
 		// initialize the cuckoo filter under address
-		c.MappingTable[address] = cuckoo.NewFilter(1000000)
+		c.MappingTable[addr] = cuckoo.NewFilter(1000000)
 	}
 	return
 }

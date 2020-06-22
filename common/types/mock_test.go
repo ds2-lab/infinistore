@@ -1,12 +1,18 @@
 package types_test
 
 import (
+	"fmt"
 	mock "github.com/jordwest/mock-conn"
 	"github.com/mason-leap-lab/redeo/resp"
 	"log"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	. "github.com/mason-leap-lab/infinicache/common/types"
+)
+
+var (
+	shortcutAddress = "shortcut:%s"
 )
 
 var _ = Describe("Mock", func() {
@@ -39,5 +45,23 @@ var _ = Describe("Mock", func() {
 
 		response, _ := rspReader.ReadInlineString()
 		Expect(response).To(Equal("pong"))
+	})
+
+	It("should Validate recognize shortcut", func() {
+		shortcut := InitShortcut()
+		ip := "10.23.4.5"
+		fullip := ip + ":6378"
+
+		addr, ok := shortcut.Validate(fmt.Sprintf(shortcutAddress, ip))
+		Expect(ok).To(Equal(true))
+		Expect(addr).To(Equal(ip))
+
+		addr, ok = shortcut.Validate(fmt.Sprintf(shortcutAddress, fullip))
+		Expect(ok).To(Equal(true))
+		Expect(addr).To(Equal(fullip))
+
+		addr, ok = shortcut.Validate(fullip)
+		Expect(ok).To(Equal(false))
+		Expect(addr).To(Equal(""))
 	})
 })
