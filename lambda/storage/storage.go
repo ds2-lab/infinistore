@@ -925,6 +925,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 			inputs <- input
 			from++
 		}
+		close(inputs)
 	}(from)
 
 
