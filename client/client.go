@@ -7,7 +7,7 @@ import (
 	"github.com/buraksezer/consistent"
 	"github.com/klauspost/reedsolomon"
 	"github.com/mason-leap-lab/redeo/resp"
-	cuckoo "github.com/seiflotfy/cuckoofilter"
+	// cuckoo "github.com/seiflotfy/cuckoofilter"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
@@ -15,13 +15,13 @@ import (
 // Client InfiniCache client
 type Client struct {
 	EC           reedsolomon.Encoder
-	MappingTable map[string]*cuckoo.Filter
 	Ring         *consistent.Consistent
 	DataShards   int
 	ParityShards int
 	Shards       int
 
 	conns    map[string][]*clientConn
+	// mappingTable map[string]*cuckoo.Filter
 	logEntry logEntry
 }
 
@@ -30,7 +30,7 @@ func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
 	return &Client{
 		conns:        make(map[string][]*clientConn),
 		EC:           NewEncoder(dataShards, parityShards, ecMaxGoroutine),
-		MappingTable: make(map[string]*cuckoo.Filter),
+		// mappingTable: make(map[string]*cuckoo.Filter),
 		DataShards:   dataShards,
 		ParityShards: parityShards,
 		Shards:       dataShards + parityShards,
@@ -48,14 +48,16 @@ func (c *Client) Dial(addrArr []string) bool {
 	}
 	members := make([]consistent.Member, len(addrArr))
 	for i, addr := range addrArr {
-		members[i] = clientMember(addr)
 		log.Debug("Dialing %s...", addr)
-		if err := c.initDial(addr); err != nil {
+		newaddr, err := c.initDial(addr)
+		members[i] = clientMember(newaddr)
+		if err != nil {
 			log.Error("Fail to dial %s: %v", addr, err)
 			c.Close()
 			return false
 		}
 	}
+	log.Debug("Creating consistent ring %v...", members)
 	c.Ring = consistent.New(members, cfg)
 	//time0 := time.Since(t0)
 	//fmt.Println("Dial all goroutines are done!")
@@ -77,17 +79,21 @@ func (c *Client) Close() {
 }
 
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
-func (c *Client) initDial(address string) (err error) {
+func (c *Client) initDial(address string) (addr string, err error) {
 	// initialize parallel connections under address
 	connect := c.connect
-	if protocol.Shortcut.Validate(address) {
+	addr, ok := protocol.Shortcut.Validate(address)
+	if ok {
 		connect = c.connectShortcut
+	} else {
+		addr = address
 	}
-	c.conns[address], err = connect(address, c.Shards)
-	if err == nil {
-		// initialize the cuckoo filter under address
-		c.MappingTable[address] = cuckoo.NewFilter(1000000)
-	}
+	// Connect use original address
+	c.conns[addr], err = connect(address, c.Shards)
+	// if err == nil {
+	// 	// initialize the cuckoo filter under address
+	// 	c.mappingTable[addr] = cuckoo.NewFilter(1000000)
+	// }
 	return
 }
 

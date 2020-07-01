@@ -195,17 +195,18 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	return stats.ReqId, reader, true
 }
 
-func (c *Client) getHost(key string) (addr string, ok bool) {
-	// linear search through all filters and locate the one that holds the key
-	for addr, filter := range c.MappingTable {
-		found := filter.Lookup([]byte(key))
-		if found { // if found, return the address
-			return addr, true
-		}
-	}
-	// otherwise, return nil
-	return "", false
-}
+// Obsoleted
+// func (c *Client) getHost(key string) (addr string, ok bool) {
+// 	// linear search through all filters and locate the one that holds the key
+// 	for addr, filter := range c.mappingTable {
+// 		found := filter.Lookup([]byte(key))
+// 		if found { // if found, return the address
+// 			return addr, true
+// 		}
+// 	}
+// 	// otherwise, return nil
+// 	return "", false
+// }
 
 // random will generate random sequence within the lambda stores
 // index and get top n id

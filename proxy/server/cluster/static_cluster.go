@@ -1,18 +1,19 @@
 package cluster
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/common/util/cache"
 	"math/rand"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/proxy/config"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/common/util/cache"
+
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type StaticCluster struct {
