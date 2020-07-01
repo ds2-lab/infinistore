@@ -998,7 +998,7 @@ func main() {
 		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")
 		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
 		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
-		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior")
+		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior, see common/types/types.go")
 		flag.Uint64Var(&input.Status[0].Term, "term", 1, "Lineage.Term")
 		flag.Uint64Var(&input.Status[0].Updates, "updates", 0, "Lineage.Updates")
 		flag.Float64Var(&input.Status[0].DiffRank, "diffrank", 0, "Difference rank")
