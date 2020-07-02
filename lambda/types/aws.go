@@ -16,7 +16,7 @@ var (
 	UploadConcurrency   = 5
 	DownloadConcurrency = 10
 	// AWSDummyTimeout     = 10 * time.Millisecond
-	AWSServiceTimeout = 1000 * time.Millisecond
+	AWSServiceTimeout = 10000 * time.Millisecond
 
 	awssess *awsSession.Session
 )

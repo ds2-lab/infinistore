@@ -54,7 +54,7 @@ var (
 	FunctionPrefix        string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
 
-	ERR_TRACKER_NOT_STARTED = errors.New("Tracker not started.")
+	ERR_TRACKER_NOT_STARTED = errors.New("tracker not started")
 	ContextKeyLog           = "log"
 
 	// Updated: 6/30/2010
@@ -87,8 +87,9 @@ type Storage struct {
 	lineageMu     sync.RWMutex // Mutex for lienage commit.
 
 	// backup
-	backup     *hashmap.HashMap   // Just a index, all will be available to repo
-	backupMeta *types.LineageMeta // Only one backup is effective at a time.
+	backup        *hashmap.HashMap   // Just a index, all will be available to repo
+	backupMeta    *types.LineageMeta // Only one backup is effective at a time.
+	backupLocator protocol.BackupLocator
 
 	// Persistency backpack
 	s3bucket        string
@@ -1069,8 +1070,8 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 	servingKey := meta.Tips.Get(protocol.TIP_SERVING_KEY)
 	if servingKey != "" {
 		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
-		if chunk, existed := s.get(servingKey); !existed {
-			chunk = &types.Chunk{
+		if _, existed := s.get(servingKey); !existed {
+			chunk := &types.Chunk{
 				Key:    servingKey,
 				Body:   nil,
 				Backup: meta.Backup,
@@ -1308,8 +1309,9 @@ func (s *Storage) isRecoverable(key string, meta *types.LineageMeta, verify bool
 	if !meta.Backup {
 		return true
 	}
-	target := xxhash.Sum64([]byte(key)) % uint64(meta.BackupTotal)
-	if target == uint64(meta.BackupId) {
+	s.backupLocator.Reset(int(meta.BackupTotal))
+	target, _ := s.backupLocator.Locate(key)
+	if target == meta.BackupId {
 		return true
 	} else if verify {
 		s.log.Warn("Detected backup reroute error, expected %d, actual %d, key %s", meta.BackupId, target, key)
