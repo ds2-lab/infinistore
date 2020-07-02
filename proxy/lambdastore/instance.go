@@ -15,7 +15,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/cespare/xxhash"
 	"github.com/cornelk/hashmap"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -854,7 +853,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	}
 
 	// Thread safe
-	backup, ok := ins.backups.GetByHash(xxhash.Sum64([]byte(req.Key)))
+	backup, ok := ins.backups.GetByKey(req.Key)
 	if !ok {
 		// Backup is not available, can be recovered or simply not available.
 		return false

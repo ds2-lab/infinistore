@@ -1,16 +1,16 @@
 package lambdastore
 
 import (
-	// "log"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 type BackupReserver func(*Instance) bool
 
 type BackupIterator struct {
-	i           int
-	len         int
-	skipped     int
-	backups     []*Instance
+	i       int
+	len     int
+	skipped int
+	backups []*Instance
 }
 
 func (iter *BackupIterator) Len() int {
@@ -34,11 +34,12 @@ func (iter *BackupIterator) Value() (int, interface{}) {
 
 // Backups for a instace. If not specified, all operation are not thread safe.
 type Backups struct {
-	Reserver     BackupReserver
+	Reserver BackupReserver
 
-	backups      []*Instance
-	candidates   []*Instance
-	availables   int
+	backups    []*Instance
+	candidates []*Instance
+	availables int
+	locator    protocol.BackupLocator
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
@@ -61,7 +62,7 @@ func (b *Backups) Availables() int {
 }
 
 func (b *Backups) Iter() *BackupIterator {
-	return &BackupIterator{ i: -1, len: b.availables, backups: b.backups }
+	return &BackupIterator{i: -1, len: b.availables, backups: b.backups}
 }
 
 func (b *Backups) Reserve(fallback *Instance) int {
@@ -70,13 +71,13 @@ func (b *Backups) Reserve(fallback *Instance) int {
 	}
 
 	// Reset backups
-	b.backups = b.backups[:cap(b.backups)]   // Reset to full size
+	b.backups = b.backups[:cap(b.backups)] // Reset to full size
 	b.availables = 0
 
 	// Reserve backups so we can know how many backups are available
 	changes := 0
-	alters := len(b.backups)                 // Alternates start from "alters"
-	failures := 0                            // Continous unavailables
+	alters := len(b.backups) // Alternates start from "alters"
+	failures := 0            // Continous unavailables
 	for i := 0; i < len(b.backups); i++ {
 		if b.reserve(b.candidates[i]) {
 			changes += b.promoteCandidate(i, i)
@@ -106,8 +107,10 @@ func (b *Backups) Reserve(fallback *Instance) int {
 
 	// Try shrink backups to eliminate unnecessary checkes
 	if failures > 0 {
-		b.backups = b.backups[:cap(b.backups) - failures]
+		b.backups = b.backups[:cap(b.backups)-failures]
 	}
+
+	b.locator.Reset(len(b.backups))
 
 	return changes
 }
@@ -150,16 +153,14 @@ func (b *Backups) Stop(target *Instance) {
 }
 
 // This function is thread safe
-func (b *Backups) GetByHash(hash uint64) (*Instance, bool) {
-	// Copy slice to ensure the length will not change
-	backups := b.backups
-	if len(backups) == 0 {
-		// Recovery may stopped.
+func (b *Backups) GetByKey(key string) (*Instance, bool) {
+	loc, ok := b.locator.Locate(key)
+	if !ok {
 		return nil, false
 	}
 
 	// Copy pointer to ensure the instance will not change
-	backup := backups[hash % uint64(len(backups))]
+	backup := b.backups[loc]
 	if backup == nil {
 		return nil, false
 	}
