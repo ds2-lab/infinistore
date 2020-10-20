@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 )
@@ -12,15 +11,15 @@ type ResponseError struct {
 }
 
 func NewResponseError(status int, msg interface{}, args ...interface{}) *ResponseError {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case error:
 		return &ResponseError{
-			error: msg.(error),
+			error:      msg,
 			StatusCode: status,
 		}
 	default:
 		return &ResponseError{
-			error: errors.New(fmt.Sprintf(msg.(string), args...)),
+			error:      fmt.Errorf(msg.(string), args...),
 			StatusCode: status,
 		}
 	}

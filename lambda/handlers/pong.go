@@ -4,30 +4,33 @@ import (
 	"context"
 	"sync"
 	"time"
-	"net"
+
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	. "github.com/mason-leap-lab/infinicache/lambda/store"
+	"github.com/mason-leap-lab/infinicache/lambda/store"
 )
 
 var (
-	ContextKeyReady = "ready"
+	ContextKeyReady    = "ready"
 	DefaultPongTimeout = 30 * time.Millisecond
-	DefaultRetry = 3
-	log = Log
+	DefaultRetry       = 3
+
+	log = store.Log
 )
 
-type pong func(*Response, int64) error
+type pong func(*redeo.Client, int64) error
 
 type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
-	limiter chan int
-	timeout *time.Timer
-	mu      sync.Mutex
-	done    chan struct{}
-	pong    pong
+	limiter  chan int
+	timeout  *time.Timer
+	mu       sync.Mutex
+	done     chan struct{}
+	pong     pong // For test
 	canceled bool
 }
 
@@ -35,9 +38,9 @@ func NewPongHandler() *PongHandler {
 	handler := &PongHandler{
 		limiter: make(chan int, 1),
 		timeout: time.NewTimer(0),
-		done: make(chan struct{}, 1),
+		done:    make(chan struct{}, 1),
 	}
-	handler.pong = handler.sendPong
+	handler.pong = sendPong
 	return handler
 }
 
@@ -59,19 +62,24 @@ func (p *PongHandler) Issue(retry bool) bool {
 	}
 }
 
-func (p *PongHandler) SendToConnection(ctx context.Context, conn net.Conn, flags int64) error {
-	if conn == nil {
-		pongLog(flags)
+func (p *PongHandler) SendWithFlags(ctx context.Context, flags int64) error {
+	if ctx != nil {
 		ready := ctx.Value(&ContextKeyReady)
-		close(ready.(chan struct{}))
-		return nil
+		if ready != nil {
+			pongLog(flags, false)
+			close(ready.(chan struct{}))
+			return nil
+		}
 	}
-	writer := NewResponse(conn, nil)   // One time per connection, so be it.
-	return p.sendImpl(writer, flags)
+	return p.sendImpl(flags, nil)
 }
 
-func (p *PongHandler) SendTo(rsp *Response) error {
-	return p.sendImpl(rsp, 0)
+func (p *PongHandler) Send() error {
+	return p.sendImpl(0, nil)
+}
+
+func (p *PongHandler) SendToLink(link *redeo.Client) error {
+	return p.sendImpl(0, link)
 }
 
 func (p *PongHandler) Cancel() {
@@ -94,21 +102,24 @@ func (p *PongHandler) IsCancelled() bool {
 	return p.canceled
 }
 
-func (p *PongHandler) sendImpl(rsp *Response, flags int64) error {
+func (p *PongHandler) sendImpl(flags int64, link *redeo.Client) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	var retry int
-	select {
-	case retry = <-p.limiter:
-		// Quota avaiable or abort.
-	default:
-		return nil
+	retry := 0
+	// No retry and multiple PONGs avoidance if the link is specified, which is triggered by the worker and will not duplicate.
+	if link == nil {
+		select {
+		case retry = <-p.limiter:
+			// Quota avaiable or abort.
+		default:
+			return nil
+		}
 	}
 
-	pongLog(flags)
-
-	if err := p.pong(rsp, flags); err != nil {
+	pongLog(flags, link != nil)
+	if err := p.pong(link, flags); err != nil {
+		log.Error("Error on PONG flush: %v", err)
 		return err
 	}
 
@@ -137,7 +148,7 @@ func (p *PongHandler) sendImpl(rsp *Response, flags int64) error {
 			case <-p.timeout.C:
 				// Timeout. retry
 				log.Warn("retry PONG")
-				p.sendImpl(rsp, flags)
+				p.sendImpl(flags, link)
 			case <-p.done:
 				return
 			}
@@ -147,26 +158,27 @@ func (p *PongHandler) sendImpl(rsp *Response, flags int64) error {
 	return nil
 }
 
-func pongLog(flags int64) {
+func pongLog(flags int64, forLink bool) {
 	var claim string
 	if flags > 0 {
 		// These two claims are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
-		if flags & protocol.PONG_RECOVERY > 0 {
+		if flags&protocol.PONG_RECOVERY > 0 {
 			claim = " with fast recovery requested."
-		} else if flags & protocol.PONG_RECLAIMED > 0 {
+		} else if flags&protocol.PONG_RECLAIMED > 0 {
 			claim = " with claiming the node has experienced reclaimation."
 		}
+	} else if forLink {
+		claim = " for link."
 	}
-	log.Debug("POND%s", claim)
+	log.Debug("PONG%s", claim)
 }
 
-func (p *PongHandler) sendPong(rsp *Response, flags int64) (err error) {
-	rsp.AppendBulkString("pong")
-	rsp.AppendInt(int64(Store.Id()))
-	rsp.AppendBulkString(lambdaLife.GetSession().Sid)
-	rsp.AppendInt(flags)
-	if err = rsp.Flush(); err != nil {
-		log.Error("Error on PONG flush: %v", err)
-	}
-	return
+func sendPong(link *redeo.Client, flags int64) error {
+	rsp, _ := store.Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+		w.AppendBulkString(protocol.CMD_PONG)
+		w.AppendInt(int64(store.Store.Id()))
+		w.AppendBulkString(lambdaLife.GetSession().Sid)
+		w.AppendInt(flags)
+	}, link)
+	return rsp.Flush()
 }

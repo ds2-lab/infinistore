@@ -2,16 +2,16 @@ package types
 
 // InputEvent Input for the Lambda
 type InputEvent struct {
-	Sid     string `json:"sid"`     // Session id to ensure invoking once only.
-	Cmd     string `json:"cmd"`     // Invocation type, can be "ping", "warmup".
-	Id      uint64 `json:"id"`      // Node id
-	Proxy   string `json:"proxy"`   // Address of proxy .
-	Addr    string `json:"addr"`    // Address of P2P relay.
-	Prefix  string `json:"prefix"`  // Experiment id reserved for evaluation.
-	Log     int    `json:"log"`     // Log level - debug or not.
-	Flags   uint64 `json:"flags"`   // Feature flags
-	Backups int    `json:"baks"`    // Number of configured recovery nodes
-	Status  Status `json:"status"`  // Lineage info
+	Sid     string `json:"sid"`    // Session id to ensure invoking once only.
+	Cmd     string `json:"cmd"`    // Invocation type, can be "ping", "warmup".
+	Id      uint64 `json:"id"`     // Node id
+	Proxy   string `json:"proxy"`  // Address of proxy .
+	Addr    string `json:"addr"`   // Address of P2P relay.
+	Prefix  string `json:"prefix"` // Experiment id reserved for evaluation.
+	Log     int    `json:"log"`    // Log level - debug or not.
+	Flags   uint64 `json:"flags"`  // Feature flags
+	Backups int    `json:"baks"`   // Number of configured recovery nodes
+	Status  Status `json:"status"` // Lineage info
 }
 
 func (i *InputEvent) IsReplicaEnabled() bool {
@@ -30,10 +30,10 @@ type Status []Meta
 
 type Meta struct {
 	// Lambda ID
-	Id       uint64 `json:"id"`
+	Id uint64 `json:"id"`
 
 	// Sequence of the last confirmed log. Logs store by sequence.
-	Term     uint64 `json:"term"`
+	Term uint64 `json:"term"`
 
 	// Total transmission size for restoring all confirmed logs.
 	Updates uint64 `json:"updates"`
@@ -42,7 +42,7 @@ type Meta struct {
 	DiffRank float64 `json:"diffrank"`
 
 	// Hash of the last confirmed log.
-	Hash string    `json:"hash"`
+	Hash string `json:"hash"`
 
 	// Sequence of snapshot.
 	SnapshotTerm uint64 `json:"snapshot"`
@@ -58,8 +58,8 @@ type Meta struct {
 }
 
 type OutputError struct {
-	Message    string `json:"errorMessage"`
-	Type       string `json:"errorType"`
+	Message string `json:"errorMessage"`
+	Type    string `json:"errorType"`
 }
 
 func (e *OutputError) String() string {
@@ -85,21 +85,21 @@ const (
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
 	PONG_RECLAIMED = 0x0002
 
-	CMD_GET = "get"              // Redis and Lambda command
-	CMD_GET_CHUNK = "get chunk"  // Client command
-	CMD_SET = "set"              // Redis and Lambda command
-	CMD_SET_CHUNK = "set chunk"  // Client command
-	CMD_RECOVER = "recover"      // Control command
-	CMD_DEL = "del"              // Control command
-	CMD_WARMUP = "warmup"        // Control command
-	CMD_PING = "ping"            // Control command
-	CMD_POND = "pong"            // Control command
-	CMD_RECOVERED = "recovered"  // Control command
+	CMD_GET         = "get"         // Redis and Lambda command
+	CMD_GET_CHUNK   = "get chunk"   // Client command
+	CMD_SET         = "set"         // Redis and Lambda command
+	CMD_SET_CHUNK   = "set chunk"   // Client command
+	CMD_RECOVER     = "recover"     // Control command
+	CMD_DEL         = "del"         // Control command
+	CMD_WARMUP      = "warmup"      // Control command
+	CMD_PING        = "ping"        // Control command
+	CMD_PONG        = "pong"        // Control command
+	CMD_RECOVERED   = "recovered"   // Control command
 	CMD_INITMIGRATE = "initMigrate" // Control command
-	CMD_MIGRATE = "migrate"      // Control command
-	CMD_MHELLO = "mhello"        // Control command
-	CMD_DATA = "data"            // Control command
-	CMD_BYE = "bye"              // Control command
+	CMD_MIGRATE     = "migrate"     // Control command
+	CMD_MHELLO      = "mhello"      // Control command
+	CMD_DATA        = "data"        // Control command
+	CMD_BYE         = "bye"         // Control command
 
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"

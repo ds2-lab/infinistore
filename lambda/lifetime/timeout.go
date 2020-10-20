@@ -1,28 +1,31 @@
 package lifetime
 
 import (
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"math"
 	"sync/atomic"
 	"time"
-	// "log"
+
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 const TICK = 100 * time.Millisecond
+
 // For Lambdas below 0.5vCPU(896M).
 const TICK_1_ERROR_EXTEND = 10000 * time.Millisecond
 const TICK_1_ERROR = 10 * time.Millisecond
+
 // For Lambdas with 0.5vCPU(896M) and above.
 const TICK_5_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_5_ERROR = 10 * time.Millisecond
+
 // For Lambdas with 1vCPU(1792M) and above.
 const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
 var (
 	TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
-	TICK_ERROR = TICK_10_ERROR
+	TICK_ERROR        = TICK_10_ERROR
 )
 
 func init() {
@@ -40,7 +43,7 @@ func init() {
 }
 
 type Timeout struct {
-	Confirm       func(*Timeout) bool
+	Confirm func(*Timeout) bool
 
 	session       *Session
 	startAt       time.Time
@@ -55,15 +58,16 @@ type Timeout struct {
 	c             chan time.Time
 	timeout       bool
 	due           time.Duration
+	deadline      time.Time
 }
 
 func NewTimeout(s *Session, d time.Duration) *Timeout {
 	t := &Timeout{
-		session: s,
+		session:       s,
 		lastExtension: d,
-		log: logger.NilLogger,
-		reset: make(chan time.Duration, 1),
-		c: make(chan time.Time, 1),
+		log:           logger.NilLogger,
+		reset:         make(chan time.Duration, 1),
+		c:             make(chan time.Time, 1),
 	}
 	timeout, due := t.getTimeout(d)
 	t.due = due
@@ -79,6 +83,14 @@ func (t *Timeout) Start() time.Time {
 func (t *Timeout) StartWithCalibration(startAt time.Time) time.Time {
 	t.startAt = startAt
 	return t.startAt
+}
+
+func (t *Timeout) StartWithDeadline(deadline time.Time) time.Time {
+	t.deadline = deadline
+
+	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
+	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
+	return t.StartWithCalibration(deadline.Add(-lifeInSeconds))
 }
 
 func (t *Timeout) EndInterruption() time.Time {
@@ -198,7 +210,7 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			t.log.Debug("Due expectation updated: %v, timeout in %v", due, timeout)
 		case <-t.timer.C:
 			// Timeout channel should be empty, or we clear it
-			select{
+			select {
 			case <-t.c:
 			default:
 				// Nothing
@@ -221,11 +233,14 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			// 	t.interruptAt = time.Now()
 			// }
 			// t.session.Unlock()
-			if !t.tryTimeout(false) {
+
+			// Pre-confirmation check
+			if t.Confirm != nil && !t.tryTimeout(false) {
 				continue
 			}
 
-			if t.Confirm != nil && t.Confirm(t) {
+			if t.Confirm == nil || t.Confirm(t) {
+				// Confirmed or no need to confirm
 				t.tryTimeout(true)
 			}
 		}
@@ -235,7 +250,7 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 func (t *Timeout) resetLocked() {
 	_, t.due = t.getTimeout(t.lastExtension)
 	t.log.Debug("Due expectation updated: %v", t.due)
-	select{
+	select {
 	case t.reset <- t.lastExtension:
 	default:
 		// Consume unread and replace with latest.
@@ -252,7 +267,7 @@ func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
 	}
 
 	now := time.Since(t.startAt)
-	due = time.Duration(math.Ceil(float64(now + ext) / float64(TICK)))*TICK - TICK_ERROR
+	due = time.Duration(math.Ceil(float64(now+ext)/float64(TICK)))*TICK - TICK_ERROR
 	timeout = due - now
 	return
 }
@@ -275,6 +290,7 @@ func (t *Timeout) tryTimeout(confirmed bool) bool {
 	} else if confirmed {
 		t.timeout = true
 		t.interruptAt = time.Now()
+		t.log.Debug("Timeout triggered")
 		t.c <- t.interruptAt
 	}
 

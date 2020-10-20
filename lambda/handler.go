@@ -5,35 +5,33 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 	//	"github.com/wangaoone/s3gof3r"
-	"io"
-	"math"
+
 	"math/rand"
-	"net"
 	"net/url"
 	"os"
 	"runtime"
 	// "runtime/pprof"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
+	"github.com/mason-leap-lab/infinicache/lambda/handlers"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
-	"github.com/mason-leap-lab/infinicache/lambda/handlers"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
 	. "github.com/mason-leap-lab/infinicache/lambda/store"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/mason-leap-lab/infinicache/lambda/worker"
 )
 
 const (
@@ -41,19 +39,11 @@ const (
 )
 
 var (
-	DefaultStatus   = protocol.Status{}
+	DefaultStatus = protocol.Status{}
 
-	// Track how long the store has lived, migration is required before timing up.
-	lifetime = lambdaLife.New(LIFESPAN)
-
-	// Proxy that links stores as a system
-	proxy     string // Passed from proxy dynamically.
-	proxyConn net.Conn
-	srv       = redeo.NewServer(nil) // Serve requests from proxy
-
-	log       = Log
-	mu        sync.RWMutex
-	pong      = handlers.NewPongHandler()
+	log  = Log
+	mu   sync.RWMutex
+	pong = handlers.NewPongHandler()
 )
 
 func init() {
@@ -65,8 +55,11 @@ func init() {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
 
+	Lifetime = lambdaLife.New(LIFESPAN)
+	Server.SetHeartbeater(pong)
+
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
-	collector.Lifetime = lifetime
+	collector.Lifetime = Lifetime
 }
 
 func getAwsReqId(ctx context.Context) string {
@@ -85,10 +78,13 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	storage.Backups = input.Backups
 	Store, _ = Store.Init(input.Id, input.IsPersistencyEnabled())
 	Lineage = Store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
-	Persist = util.Ifelse(Lineage == nil, nil, Store.(*storage.Storage)).(types.PersistentStorage)
+	Persist = (types.PersistentStorage)(nil)
+	if Lineage != nil {
+		Persist = Store.(*storage.Storage)
+	}
 
 	// Initialize session.
-	lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
+	Lifetime.RebornIfDead() // Reset if necessary. This is essential for debugging, and useful if deployment pool is not large enough.
 	session := lambdaLife.GetOrCreateSession()
 	session.Sid = input.Sid
 	session.Id = getAwsReqId(ctx)
@@ -96,11 +92,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	defer lambdaLife.ClearSession()
 
 	// Setup timeout.
-	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
 	deadline, _ := ctx.Deadline()
-	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
 	session.Timeout.SetLogger(log)
-	session.Timeout.StartWithCalibration(deadline.Add(-lifeInSeconds))
+	session.Timeout.StartWithDeadline(deadline)
 	collector.Session = session
 
 	// Ensure pong will only be issued once on invocation
@@ -122,16 +116,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 
 	// Check connection
-	mu.Lock()
-	session.Connection = proxyConn
-	mu.Unlock()
-	// Connect proxy and serve
-	if session.Connection == nil {
-		if err := connect(&input, session); err != nil {
-			return DefaultStatus, err
-		}
-		// Cross session gorouting
-		go serve(session.Connection)
+	Server.SetManualAck(true)
+	if started, err := Server.StartOrResume(input.Proxy, &worker.WorkerOptions{DryRun: DRY_RUN}); err != nil {
+		return DefaultStatus, err
+	} else if started {
+		Lifetime.Reborn()
 	}
 
 	// Extend timeout for expecting requests except invocation with cmd "warmup".
@@ -148,7 +137,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	var flags int64
 	if Lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
-		pong.SendToConnection(ctx, session.Connection, 0)
+		pong.SendWithFlags(ctx, 0)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
@@ -185,7 +174,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// POND represents the node is ready to serve, no fast recovery required.
-			pong.SendToConnection(ctx, session.Connection, flags)
+			pong.SendWithFlags(ctx, flags)
 		} else {
 			session.Timeout.Busy()
 			recoverErrs = make([]chan error, 0, inconsistency)
@@ -197,10 +186,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				if fast {
 					flags |= protocol.PONG_RECOVERY
 				}
-				pong.SendToConnection(ctx, session.Connection, flags)
+				pong.SendWithFlags(ctx, flags)
 				recoverErrs = append(recoverErrs, chanErr)
 			} else {
-				pong.SendToConnection(ctx, session.Connection, flags)
+				pong.SendWithFlags(ctx, flags)
 			}
 
 			// Recovery backup
@@ -215,20 +204,25 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Start tracking
 		Lineage.TrackLineage()
 	}
+	Server.SetManualAck(false)
 
 	// Wait until recovered to avoid timeout on recovery.
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
 		// Signal proxy the recover procedure is done.
 		// Normally the recovery of main repository is longer than backup, so we just wait all is done.
-		if flags & protocol.PONG_RECOVERY > 0 {
-			recoveredHandler(ctx, session.Connection)
+		if flags&protocol.PONG_RECOVERY > 0 {
+			err := recoveredHandler(ctx)
+			if err != nil {
+				log.Error("Error on notify recovery done: %v", err)
+				// Continue...
+			}
 		}
 		session.Timeout.DoneBusy()
 	}
 
 	// Adaptive timeout control
-	meta := wait(session, lifetime).ProtocolStatus()
+	meta := wait(session, Lifetime).ProtocolStatus()
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
@@ -236,76 +230,6 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
 	log.Info("served %d, interrupted: %d", session.Timeout.Since(), session.Timeout.Interrupted())
 	return meta, nil
-}
-
-func connect(input *protocol.InputEvent, session *lambdaLife.Session) error {
-	if len(input.Proxy) == 0 {
-		if DRY_RUN {
-			return nil
-		}
-		return errors.New("no proxy specified")
-	}
-
-	proxy = input.Proxy
-	log.Debug("Ready to connect %s, id %d", proxy, Store.Id())
-
-	var connErr error
-	session.Connection, connErr = net.Dial("tcp", proxy)
-	if connErr != nil {
-		log.Error("Failed to connect proxy %s: %v", proxy, connErr)
-		return connErr
-	}
-
-	mu.Lock()
-	proxyConn = session.Connection
-	mu.Unlock()
-	log.Info("Connection to %v established (%v)", proxyConn.RemoteAddr(), session.Timeout.Since())
-	return nil
-}
-
-func serve(conn net.Conn) {
-	if conn == nil {
-		return
-	}
-
-	// Cross session gorouting
-	err := srv.ServeForeignClient(conn)
-	if err != nil && err != io.EOF && strings.Index(err.Error(), "use of closed network connection") < 0 {
-		log.Info("Connection closed: %v", err)
-	} else {
-		err = nil
-		log.Info("Connection closed.")
-	}
-	conn.Close()
-
-	// Handle closed connection differently based on whether it is a legacy connection or not.
-	session := lambdaLife.GetOrCreateSession()
-	mu.Lock()
-	defer mu.Unlock()
-	if session.Connection == nil {
-		// Legacy connection and the connection of current session has not be initialized:
-		//   Reset proxyConn and lifetime.
-		proxyConn = nil
-		lifetime.Reborn()
-		return
-	} else if session.Connection != conn {
-		// Legacy connection and the connection of current session is initialized:
-		//   Do nothing.
-		return
-	} else {
-		// The connection of current session is closed.
-		proxyConn = nil
-		if err != nil {
-			// Connection interrupted. do nothing and session will timeout.
-		} else if session.Migrator != nil {
-			// Signal migrator is ready and start migration.
-			session.Migrator.SetReady()
-			session.Timeout.EndInterruption()
-		} else {
-			// We are done.
-			lifetime.Rest()
-		}
-	}
 }
 
 func waitForRecovery(chs ...chan error) {
@@ -348,10 +272,12 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		}
 		return
 	case <-session.Timeout.C():
+		log.Info("Timeout")
+
 		// There's no turning back.
 		session.Timeout.Halt()
 
-		if lifetime.IsTimeUp() && Store.Len() > 0 {
+		if Lifetime.IsTimeUp() && Store.Len() > 0 {
 			// Time to migrate
 			// Check of number of keys in store is necessary. As soon as there is any value
 			// in the store and time up, we should start migration.
@@ -359,7 +285,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			// Initiate migration
 			session.Migrator = migrator.NewClient()
 			log.Info("Initiate migration.")
-			initiator := func() error { return initMigrateHandler(session.Connection) }
+			initiator := func() error { return initMigrateHandler() }
 			for err := session.Migrator.Initiate(initiator); err != nil; {
 				log.Warn("Fail to initiaiate migration: %v", err)
 				if err == types.ErrProxyClosing {
@@ -375,7 +301,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			if Lineage != nil {
 				status = Lineage.StopTracker(commitOpt)
 			}
-			byeHandler(session.Connection)
+			byeHandler()
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return
@@ -387,15 +313,12 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	return
 }
 
-func recoveredHandler(ctx context.Context, conn net.Conn) error {
-	log.Debug("Send recovered notification.")
-	rsp := handlers.NewResponse(conn, nil)
-	rsp.AppendBulkString(protocol.CMD_RECOVERED)
-	if err := rsp.Flush(); err != nil {
-		log.Error("Error on RECOVERED flush: %v", err)
-		return err
-	}
-	return nil
+func recoveredHandler(ctx context.Context) error {
+	log.Debug("Sending recovered notification.")
+	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+		w.AppendBulkString(protocol.CMD_RECOVERED)
+	})
+	return rsp.Flush()
 }
 
 func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) bool {
@@ -404,14 +327,9 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 		return false
 	}
 
-	mu.Lock()
-	if proxyConn != nil {
-		// The connection is not closed on last invocation, reset.
-		proxyConn.Close()
-		proxyConn = nil
-		lifetime.Reborn()
-	}
-	mu.Unlock()
+	// Enter migration mode, ensure the worker is not running and the lifetime is reset.
+	Server.Close()
+	Lifetime.Reborn()
 
 	// connect to migrator
 	session.Migrator = migrator.NewClient()
@@ -445,53 +363,31 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	return true
 }
 
-func initMigrateHandler(conn net.Conn) error {
-	rsp := handlers.NewResponse(conn, nil)
+func initMigrateHandler() error {
 	// init backup cmd
-	rsp.AppendBulkString("initMigrate")
+	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+		w.AppendBulkString("initMigrate")
+	})
 	return rsp.Flush()
 }
 
-func byeHandler(conn net.Conn) error {
-	if conn == nil && DRY_RUN {
+func byeHandler() error {
+	if DRY_RUN {
 		log.Info("Bye")
 		return nil
 	}
-	rsp := handlers.NewResponse(conn, nil)
-	rsp.AppendBulkString("bye")
+	// init backup cmd
+	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+		w.AppendBulkString("bye")
+	})
 	return rsp.Flush()
 }
 
-// func remoteGet(bucket string, key string) []byte {
-// 	log.Debug("get from remote storage")
-// 	k, err := s3gof3r.EnvKeys()
-// 	if err != nil {
-// 		log.Debug("EnvKeys error: %v", err)
-// 	}
-//
-// 	s3 := s3gof3r.New("", k)
-// 	b := s3.Bucket(bucket)
-//
-// 	reader, _, err := b.GetReader(key, nil)
-// 	if err != nil {
-// 		log.Debug("GetReader error: %v", err)
-// 	}
-// 	obj := streamToByte(reader)
-// 	return obj
-// }
-//
-// func streamToByte(stream io.Reader) []byte {
-// 	buf := new(bytes.Buffer)
-// 	_, err := buf.ReadFrom(stream)
-// 	if err != nil {
-// 		log.Debug("ReadFrom error: %v", err)
-// 	}
-// 	return buf.Bytes()
-// }
-
 func main() {
 	// Define handlers
-	srv.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
+		client := redeo.GetClient(c.Context())
+
 		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
@@ -517,18 +413,16 @@ func main() {
 
 		if ret.Error() == nil {
 			// construct lambda store response
-			response := &handlers.Response{
-				ResponseWriter: w,
-				Conn:           session.Connection,
-				Cmd:            c.Name,
-				ConnId:         connId,
-				ReqId:          reqId,
-				ChunkId:        chunkId,
-				BodyStream:     stream,
+			response := &worker.ObjectResponse{
+				Cmd:        c.Name,
+				ConnId:     connId,
+				ReqId:      reqId,
+				ChunkId:    chunkId,
+				BodyStream: stream,
 			}
-			response.Prepare()
 
 			t2 := time.Now()
+			Server.AddResponses(response, client)
 			if err := response.Flush(); err != nil {
 				log.Error("Error on flush(get key %s): %v", key, err)
 				return
@@ -542,22 +436,22 @@ func main() {
 			var respError *handlers.ResponseError
 			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = handlers.NewResponseError(404, ret.Error())
+				respError = handlers.NewResponseError(404, "Key not found %s: %v", key, ret.Error())
 			} else {
-				respError = handlers.NewResponseError(500, ret.Error())
+				respError = handlers.NewResponseError(500, "Failed to get %s: %v", key, ret.Error())
 			}
-
-			log.Warn("Failed to get %s: %v", key, respError)
-			rspError := handlers.NewResponse(session.Connection, w)
-			rspError.AppendErrorf("Failed to get %s: %v", key, respError)
-			if err := rspError.Flush(); err != nil {
+			errResponse := &worker.ErrorResponse{Error: respError}
+			Server.AddResponses(errResponse, client)
+			if err := errResponse.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 			collector.AddRequest(types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
 		}
 	})
 
-	srv.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
+	Server.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
+		client := redeo.GetClient(c.Context())
+
 		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
@@ -586,16 +480,16 @@ func main() {
 			session.Timeout.DoneBusyWithReset(extension)
 		}
 
-		rspErr := handlers.NewResponse(session.Connection, w)
+		errRsp := &worker.ErrorResponse{}
 		connId, _ := c.NextArg().String()
 		reqId, _ = c.NextArg().String()
 		chunkId, _ = c.NextArg().String()
 		key, _ := c.NextArg().String()
 		valReader, err := c.Next()
 		if err != nil {
-			log.Error("Error on get value reader: %v", err)
-			rspErr.AppendErrorf("Error on get value reader: %v", err)
-			if err := rspErr.Flush(); err != nil {
+			errRsp.Error = handlers.NewResponseError(500, "Error on get value reader: %v", err)
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 			}
 			finalize(nil, false)
@@ -606,9 +500,11 @@ func main() {
 		ret := Store.SetStream(key, chunkId, valReader)
 		d1 := time.Since(t)
 		if ret.Error() != nil {
-			log.Error("%v", ret.Error())
-			rspErr.AppendErrorf("%v", ret.Error())
-			if err := rspErr.Flush(); err != nil {
+			errRsp.Error = ret.Error()
+			log.Error("%v", errRsp.Error)
+			Server.AddResponses(errRsp, client)
+
+			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 				// Ignore
 			}
@@ -617,16 +513,15 @@ func main() {
 		}
 
 		// write Key, clientId, chunkId, body back to proxy
-		response := &handlers.Response{
-			ResponseWriter: w,
-			Conn:           session.Connection,
-			Cmd:            c.Name,
-			ConnId:         connId,
-			ReqId:          reqId,
-			ChunkId:        chunkId,
+		response := &worker.ObjectResponse{
+			Cmd:     c.Name,
+			ConnId:  connId,
+			ReqId:   reqId,
+			ChunkId: chunkId,
 		}
-		response.Prepare()
+
 		t2 := time.Now()
+		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
 			log.Error("Error on set::flush(set key %s): %v", key, err)
 			// Ignore
@@ -638,7 +533,9 @@ func main() {
 		finalize(ret, false, d1, d2, dt)
 	})
 
-	srv.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
+		client := redeo.GetClient(c.Context())
+
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
 		session.Requests++
@@ -661,7 +558,7 @@ func main() {
 		t := time.Now()
 		log.Debug("In RECOVER handler")
 
-		rspErr := handlers.NewResponse(session.Connection, w)
+		errRsp := &worker.ErrorResponse{}
 		connId := c.Arg(0).String()
 		reqId := c.Arg(1).String()
 		chunkId := c.Arg(2).String()
@@ -669,8 +566,9 @@ func main() {
 		retCmd := c.Arg(4).String()
 
 		if Persist == nil {
-			rspErr.AppendErrorf("Recover is not supported")
-			if err := rspErr.Flush(); err != nil {
+			errRsp.Error = errors.New("Recover is not supported")
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 			}
 			return
@@ -679,11 +577,10 @@ func main() {
 		// Recover.
 		ret = Persist.SetRecovery(key, chunkId)
 		if ret.Error() != nil {
-			log.Error("%v", ret.Error())
-			rspErr.AppendErrorf("%v", ret.Error())
-			if err := rspErr.Flush(); err != nil {
+			errRsp.Error = ret.Error()
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
-				// Ignore
 			}
 			return
 		}
@@ -699,18 +596,16 @@ func main() {
 		d1 := time.Since(t)
 
 		// write Key, clientId, chunkId, body back to proxy
-		response := &handlers.Response{
-			ResponseWriter: w,
-			Conn:           session.Connection,
-			Cmd:            retCmd,
-			ConnId:         connId,
-			ReqId:          reqId,
-			ChunkId:        chunkId,
-			BodyStream:     stream,
+		response := &worker.ObjectResponse{
+			Cmd:        retCmd,
+			ConnId:     connId,
+			ReqId:      reqId,
+			ChunkId:    chunkId,
+			BodyStream: stream,
 		}
-		response.Prepare()
 
 		t2 := time.Now()
+		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
 			log.Error("Error on recover::flush(recover key %s): %v", key, err)
 			// Ignore
@@ -724,7 +619,9 @@ func main() {
 		}
 	})
 
-	srv.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
+		client := redeo.GetClient(c.Context())
+
 		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Busy()
@@ -756,15 +653,13 @@ func main() {
 		ret = Store.Del(key, chunkId)
 		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
-			response := &handlers.Response{
-				ResponseWriter: w,
-				Conn:           session.Connection,
-				Cmd:            "del",
-				ConnId:         connId,
-				ReqId:          reqId,
-				ChunkId:        chunkId,
+			response := &worker.ObjectResponse{
+				Cmd:     c.Name,
+				ConnId:  connId,
+				ReqId:   reqId,
+				ChunkId: chunkId,
 			}
-			response.Prepare()
+			Server.AddResponses(response, client)
 			if err := response.Flush(); err != nil {
 				log.Error("Error on del::flush(set key %s): %v", key, err)
 				return
@@ -773,21 +668,21 @@ func main() {
 			var respError *handlers.ResponseError
 			if ret.Error() == types.ErrNotFound {
 				// Not found
-				respError = handlers.NewResponseError(404, ret.Error())
+				respError = handlers.NewResponseError(404, "Failed to del %s: %v", key, ret.Error())
 			} else {
-				respError = handlers.NewResponseError(500, ret.Error())
+				respError = handlers.NewResponseError(500, "Failed to del %s: %v", key, ret.Error())
 			}
-
-			log.Warn("Failed to del %s: %v", key, respError)
-			rspErr := handlers.NewResponse(session.Connection, w)
-			rspErr.AppendErrorf("Failed to del %s: %v", key, respError)
-			if err := rspErr.Flush(); err != nil {
+			errResponse := &worker.ErrorResponse{Error: respError}
+			Server.AddResponses(errResponse, client)
+			if err := errResponse.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
 		}
 	})
 
-	srv.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
+		client := redeo.GetClient(c.Context())
+
 		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
@@ -802,16 +697,17 @@ func main() {
 		// put DATA to s3
 		collector.Save()
 
-		rsp := handlers.NewResponse(session.Connection, w)
-		rsp.AppendBulkString("data")
-		rsp.AppendBulkString("OK")
+		rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+			w.AppendBulkString("data")
+			w.AppendBulkString("OK")
+		}, client)
 		if err := rsp.Flush(); err != nil {
 			log.Error("Error on data::flush: %v", err)
 			return
 		}
 		log.Debug("data complete")
-		session.Connection.Close()
-		// No need to close server, it will serve the new connection next time.
+		Server.Close()
+		Lifetime.Rest()
 
 		// Reset store
 		Store = (*storage.Storage)(nil)
@@ -819,7 +715,7 @@ func main() {
 		session.Done()
 	})
 
-	srv.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
 		// Drain payload anyway.
 		payload := c.Arg(0).Bytes()
 
@@ -844,7 +740,7 @@ func main() {
 		}
 
 		log.Debug("PING")
-		pong.SendTo(handlers.NewResponse(session.Connection, w))
+		pong.Send()
 
 		// Deal with payload
 		if len(payload) > 0 {
@@ -878,7 +774,7 @@ func main() {
 		}
 	})
 
-	srv.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
 		pong.Cancel()
 		session := lambdaLife.GetSession()
 		session.Timeout.Halt()
@@ -904,7 +800,7 @@ func main() {
 		if err := session.Migrator.TriggerDestination(deployment, &protocol.InputEvent{
 			Cmd:    "migrate",
 			Id:     uint64(newId),
-			Proxy:  proxy,
+			Proxy:  session.Input.Proxy,
 			Addr:   addr,
 			Prefix: collector.Prefix,
 			Log:    log.GetLevel(),
@@ -915,7 +811,7 @@ func main() {
 		// Now, we serve migration connection
 		go func(session *lambdaLife.Session) {
 			// In session gorouting
-			session.Migrator.WaitForMigration(srv)
+			session.Migrator.WaitForMigration(Server.Server)
 			// Migration ends or is interrupted.
 
 			// Should be ready if migration ended.
@@ -924,7 +820,7 @@ func main() {
 				collector.Save()
 
 				// This is essential for debugging, and useful if deployment pool is not large enough.
-				lifetime.Rest()
+				Lifetime.Rest()
 				// Keep or not? It is a problem.
 				// KEEP: MUST if migration is used for backup
 				// DISCARD: SHOULD if to be reused after migration.
@@ -938,9 +834,24 @@ func main() {
 				session.Timeout.Restart(lambdaLife.TICK_ERROR)
 			}
 		}(session)
+
+		// Gracefully close the server.
+		// The server will not be closed immediately. Instead, it waits until:
+		// 1. The replica will connect to the proxy and relay concurrently.
+		// 2.a The proxy will disconnect the ctrl and data link in the worker, yet the redeo server in worker is still serving.
+		// 2.b The redeo server continue serves the connection from the replica through the relay.
+		Server.Close(true)
+
+		// Signal migrator is ready and start migration. The migration will only begin if:
+		// 1. The replica is connected (handled in mhello)
+		// 2. The worker is disconnected by proxy (worker closed)
+		session.Migrator.SetReady()
+
+		// Prevent timeout
+		session.Timeout.EndInterruption()
 	})
 
-	srv.HandleFunc(protocol.CMD_MHELLO, func(w resp.ResponseWriter, c *resp.Command) {
+	Server.HandleFunc(protocol.CMD_MHELLO, func(w resp.ResponseWriter, c *resp.Command) {
 		session := lambdaLife.GetSession()
 		if session.Migrator == nil {
 			log.Error("Migration is not initiated.")
@@ -1093,6 +1004,7 @@ func main() {
 				}
 			}
 			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
+			log.Info("Done?")
 
 			<-ctx.Done()
 			log.Trace("Bill duration for dryrun: %v", time.Since(start))
