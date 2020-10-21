@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,20 +27,6 @@ func TestStorage(t *testing.T) {
 
 func getTestID() int {
 	return int(atomic.AddInt32(&TestID, 1))
-}
-
-type TestClient struct {
-	Conn   net.Conn
-	Writer *resp.RequestWriter
-	Reader resp.ResponseReader
-}
-
-func NewTestClient(cn net.Conn) *TestClient {
-	return &TestClient{
-		Conn:   cn,
-		Writer: resp.NewRequestWriter(cn),
-		Reader: resp.NewResponseReader(cn),
-	}
 }
 
 type TestHeartbeater struct {
@@ -120,7 +105,7 @@ var _ = Describe("Worker", func() {
 		Expect(server.closed).Should(Equal(WorkerRunning))
 
 		for _, conn := range shortcut.Conns {
-			client := NewTestClient(conn.Server)
+			client := NewClient(conn.Server)
 			rsp, err := client.Reader.ReadBulkString()
 			Expect(err).Should(BeNil())
 			Expect(rsp).Should(Equal("pong"))
@@ -139,13 +124,13 @@ var _ = Describe("Worker", func() {
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
 
-		ctrlClient := NewTestClient(shortcut.Conns[0].Server)
+		ctrlClient := NewClient(shortcut.Conns[0].Server)
 		shouldTimeout(func() {
 			ctrlClient.Reader.ReadBulkString()
 		}, true)
 		ctrlClient.Conn.Close()
 		for _, conn := range shortcut.Conns[1:] {
-			client := NewTestClient(conn.Server)
+			client := NewClient(conn.Server)
 			rsp, err := client.Reader.ReadBulkString()
 			Expect(err).Should(BeNil())
 			Expect(rsp).Should(Equal("pong"))
@@ -164,7 +149,7 @@ var _ = Describe("Worker", func() {
 		Expect(server.closed).Should(Equal(WorkerRunning))
 		// Drain the pongs
 		for _, conn := range shortcut.Conns {
-			client := NewTestClient(conn.Server)
+			client := NewClient(conn.Server)
 			client.Reader.ReadBulkString()
 		}
 
@@ -185,7 +170,7 @@ var _ = Describe("Worker", func() {
 		Expect(server.closed).Should(Equal(WorkerRunning))
 		// Drain the pongs
 		for _, conn := range shortcut.Conns {
-			client := NewTestClient(conn.Server)
+			client := NewClient(conn.Server)
 			client.Reader.ReadBulkString()
 		}
 
@@ -196,7 +181,7 @@ var _ = Describe("Worker", func() {
 		// Server should redail now.
 		old.Close()
 
-		client2 := NewTestClient(shortcut.Conns[0].Server)
+		client2 := NewClient(shortcut.Conns[0].Server)
 		rsp2, err2 := client2.Reader.ReadBulkString() // skip command
 		Expect(err2).Should(BeNil())
 		Expect(rsp2).Should(Equal("pong"))

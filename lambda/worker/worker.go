@@ -144,11 +144,12 @@ func (wrk *Worker) AddResponses(rsp Response, datalinks ...interface{}) (err err
 		datalink = wrk.ctrlLink
 	}
 
-	// Only upgrade to datalink for responses aimed for ctrlLink.
-	// For others like using datalink or migration link, do nothing.
-	if datalink == wrk.ctrlLink && rsp.Size() > MaxControlRequestSize {
-		datalink = wrk.dataLink
-	}
+	// Stick to original link, proxy may decide which link to use.
+	// // Only upgrade to datalink for responses aimed for ctrlLink.
+	// // For others like using datalink or migration link, do nothing.
+	// if datalink == wrk.ctrlLink && rsp.Size() > MaxControlRequestSize {
+	// 	datalink = wrk.dataLink
+	// }
 
 	rsp.reset(rsp, datalink)
 	if err = datalink.AddResponses(rsp); err != nil {
@@ -282,4 +283,18 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	defer rsp.close()
 
 	rsp.flush(w)
+}
+
+type TestClient struct {
+	Conn   net.Conn
+	Writer *resp.RequestWriter
+	Reader resp.ResponseReader
+}
+
+func NewTestClient(cn net.Conn) *TestClient {
+	return &TestClient{
+		Conn:   cn,
+		Writer: resp.NewRequestWriter(cn),
+		Reader: resp.NewResponseReader(cn),
+	}
 }

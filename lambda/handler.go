@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	mock "github.com/jordwest/mock-conn"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/handlers"
@@ -34,23 +36,22 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/worker"
 )
 
-const (
-	EXPECTED_GOMAXPROCS = 2
-)
-
 var (
-	DefaultStatus = protocol.Status{}
+	ExpectedGOMAXPROCS = 2
+	DefaultStatus      = protocol.Status{}
 
 	log  = Log
-	mu   sync.RWMutex
 	pong = handlers.NewPongHandler()
 )
 
 func init() {
+	if DRY_RUN {
+		log.Level = logger.LOG_LEVEL_ALL
+	}
 	goroutines := runtime.GOMAXPROCS(0)
-	if goroutines < EXPECTED_GOMAXPROCS {
-		Log.Debug("Set GOMAXPROCS to %d (original %d)", EXPECTED_GOMAXPROCS, goroutines)
-		runtime.GOMAXPROCS(EXPECTED_GOMAXPROCS)
+	if goroutines < ExpectedGOMAXPROCS {
+		log.Debug("Set GOMAXPROCS to %d (original %d)", ExpectedGOMAXPROCS, goroutines)
+		runtime.GOMAXPROCS(ExpectedGOMAXPROCS)
 	} else {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
@@ -272,8 +273,6 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		}
 		return
 	case <-session.Timeout.C():
-		log.Info("Timeout")
-
 		// There's no turning back.
 		session.Timeout.Halt()
 
@@ -385,6 +384,28 @@ func byeHandler() error {
 
 func main() {
 	// Define handlers
+	Server.HandleFunc(protocol.CMD_TEST, func(w resp.ResponseWriter, c *resp.Command) {
+		client := redeo.GetClient(c.Context())
+
+		pong.Cancel()
+		session := lambdaLife.GetSession()
+		session.Timeout.Busy()
+		extension := lambdaLife.TICK_ERROR
+		if session.Requests > 1 {
+			extension = lambdaLife.TICK
+		}
+		defer session.Timeout.DoneBusyWithReset(extension)
+
+		log.Debug("In Test handler")
+
+		rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+			w.AppendBulkString(c.Name)
+		}, client)
+		if err := rsp.Flush(); err != nil {
+			log.Error("Error on data::flush: %v", err)
+		}
+	})
+
 	Server.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
 		client := redeo.GetClient(c.Context())
 
@@ -835,6 +856,41 @@ func main() {
 			}
 		}(session)
 
+		Server.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
+			client := redeo.GetClient(c.Context())
+
+			pong.Cancel()
+			session := lambdaLife.GetSession()
+			session.Timeout.Halt()
+			log.Debug("In DATA handler")
+
+			if session.Migrator != nil {
+				session.Migrator.SetError(types.ErrProxyClosing)
+				session.Migrator.Close()
+				session.Migrator = nil
+			}
+
+			// put DATA to s3
+			collector.Save()
+
+			rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+				w.AppendBulkString("data")
+				w.AppendBulkString("OK")
+			}, client)
+			if err := rsp.Flush(); err != nil {
+				log.Error("Error on data::flush: %v", err)
+				return
+			}
+			log.Debug("data complete")
+			Server.Close()
+			Lifetime.Rest()
+
+			// Reset store
+			Store = (*storage.Storage)(nil)
+			Lineage = nil
+			session.Done()
+		})
+
 		// Gracefully close the server.
 		// The server will not be closed immediately. Instead, it waits until:
 		// 1. The replica will connect to the proxy and relay concurrently.
@@ -932,6 +988,10 @@ func main() {
 
 		if printInfo {
 			fmt.Fprintf(os.Stderr, "Usage: ./lambda -dryrun [options]\n")
+			fmt.Fprintf(os.Stderr, "Example: \n")
+			fmt.Fprintf(os.Stderr, "\tPersistently insert 1MB: ./lambda -dryrun -flags=256 -cksize=1000000 -hash=dummy -insert=100\n")
+			fmt.Fprintf(os.Stderr, "\tExample output: [{1 2 972 100 hash 2 972 355 }]\n")
+			fmt.Fprintf(os.Stderr, "\tPersistently recovery: ./lambda -dryrun -flags=256 -hash=dummy -term=2 -updates=972 -snapshot=2 -snapshotupdates=972 -snapshotsize=355\n")
 			fmt.Fprintf(os.Stderr, "Available options:\n")
 			flag.PrintDefaults()
 			os.Exit(0)
@@ -969,9 +1029,98 @@ func main() {
 			log.Verbose = true
 			storage.Concurrency = *concurrency
 			storage.Buckets = *buckets
+			var shortcut *protocol.ShortcutConn
+			if input.Proxy == "" {
+				protocol.InitShortcut()
+				shortcut = protocol.Shortcut.Prepare("dryrun", 0, 2)
+				input.Proxy = shortcut.Address
+			}
 
 			ready := make(chan struct{})
-			ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
+			alldone := sync.WaitGroup{}
+
+			// Dummy Proxy
+			if shortcut == nil {
+				ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
+			} else {
+				writePing := func(writer *resp.RequestWriter) {
+					writer.WriteMultiBulkSize(2)
+					writer.WriteBulkString(protocol.CMD_PING)
+					writer.WriteBulk(nil)
+					writer.Flush()
+				}
+
+				readPong := func(reader resp.ResponseReader) {
+					reader.ReadBulkString() // pong
+					reader.ReadInt()        // store id
+					reader.ReadBulkString() // session id
+					reader.ReadInt()        // flag
+				}
+
+				writeTest := func(writer *resp.RequestWriter) {
+					writer.WriteCmd(protocol.CMD_TEST)
+					writer.Flush()
+				}
+
+				readTest := func(reader resp.ResponseReader) {
+					reader.ReadBulkString() // test
+				}
+
+				alldone.Add(len(shortcut.Conns))
+				go func() {
+					ctrlClient := worker.NewClient(shortcut.Conns[0].Server)
+					readPong(ctrlClient.Reader)
+					log.Info("Ctrl PONG received.")
+					ready <- struct{}{}
+
+					close := false
+					for i := 0; i < 5; i++ {
+						start := time.Now()
+						if !close {
+							writePing(ctrlClient.Writer)
+						}
+						readPong(ctrlClient.Reader)
+						log.Info("HeartBeat latency %v", time.Since(start))
+
+						start = time.Now()
+						writeTest(ctrlClient.Writer)
+						readTest(ctrlClient.Reader)
+						log.Info("Test latency %v", time.Since(start))
+
+						time.Sleep(1 * time.Second)
+
+						// Simulate network interruption.
+						close = rand.Int()%2 == 0
+						if close {
+							// Prepare new shortcut connection for redial.
+							old := shortcut.Conns[0]
+							shortcut.Conns[0] = mock.NewConn()
+
+							// Server should redail now.
+							old.Close()
+
+							ctrlClient = worker.NewClient(shortcut.Conns[0].Server)
+						}
+					}
+
+					if close {
+						readPong(ctrlClient.Reader)
+					}
+
+					alldone.Done()
+				}()
+				for _, conn := range shortcut.Conns[1:] {
+					go func(cn net.Conn) {
+						client := worker.NewClient(cn)
+						readPong(client.Reader)
+						log.Info("Data PONG received.")
+						alldone.Done()
+					}(conn.Server)
+				}
+			}
+
+			// Lambda Function
+			alldone.Add(1)
 			go func() {
 				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
 				log.Info("Start dummy node: %s", lambdacontext.FunctionName)
@@ -981,45 +1130,53 @@ func main() {
 				} else {
 					log.Info("Output: %v", output)
 				}
+				alldone.Done()
+			}()
+
+			// Wait()
+			go func() {
+				alldone.Wait()
 				cancel()
 			}()
 
 			// Simulate data operation
-			<-ready
-			session := lambdaLife.GetOrCreateSession()
-			session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
-			session.Timeout.Busy()
-			if tips.Get(protocol.TIP_SERVING_KEY) != "" {
-				if _, _, ret := Store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
-					log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
-				} else {
-					log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
+			for {
+				select {
+				case <-ready:
+					session := lambdaLife.GetOrCreateSession()
+					session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
+					session.Timeout.Busy()
+					if tips.Get(protocol.TIP_SERVING_KEY) != "" {
+						if _, _, ret := Store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
+							log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
+						} else {
+							log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
+						}
+					}
+					for i := 0; i < *numToInsert; i++ {
+						val := make([]byte, *sizeToInsert)
+						rand.Read(val)
+						if ret := Store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
+							log.Error("Error on set obj-%d: %v", i, ret.Error())
+						}
+					}
+					session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
+				case <-ctx.Done():
+					log.Trace("Bill duration for dryrun: %v", time.Since(start))
+					// if *memprofile != "" {
+					// 	f, err := os.Create(*memprofile)
+					// 	if err != nil {
+					// 		log.Error("could not create memory profile: ", err)
+					// 	}
+					// 	defer f.Close() // error handling omitted for example
+					// 	runtime.GC()    // get up-to-date statistics
+					// 	if err := pprof.WriteHeapProfile(f); err != nil {
+					// 		log.Error("could not write memory profile: ", err)
+					// 	}
+					// }
+					return
 				}
 			}
-			for i := 0; i < *numToInsert; i++ {
-				val := make([]byte, *sizeToInsert)
-				rand.Read(val)
-				if ret := Store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
-					log.Error("Error on set obj-%d: %v", i, ret.Error())
-				}
-			}
-			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
-			log.Info("Done?")
-
-			<-ctx.Done()
-			log.Trace("Bill duration for dryrun: %v", time.Since(start))
-			// if *memprofile != "" {
-			// 	f, err := os.Create(*memprofile)
-			// 	if err != nil {
-			// 		log.Error("could not create memory profile: ", err)
-			// 	}
-			// 	defer f.Close() // error handling omitted for example
-			// 	runtime.GC()    // get up-to-date statistics
-			// 	if err := pprof.WriteHeapProfile(f); err != nil {
-			// 		log.Error("could not write memory profile: ", err)
-			// 	}
-			// }
-			return
 		} // else: continue to try lambda.Start
 	}
 

@@ -85,6 +85,7 @@ const (
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
 	PONG_RECLAIMED = 0x0002
 
+	CMD_TEST        = "test"
 	CMD_GET         = "get"         // Redis and Lambda command
 	CMD_GET_CHUNK   = "get chunk"   // Client command
 	CMD_SET         = "set"         // Redis and Lambda command

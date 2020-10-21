@@ -67,7 +67,7 @@ func (p *PongHandler) SendWithFlags(ctx context.Context, flags int64) error {
 		ready := ctx.Value(&ContextKeyReady)
 		if ready != nil {
 			pongLog(flags, false)
-			close(ready.(chan struct{}))
+			ready.(chan struct{}) <- struct{}{}
 			return nil
 		}
 	}
