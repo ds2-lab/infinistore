@@ -762,7 +762,7 @@ func main() {
 		}
 
 		log.Debug("PING")
-		pong.Send()
+		pong.SendWithFlags(c.Context(), protocol.PONG_FOR_CTRL)
 
 		// Deal with payload
 		if len(payload) > 0 {
