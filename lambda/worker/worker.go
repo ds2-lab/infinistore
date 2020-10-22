@@ -37,7 +37,7 @@ type Worker struct {
 	dataLink     *redeo.Client
 	heartbeater  Heartbeater
 	log          logger.ILogger
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	closed       int32
 	numLinks     int32
 	manualAck    int32 // Normally, worker will acknowledge links by calling heartbeater automatically. ManualAck will override default behavior for ctrlLink.
@@ -55,8 +55,8 @@ func NewWorker(lifeId int64) *Worker {
 		id:          rand.Int31(),
 		Server:      redeo.NewServer(nil),
 		log:         &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Worker:"},
-		ctrlLink:    new(redeo.Client),
-		dataLink:    new(redeo.Client),
+		ctrlLink:    redeo.NewClient(nil), // Offer response buffer
+		dataLink:    redeo.NewClient(nil), // Offer response buffer
 		heartbeater: new(DefaultHeartbeater),
 		closed:      WorkerClosed,
 	}
@@ -136,6 +136,8 @@ func (wrk *Worker) AddResponses(rsp Response, datalinks ...interface{}) (err err
 	}
 
 	var datalink *redeo.Client
+	wrk.mu.RLock()
+
 	if len(datalinks) > 0 {
 		switch dl := datalinks[0].(type) {
 		case *redeo.Client:
@@ -158,6 +160,7 @@ func (wrk *Worker) AddResponses(rsp Response, datalinks ...interface{}) (err err
 	// if datalink == wrk.ctrlLink && rsp.Size() > MaxControlRequestSize {
 	// 	datalink = wrk.dataLink
 	// }
+	wrk.mu.RUnlock()
 
 	rsp.reset(rsp, datalink)
 	if err = datalink.AddResponses(rsp); err != nil {
@@ -236,7 +239,8 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 			wrk.mu.Unlock()
 			return
 		}
-		*link = *redeo.NewClient(conn)
+		old := link
+		link = wrk.setLinkLocked(isCtrl, redeo.NewClient(conn))
 		link.SetContext(context.WithValue(link.Context(), ctxKeyConn, conn))
 		wrk.mu.Unlock()
 
@@ -255,7 +259,9 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 		// Serve the client.
 		err := wrk.Server.ServeClient(link, false) // Enable asych mode to allow sending request.
 		conn.Close()
+
 		// Check if worker is closed.
+		// Must Check first to avoid deadlock on calling Close()
 		switch atomic.LoadInt32(&wrk.closed) {
 		case WorkerClosed:
 			fallthrough
@@ -264,6 +270,11 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 			wrk.log.Info("Connection(%v) closed.", id)
 			return
 		}
+
+		// Reset old link and buffer possible incoming response
+		wrk.mu.Lock()
+		link = wrk.setLinkLocked(isCtrl, old)
+		wrk.mu.Unlock()
 
 		if err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
 			wrk.log.Warn("Connection(%v) closed: %v, reconnecting...", id, err)
@@ -277,12 +288,33 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 	}
 }
 
+func (wrk *Worker) setLinkLocked(isCtrl bool, link *redeo.Client) *redeo.Client {
+	var old *redeo.Client
+	if isCtrl {
+		old = wrk.ctrlLink
+		wrk.ctrlLink = link
+	} else {
+		old = wrk.dataLink
+		wrk.dataLink = link
+	}
+	// Move cached responses
+	if len(old.Responses()) > 0 {
+		go func() {
+			for rsp := range old.Responses() {
+				rsp.(Response).reset(rsp.(Response), link)
+				link.AddResponses(rsp)
+			}
+		}()
+	}
+	return link
+}
+
 func (wrk *Worker) resetLinkLocked(link *redeo.Client) *redeo.Client {
 	link.Close()
 	if conn := GetConnectionByLink(link); conn != nil {
 		conn.Close() // force disconnect
 	}
-	return new(redeo.Client)
+	return redeo.NewClient(nil) // offer response buffer
 }
 
 // HandleCallback callback handler

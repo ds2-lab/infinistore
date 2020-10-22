@@ -103,7 +103,6 @@ var _ = Describe("Worker", func() {
 		Expect(start).Should(BeTrue())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
-
 		for _, conn := range shortcut.Conns {
 			client := NewClient(conn.Server)
 			rsp, err := client.Reader.ReadBulkString()
@@ -129,6 +128,33 @@ var _ = Describe("Worker", func() {
 			ctrlClient.Reader.ReadBulkString()
 		}, true)
 		ctrlClient.Conn.Close()
+		for _, conn := range shortcut.Conns[1:] {
+			client := NewClient(conn.Server)
+			rsp, err := client.Reader.ReadBulkString()
+			Expect(err).Should(BeNil())
+			Expect(rsp).Should(Equal("pong"))
+		}
+
+		server.SetManualAck(false)
+		server.Close()
+		shouldCleanClosed(server)
+	})
+
+	It("response should be cached if connection has not been established", func() {
+		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+
+		server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+			w.AppendBulkString("pong")
+		})
+		server.SetManualAck(true)
+		start, err := server.StartOrResume(shortcut.Address, &WorkerOptions{DryRun: true})
+		Expect(start).Should(BeTrue())
+		Expect(err).Should(BeNil())
+		Expect(server.closed).Should(Equal(WorkerRunning))
+		ctrlClient := NewClient(shortcut.Conns[0].Server)
+		shouldTimeout(func() {
+			ctrlClient.Reader.ReadBulkString()
+		}, false)
 		for _, conn := range shortcut.Conns[1:] {
 			client := NewClient(conn.Server)
 			rsp, err := client.Reader.ReadBulkString()

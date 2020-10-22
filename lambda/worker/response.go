@@ -65,9 +65,11 @@ func (r *BaseResponse) Size() int64 {
 }
 
 func (r *BaseResponse) reset(inst Response, link *redeo.Client) {
+	if r.link == nil {
+		r.done.Add(1)
+	}
 	r.inst = inst
 	r.link = link
-	r.done.Add(1)
 }
 
 func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
