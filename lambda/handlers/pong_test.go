@@ -2,10 +2,13 @@ package handlers
 
 import (
 	// "errors"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 	"sync"
 	"time"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
+	"github.com/mason-leap-lab/redeo"
 )
 
 type TestPongHandler struct {
@@ -13,20 +16,20 @@ type TestPongHandler struct {
 }
 
 func newTestPongHandler(override pong) *TestPongHandler {
-	handler := &TestPongHandler {
+	handler := &TestPongHandler{
 		PongHandler: NewPongHandler(),
 	}
 	handler.pong = override
 	return handler
 }
 
-func succeedPong(rsp *Response, flags int64) error {
+func succeedPong(link *redeo.Client, flags int64) error {
 	return nil
 }
 
 func getTimeoutPong(handler *TestPongHandler, failure int) pong {
 	attempt := 0
-	return func(rsp *Response, flags int64) error {
+	return func(link *redeo.Client, flags int64) error {
 		failure := attempt < failure
 		attempt++
 		if !failure {
@@ -42,14 +45,14 @@ var _ = Describe("PongHandler", func() {
 		pong := newTestPongHandler(succeedPong)
 		pong.pong = succeedPong
 		pong.Issue(false)
-		Ω(pong.SendTo(nil)).Should(Succeed())
+		Ω(pong.Send()).Should(Succeed())
 	})
 
 	It("should pong successed if failure <= 3", func() {
 		pong := newTestPongHandler(succeedPong)
 		pong.pong = getTimeoutPong(pong, 3)
 		pong.Issue(true)
-		Ω(pong.SendTo(nil)).Should(Succeed())
+		Ω(pong.Send()).Should(Succeed())
 
 		// Deny more pongs
 		Expect(pong.Issue(false)).To(Equal(false))
@@ -62,14 +65,14 @@ var _ = Describe("PongHandler", func() {
 		// Should be ok to send more
 		pong.pong = succeedPong
 		Expect(pong.Issue(false)).To(Equal(true))
-		pong.SendTo(nil)   // Drain pongs
+		pong.Send() // Drain pongs
 	})
 
 	It("should pong failed if failure > 3", func() {
 		pong := newTestPongHandler(succeedPong)
 		pong.pong = getTimeoutPong(pong, 4)
 		pong.Issue(true)
-		Ω(pong.SendTo(nil)).Should(Succeed())
+		Ω(pong.Send()).Should(Succeed())
 
 		// Deny more pongs
 		Expect(pong.Issue(true)).To(Equal(false))
@@ -81,7 +84,7 @@ var _ = Describe("PongHandler", func() {
 		// Should be ok to send more
 		pong.pong = succeedPong
 		Expect(pong.Issue(false)).To(Equal(true))
-		pong.SendTo(nil)   // Drain pongs
+		pong.Send() // Drain pongs
 	})
 
 	It("should not stuck for concurrent request", func() {
@@ -93,7 +96,7 @@ var _ = Describe("PongHandler", func() {
 			allDone.Add(1)
 			go func() {
 				pong.Issue(true)
-				pong.SendTo(nil)
+				pong.Send()
 				allDone.Done()
 			}()
 		}

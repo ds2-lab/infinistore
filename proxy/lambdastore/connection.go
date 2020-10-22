@@ -28,6 +28,8 @@ var (
 
 type Connection struct {
 	net.Conn
+	workerId int32       // Identify a unique lambda worker
+	dataLink *Connection // Only works for the control link to find its data link.
 
 	instance *Instance
 	log      logger.ILogger
@@ -56,6 +58,14 @@ func NewConnection(c net.Conn) *Connection {
 
 func (conn *Connection) Writer() *resp.RequestWriter {
 	return conn.w
+}
+
+func (conn *Connection) GetDataLink() *Connection {
+	return conn.dataLink
+}
+
+func (conn *Connection) AddDataLink(link *Connection) {
+	conn.dataLink = link
 }
 
 func (conn *Connection) Close() error {
@@ -115,18 +125,17 @@ func (conn *Connection) ServeLambda() {
 		}
 
 		var respType resp.ResponseType
-		switch retPeek.(type) {
+		switch ret := retPeek.(type) {
 		case error:
-			err := retPeek.(error)
-			if err == io.EOF {
+			if ret == io.EOF {
 				conn.log.Warn("Lambda store disconnected.")
 			} else {
-				conn.log.Warn("Failed to peek response type: %v", err)
+				conn.log.Warn("Failed to peek response type: %v", ret)
 			}
 			conn.close()
 			return
 		case resp.ResponseType:
-			respType = retPeek.(resp.ResponseType)
+			respType = ret
 		}
 
 		start := time.Now()
@@ -134,9 +143,9 @@ func (conn *Connection) ServeLambda() {
 		case resp.TypeError:
 			strErr, err := conn.r.ReadError()
 			if err != nil {
-				err = errors.New(fmt.Sprintf("Response error (Unknown): %v", err))
+				err = fmt.Errorf("Response error (Unknown): %v", err)
 			} else {
-				err = errors.New(fmt.Sprintf("Response error: %s", strErr))
+				err = fmt.Errorf("Response error: %s", strErr)
 			}
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
@@ -151,7 +160,7 @@ func (conn *Connection) ServeLambda() {
 				break
 			}
 
-			if cmd == protocol.CMD_POND {
+			if cmd == protocol.CMD_PONG {
 				conn.pongHandler()
 				break
 			} else if conn.instance == nil {
@@ -270,10 +279,14 @@ func (conn *Connection) pongHandler() {
 	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
 		return
 	}
+	storeId := id & 0x1111
+	conn.workerId = int32(id >> 32)
+
 	sid, err := conn.r.ReadBulkString()
 	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
 		return
 	}
+
 	flags, err := conn.r.ReadInt()
 	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
 		return
@@ -285,15 +298,15 @@ func (conn *Connection) pongHandler() {
 	}
 
 	// Lock up lambda instance
-	instance, exists := IM.Instance(uint64(id))
+	instance, exists := IM.Instance(uint64(storeId))
 	if !exists {
-		conn.log.Error("Failed to match lambda: %d", id)
+		conn.log.Error("Failed to match lambda: %d", storeId)
 		return
 	}
 	if instance.flagValidated(conn, sid, flags).instance != nil {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
-		conn.log.Warn("Discard rouge POND for %d.", id)
+		conn.log.Warn("Discard rouge POND for %d.", storeId)
 		conn.close()
 	}
 }
