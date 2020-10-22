@@ -74,7 +74,7 @@ func shouldCleanClosed(server *Worker) {
 
 var _ = Describe("Worker", func() {
 	protocol.InitShortcut()
-	server := NewWorker()
+	server := NewWorker(0)
 	server.SetHeartbeater(&TestHeartbeater{worker: server})
 
 	It("should return no error on dry running", func() {

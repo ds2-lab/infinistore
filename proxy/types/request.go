@@ -50,6 +50,14 @@ func (req *Request) Retriable() bool {
 	return req.BodyStream == nil || !req.streamingStarted
 }
 
+func (req *Request) Size() int64 {
+	if req.BodyStream != nil {
+		return req.BodyStream.Len()
+	} else {
+		return int64(len(req.Body))
+	}
+}
+
 func (req *Request) PrepareForSet(conn Conn) {
 	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)

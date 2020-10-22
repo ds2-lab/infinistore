@@ -64,6 +64,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	BackoffFactor         = 2
+	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 	timeouts              = sync.Pool{
 		New: func() interface{} {
 			return time.NewTimer(0)
@@ -92,7 +93,8 @@ type Instance struct {
 	ChunkCounter int
 	KeyMap       []string
 
-	cn                *Connection
+	ctrlLink          *Connection
+	dataLink          *Connection
 	chanCmd           chan types.Command
 	chanPriorCmd      chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	started           uint32
@@ -428,6 +430,19 @@ func (ins *Instance) IsReclaimed() bool {
 	return atomic.LoadUint32(&ins.phase) >= PHASE_RECLAIMED
 }
 
+func (ins *Instance) MatchDataLink(ctrl *Connection) {
+	if ins.dataLink == nil {
+		return
+	} else if ins.dataLink.workerId == ctrl.workerId {
+		ctrl.AddDataLink(ins.dataLink)
+		ins.dataLink = nil
+	}
+}
+
+func (ins *Instance) RegisterDataLink(link *Connection) {
+	ins.dataLink = link
+}
+
 func (ins *Instance) Close() {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
@@ -444,9 +459,15 @@ func (ins *Instance) Close() {
 		default:
 		}
 	}
-	if ins.cn != nil {
-		ins.cn.Close()
-		ins.cn = nil
+	// Close all links
+	// TODO: Due to reconnection from lambda side, we may just leave links to be closed by the lambda.
+	if ins.ctrlLink != nil {
+		ins.ctrlLink.Close()
+		ins.ctrlLink = nil
+	}
+	if ins.dataLink != nil {
+		ins.dataLink.Close()
+		ins.dataLink = nil
 	}
 	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 	ins.flagValidatedLocked(nil)
@@ -496,47 +517,41 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 			if triggered {
 				return ins.validated()
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
-				return ins.flagValidated(ins.cn, "", 0) // No new session involved.
+				return ins.flagValidated(ins.ctrlLink, "", 0) // No new session involved.
 			}
 
 			// Ping is issued to ensure awake
 			if opt.Command != nil && opt.Command.String() == protocol.CMD_PING {
 				ins.log.Debug("Ping with payload")
-				ins.cn.Ping(opt.Command.(*types.Control).Payload)
+				ins.ctrlLink.Ping(opt.Command.(*types.Control).Payload)
 			} else {
-				ins.cn.Ping(DefaultPingPayload)
+				ins.ctrlLink.Ping(DefaultPingPayload)
 			}
 
 			// Start timeout, ping may get stucked anytime.
-			timeout := timeouts.Get().(*time.Timer)
-			if !timeout.Stop() {
+			timer := timeouts.Get().(*time.Timer)
+			if !timer.Stop() {
 				select {
-				case <-timeout.C:
+				case <-timer.C:
 				default:
 				}
 			}
-			timeout.Reset(connectTimeout)
+			timer.Reset(connectTimeout)
 
 			select {
-			case <-timeout.C:
-				// Set status to dead and revalidate.
-				timeouts.Put(timeout)
-				// If instance is not invoked by proxy, it may be slept
-				if atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_MAYBE, INSTANCE_SLEEP) {
-					ins.log.Warn("Timeout on validating, assuming instance dead and reinvoke...")
-					// Close or not? Maybe we can wait until a connection comes.
-					// ins.cn.Close()
-					// ins.cn = nil
-				} else {
-					// Exponential backoff
-					connectTimeout *= time.Duration(BackoffFactor)
-					if connectTimeout > MaxConnectTimeout {
-						connectTimeout = MaxConnectTimeout
-					}
-					ins.log.Warn("Timeout on validating, re-ping...")
+			case <-timer.C:
+				// Recycle timer for the connection may be validated anytime.
+				timeouts.Put(timer)
+
+				// Exponential backoff
+				connectTimeout *= time.Duration(BackoffFactor)
+				if connectTimeout > MaxConnectTimeout {
+					connectTimeout = MaxConnectTimeout
 				}
+				ins.log.Warn("Timeout on validating, re-ping...")
+
 			case <-ins.chanValidated:
-				timeouts.Put(timeout)
+				timeouts.Put(timer)
 				return ins.validated()
 			}
 		}
@@ -646,8 +661,9 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	ins.Meta.Stale = true
 	output, err := client.Invoke(input)
 	ins.endSession(event.Sid)
-	// Don't reset connection here, fronzen but not dead.
-	// ins.cn = nil
+
+	// Don't reset links here, fronzen but not dead.
+
 	if err != nil {
 		ins.log.Error("Error on activating lambda store: %v", err)
 	} else {
@@ -682,6 +698,8 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 }
 
+// Flag the instance as validated by specified connection.
+// This also validate the connection belonging to the instance by setting instance field of the connection.
 func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
@@ -691,42 +709,54 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 		return conn
 	}
 
+	if flags&protocol.PONG_FOR_CTRL == protocol.PONG_FOR_DATA {
+		// Datalinks usually come earlier than ctrl link.
+		// Keeping using the newly connectioned datalinks, and we are safe, or just wait it timeout and try to get a new one.
+		conn.instance = ins
+		conn.log = ins.log
+		// Connect to corresponding ctrl link
+		ins.RegisterDataLink(conn)
+		if ins.ctrlLink != nil {
+			ins.MatchDataLink(ins.ctrlLink)
+		}
+		return conn
+	}
+
 	ins.flagWarmed()
-	if ins.cn != conn {
+	if ins.ctrlLink != conn {
 		// Check possible duplicated session
-		if !ins.startSession(sid) {
+		// If session is duplicated and no anomaly in flags, it is safe to switch regardless potential lambda change.
+		newSession := ins.startSession(sid)
+		if !newSession && flags != protocol.PONG_FOR_CTRL {
 			// Deny session
 			return conn
+		} else if newSession {
+			ins.log.Debug("Session %s started.", sid)
+		} else {
+			ins.log.Debug("Session %s resumed.", sid)
 		}
-		ins.log.Debug("Session %s started.", sid)
 
-		oldConn := ins.cn
+		oldConn := ins.ctrlLink
 
 		// Set instance, order matters here.
 		conn.instance = ins
 		conn.log = ins.log
-		ins.cn = conn
+		ins.ctrlLink = conn
 
 		if oldConn != nil {
 			oldConn.Close()
-
-			if oldConn.instance == ins {
-				// There are two possibilities for connectio switch:
-				// 1. Old node get reclaimed
-				atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
-				// 2. Migration, which we have no way to know its status.
-				// TODO: Distinguish with case 1 using sid
-				// atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
-			} else {
-				ins.log.Warn("I can't believe this, you find a misplaced instance: %d", oldConn.instance.Id())
-			}
-		} else {
-			atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
 		}
-	} else {
-		ins.startSession(sid)
 
-		// For instance not invoked by proxy (INSTANCE_MAYBE), keep status.
+		// There are three cases for link switch:
+		// 1. Old node get reclaimed
+		// 2. Reconnection
+		atomic.StoreUint32(&ins.awake, INSTANCE_AWAKE)
+		// 3. Migration, which we have no way to know its status. (Forget it now)
+		// TODO: Fix migration handling later.
+		// atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
+	} else {
+		// Second entry, just call startSession for update status for safety.
+		ins.startSession(sid)
 		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEP, INSTANCE_AWAKE)
 	}
 
@@ -737,6 +767,8 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 	} else if flags&protocol.PONG_RECLAIMED > 0 {
 		atomic.CompareAndSwapUint32(&ins.phase, PHASE_BACKING_ONLY, PHASE_RECLAIMED)
 	}
+	// Connect to possible data link.
+	ins.MatchDataLink(conn)
 	return ins.flagValidatedLocked(conn)
 }
 
@@ -744,7 +776,8 @@ func (ins *Instance) bye(conn *Connection) {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	if ins.cn != conn {
+	if ins.ctrlLink != conn {
+		// We don't care any rogue bye
 		return
 	}
 
@@ -778,18 +811,20 @@ func (ins *Instance) validated() *Connection {
 }
 
 func (ins *Instance) flagClosed(conn *Connection) {
-	if ins.cn != conn {
+	if ins.ctrlLink != conn {
+		// We don't care any rogue request
 		return
 	}
 
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	if ins.cn != conn {
+	if ins.ctrlLink != conn {
+		// We don't care any rogue request
 		return
 	}
 
-	ins.cn = nil
+	ins.ctrlLink = nil
 	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEP)
 }
 
@@ -812,14 +847,14 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Check lambda status first
 		validateStart := time.Now()
 		// Once active connection is confirmed, keep awake on serving.
-		conn := ins.Validate(&ValidateOption{Command: cmd})
+		ctrlLink := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
-		if conn == nil {
-			// Check if conn is valid, nil if ins get closed
+		if ctrlLink == nil {
+			// Check if link is valid, nil if instance get closed
 			return
 		}
-		err = ins.request(conn, cmd, validateDuration)
+		err = ins.request(ctrlLink, cmd, validateDuration)
 		if err == nil {
 			break
 		}
@@ -870,17 +905,25 @@ func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target *Instan
 	return true
 }
 
-func (ins *Instance) request(conn *Connection, cmd types.Command, validateDuration time.Duration) error {
-	switch cmd.(type) {
+func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {
+	cmdName := strings.ToLower(cmd.String())
+	switch req := cmd.(type) {
 	case *types.Request:
-		req := cmd.(*types.Request)
+		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), cmdName, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
 
-		cmd := strings.ToLower(req.Cmd)
-		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), cmd, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
+		// Select link
+		link := ctrlLink
+		if req.Size() > MaxControlRequestSize {
+			link = ctrlLink.GetDataLink()
+			// Fallback to ctrlLink if dataLink is not ready.
+			if link == nil {
+				link = ctrlLink
+			}
+		}
 
-		switch cmd {
+		switch cmdName {
 		case protocol.CMD_SET: /*set or two argument cmd*/
-			req.PrepareForSet(conn)
+			req.PrepareForSet(link)
 			// If parallel recovery is triggered, record keys set during recovery.
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to set", req.Key)
@@ -911,16 +954,16 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				// req.Abandon()
 				return nil
 			}
-			req.PrepareForGet(conn)
+			req.PrepareForGet(link)
 			// If parallel recovery is triggered, there is no need to forward the serving key.
 		case protocol.CMD_DEL:
-			req.PrepareForDel(conn)
+			req.PrepareForDel(link)
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to del", req.Key)
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
-			req.PrepareForRecover(conn)
+			req.PrepareForRecover(link)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
 			// Unrecoverable
@@ -928,46 +971,44 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 		}
 
 		// In case there is a request already, wait to be consumed (for response).
-		conn.chanWait <- req
+		link.chanWait <- req
 		if err := req.Flush(RequestTimeout); err != nil {
 			ins.log.Warn("Flush request error: %v", err)
 			// Remove request.
 			select {
-			case <-conn.chanWait:
+			case <-link.chanWait:
 			default:
 			}
 			return err
 		}
 
 	case *types.Control:
-		ctrl := cmd.(*types.Control)
-		cmd := strings.ToLower(ctrl.Cmd)
 		isDataRequest := false
 
-		switch cmd {
+		switch cmdName {
 		case protocol.CMD_PING:
 			// Simply ignore.
 			return nil
 		case protocol.CMD_DATA:
-			ctrl.PrepareForData(conn)
+			req.PrepareForData(ctrlLink)
 			isDataRequest = true
 		case protocol.CMD_MIGRATE:
-			ctrl.PrepareForMigrate(conn)
+			req.PrepareForMigrate(ctrlLink)
 		case protocol.CMD_DEL:
-			ctrl.PrepareForDel(conn)
+			req.PrepareForDel(ctrlLink)
 			if ins.IsRecovering() {
-				ins.log.Debug("Override rerouting for key %s due to del", ctrl.Request.Key)
-				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
+				ins.log.Debug("Override rerouting for key %s due to del", req.Request.Key)
+				ins.writtens.Set(req.Request.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
-			ctrl.PrepareForRecover(conn)
+			req.PrepareForRecover(ctrlLink)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
 			// Unrecoverable
 			return nil
 		}
 
-		if err := ctrl.Flush(RequestTimeout); err != nil {
+		if err := req.Flush(RequestTimeout); err != nil {
 			ins.log.Error("Flush control error: %v", err)
 			if isDataRequest {
 				global.DataCollected.Done()

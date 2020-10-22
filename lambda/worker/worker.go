@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand"
 	"net"
 	"strings"
 	"sync"
@@ -25,12 +26,13 @@ var (
 	defaultOption WorkerOptions
 	ctxKeyConn    = struct{}{}
 
-	ErrNoProxySpecified   = errors.New("no proxy specified")
-	MaxControlRequestSize = int64(100000) // 100KB, which can be transmitted in 10ms.
+	ErrNoProxySpecified = errors.New("no proxy specified")
+	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 )
 
 type Worker struct {
 	*redeo.Server
+	id           int32
 	ctrlLink     *redeo.Client
 	dataLink     *redeo.Client
 	heartbeater  Heartbeater
@@ -47,8 +49,10 @@ type WorkerOptions struct {
 	DryRun bool
 }
 
-func NewWorker() *Worker {
+func NewWorker(lifeId int64) *Worker {
+	rand.Seed(lifeId)
 	worker := &Worker{
+		id:          rand.Int31(),
 		Server:      redeo.NewServer(nil),
 		log:         &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Worker:"},
 		ctrlLink:    new(redeo.Client),
@@ -58,6 +62,10 @@ func NewWorker() *Worker {
 	}
 	worker.Server.HandleCallbackFunc(worker.responseHandler)
 	return worker
+}
+
+func (wrk *Worker) Id() int32 {
+	return wrk.id
 }
 
 func (wrk *Worker) SetHeartbeater(heartbeater Heartbeater) {

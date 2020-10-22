@@ -80,10 +80,14 @@ const (
 	// FLAG_EXPIRED Disable recovery for main repository
 	FLAG_BACKING_ONLY = 0x1000
 
+	// PONG_FOR_DATA Pong for data link
+	PONG_FOR_DATA = int64(0x0000)
+	// PONG_FOR_CTRL Pong for ctrl link
+	PONG_FOR_CTRL = int64(0x0001)
 	// PONG_RECOVERY Pong with parallel recovery requested
-	PONG_RECOVERY = 0x0001
+	PONG_RECOVERY = int64(0x0002)
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
-	PONG_RECLAIMED = 0x0002
+	PONG_RECLAIMED = int64(0x0004)
 
 	CMD_TEST        = "test"
 	CMD_GET         = "get"         // Redis and Lambda command

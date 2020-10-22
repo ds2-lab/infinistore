@@ -57,6 +57,7 @@ func init() {
 	}
 
 	Lifetime = lambdaLife.New(LIFESPAN)
+	Server = worker.NewWorker(Lifetime.Id())
 	Server.SetHeartbeater(pong)
 
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
@@ -135,10 +136,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	var recoverErrs []chan error
-	var flags int64
+	flags := protocol.PONG_FOR_CTRL
 	if Lineage == nil {
 		// POND represents the node is ready to serve, no fast recovery required.
-		pong.SendWithFlags(ctx, 0)
+		pong.SendWithFlags(ctx, flags)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {

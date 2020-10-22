@@ -175,9 +175,13 @@ func pongLog(flags int64, forLink bool) {
 
 func sendPong(link *redeo.Client, flags int64) error {
 	rsp, _ := store.Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+		// CMD
 		w.AppendBulkString(protocol.CMD_PONG)
-		w.AppendInt(int64(store.Store.Id()))
+		// WorkerID + StoreID
+		w.AppendInt(int64(store.Store.Id()) + int64(store.Server.Id())<<32)
+		// Sid
 		w.AppendBulkString(lambdaLife.GetSession().Sid)
+		// Flags
 		w.AppendInt(flags)
 	}, link)
 	return rsp.Flush()

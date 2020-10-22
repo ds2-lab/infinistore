@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	Server                = worker.NewWorker()
+	Server  *worker.Worker
 	Store   types.Storage = (*storage.Storage)(nil)
 	Persist types.PersistentStorage
 	Lineage types.Lineage
