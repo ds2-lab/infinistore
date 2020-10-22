@@ -383,17 +383,20 @@ func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	if meta.Backup {
 		if s.backupMeta == nil || s.backupMeta.BackupId != meta.BackupId || s.backupMeta.BackupTotal != meta.BackupTotal {
-			return false, nil
+			meta.Consistent = false
+			return meta.Consistent, nil
 		}
 		lineage = types.LineageTermFromMeta(s.backupMeta)
 	}
 	if lineage.Term > meta.Term {
-		return false, fmt.Errorf(
+		meta.Consistent = false
+		return meta.Consistent, fmt.Errorf(
 			"Detected staled term of lambda %d, expected at least %d, have %d",
 			meta.Id, lineage.Term, meta.Term)
 	}
 	// Don't check hash if term is the start term(1).
-	return lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash), nil
+	meta.Consistent = lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash)
+	return meta.Consistent, nil
 }
 
 func (s *Storage) ResetBackup() {
@@ -648,6 +651,8 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		return false, nil
 	}
 
+	s.log.Debug("Start recovery of node %d(bak:%v).", meta.Meta.Id, meta.Backup)
+
 	// Copy lineage data for recovery, update term to the recent record, and we are ready for write operatoins.
 	var old *types.LineageTerm
 	if !meta.Backup {
@@ -896,7 +901,7 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	}
 
 	end := time.Since(start)
-	s.log.Debug("End recovery node %d.", meta.Meta.Id)
+	s.log.Debug("End recovery of node %d.", meta.Meta.Id)
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
 	s.log.Trace("recover,%d,%d,%d,%d", stop1, stop2, end, objectBytes)
 	collector.AddRecovery(

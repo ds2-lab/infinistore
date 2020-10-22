@@ -159,10 +159,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				return Lineage.Status().ProtocolStatus(), err
 			}
 
-			metas[i].Consistent, err = Lineage.IsConsistent(metas[i])
+			consistent, err := Lineage.IsConsistent(metas[i])
 			if err != nil {
 				return Lineage.Status().ProtocolStatus(), err
-			} else if !metas[i].Consistent {
+			} else if !consistent {
 				if input.IsBackingOnly() && i > 0 {
 					// In backing only mode, we will not try to recover main repository.
 					// And any data loss will be regarded as signs of reclaimation.
@@ -767,6 +767,7 @@ func main() {
 		// Deal with payload
 		if len(payload) > 0 {
 			session.Timeout.Busy()
+			skip := true
 
 			var pmeta protocol.Meta
 			if err := binary.Unmarshal(payload, &pmeta); err != nil {
@@ -774,6 +775,8 @@ func main() {
 			} else if Lineage == nil {
 				log.Warn("Recovery is requested but lineage is not available.")
 			} else {
+				log.Debug("PING meta: %v", pmeta)
+
 				// For now, only backup request supported.
 				meta, err := types.LineageMetaFromProtocol(&pmeta)
 				if err != nil {
@@ -786,12 +789,19 @@ func main() {
 				}
 
 				if !consistent {
+					skip = false
 					_, chanErr := Lineage.Recover(meta)
 					go func() {
 						waitForRecovery(chanErr)
 						session.Timeout.DoneBusy()
 					}()
+				} else {
+					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
 				}
+			}
+
+			if skip {
+				session.Timeout.DoneBusy()
 			}
 		}
 	})
@@ -974,7 +984,7 @@ func main() {
 		flag.Uint64Var(&input.Status[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
 		flag.Uint64Var(&input.Status[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
 		flag.Uint64Var(&input.Status[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
-		flag.StringVar(&input.Status[len(input.Status)-1].Tip, "tip", "", "Tips in http query format")
+		flag.StringVar(&input.Status[len(input.Status)-1].Tip, "tip", "", "Tips in http query format: bak=1&baks=10")
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
@@ -982,6 +992,7 @@ func main() {
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 		concurrency := flag.Int("c", 5, "Concurrency of recovery")
 		buckets := flag.Int("b", 1, "Number of buckets used to persist.")
+		statusAsPayload := flag.Bool("payload", false, "Status will be passed as payload of ping")
 		// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 		// var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
@@ -1016,6 +1027,17 @@ func main() {
 			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status)-1].Tip, err)
 		}
 
+		var payload *protocol.Meta
+		if *statusAsPayload {
+			payload = &protocol.Meta{}
+			*payload = input.Status[0]
+			input.Id++
+			input.Status[0] = protocol.Meta{
+				Id:   input.Id,
+				Term: 1,
+			}
+		}
+
 		if DRY_RUN {
 			d := time.Now().Add(time.Duration(*timeout) * time.Second)
 			ctx, cancel := context.WithDeadline(context.Background(), d)
@@ -1044,10 +1066,10 @@ func main() {
 			if shortcut == nil {
 				ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
 			} else {
-				writePing := func(writer *resp.RequestWriter) {
+				writePing := func(writer *resp.RequestWriter, payload []byte) {
 					writer.WriteMultiBulkSize(2)
 					writer.WriteBulkString(protocol.CMD_PING)
-					writer.WriteBulk(nil)
+					writer.WriteBulk(payload)
 					writer.Flush()
 				}
 
@@ -1074,11 +1096,17 @@ func main() {
 					log.Info("Ctrl PONG received.")
 					ready <- struct{}{}
 
+					if *statusAsPayload {
+						pl, _ := binary.Marshal(payload)
+						writePing(ctrlClient.Writer, pl)
+						readPong(ctrlClient.Reader)
+					}
+
 					close := false
 					for i := 0; i < 5; i++ {
 						start := time.Now()
 						if !close {
-							writePing(ctrlClient.Writer)
+							writePing(ctrlClient.Writer, nil)
 						}
 						readPong(ctrlClient.Reader)
 						log.Info("HeartBeat latency %v", time.Since(start))
@@ -1160,6 +1188,10 @@ func main() {
 						if ret := Store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
 							log.Error("Error on set obj-%d: %v", i, ret.Error())
 						}
+					}
+					// Let ping request running without session timeout
+					if *statusAsPayload {
+						time.Sleep(10 * time.Second)
 					}
 					session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
 				case <-ctx.Done():
