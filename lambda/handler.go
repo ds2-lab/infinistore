@@ -138,7 +138,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	var recoverErrs []chan error
 	flags := protocol.PONG_FOR_CTRL
 	if Lineage == nil {
-		// POND represents the node is ready to serve, no fast recovery required.
+		// PONG represents the node is ready to serve, no fast recovery required.
 		pong.SendWithFlags(ctx, flags)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
@@ -175,7 +175,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 		// Recover if inconsistent
 		if inconsistency == 0 {
-			// POND represents the node is ready to serve, no fast recovery required.
+			// PONG represents the node is ready to serve, no fast recovery required.
 			pong.SendWithFlags(ctx, flags)
 		} else {
 			session.Timeout.Busy()
@@ -184,7 +184,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			// Meta 0 is always the main meta
 			if !input.IsBackingOnly() && !metas[0].Consistent {
 				fast, chanErr := Lineage.Recover(metas[0])
-				// POND represents the node is ready to serve, request fast recovery.
+				// PONG represents the node is ready to serve, request fast recovery.
 				if fast {
 					flags |= protocol.PONG_RECOVERY
 				}
@@ -757,7 +757,7 @@ func main() {
 		if grant := pong.Issue(true); !grant {
 			// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
 			// which means this PING is a legacy from last invocation.
-			log.Debug("PING ignored: request to issue a POND is denied.")
+			log.Debug("PING ignored: request to issue a PONG is denied.")
 			return
 		}
 

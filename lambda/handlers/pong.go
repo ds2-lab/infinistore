@@ -117,6 +117,11 @@ func (p *PongHandler) sendImpl(flags int64, link *redeo.Client) error {
 		}
 	}
 
+	// Guard for session
+	if lambdaLife.GetSession() == nil {
+		// Abandon
+		return nil
+	}
 	pongLog(flags, link != nil)
 	if err := p.pong(link, flags); err != nil {
 		log.Error("Error on PONG flush: %v", err)
