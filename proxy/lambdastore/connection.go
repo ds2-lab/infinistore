@@ -272,14 +272,12 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 }
 
 func (conn *Connection) pongHandler() {
-	conn.log.Debug("PONG from lambda.")
-
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, err := conn.r.ReadInt()
 	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
 		return
 	}
-	storeId := id & 0x1111
+	storeId := id & 0xFFFF
 	conn.workerId = int32(id >> 32)
 
 	sid, err := conn.r.ReadBulkString()
@@ -292,6 +290,7 @@ func (conn *Connection) pongHandler() {
 		return
 	}
 
+	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
 	if conn.instance != nil {
 		conn.instance.flagValidated(conn, sid, flags)
 		return

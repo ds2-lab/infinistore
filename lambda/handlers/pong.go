@@ -183,6 +183,7 @@ func sendPong(link *redeo.Client, flags int64) error {
 		// CMD
 		w.AppendBulkString(protocol.CMD_PONG)
 		// WorkerID + StoreID
+		// fmt.Printf("store id:%d, worker id:%d, sent: %d\n", store.Store.Id(), store.Server.Id(), int64(store.Store.Id())+int64(store.Server.Id())<<32)
 		w.AppendInt(int64(store.Store.Id()) + int64(store.Server.Id())<<32)
 		// Sid
 		w.AppendBulkString(lambdaLife.GetSession().Sid)
