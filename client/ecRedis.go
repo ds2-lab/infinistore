@@ -111,7 +111,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 	if placements != nil {
 		for i, ret := range ret.Rets {
-			placements[i], _ = strconv.Atoi(string(ret.([]byte)))
+			placements[i], _ = strconv.Atoi(ret.(string))
 		}
 	}
 	fmt.Println("placements is", index)

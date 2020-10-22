@@ -82,6 +82,11 @@ func (conn *Connection) Close() error {
 	// Signal colosed only. This allow ongoing transmission to finish.
 	close(conn.closed)
 	conn.log.Debug("Signal to close.")
+
+	if conn.dataLink != nil {
+		conn.dataLink.Close()
+	}
+
 	return nil
 }
 
