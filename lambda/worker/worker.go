@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"context"
 	"errors"
 	"io"
 	"math/rand"
@@ -24,7 +23,6 @@ const (
 
 var (
 	defaultOption WorkerOptions
-	ctxKeyConn    = struct{}{}
 
 	ErrNoProxySpecified = errors.New("no proxy specified")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -33,8 +31,8 @@ var (
 type Worker struct {
 	*redeo.Server
 	id           int32
-	ctrlLink     *redeo.Client
-	dataLink     *redeo.Client
+	ctrlLink     *Link
+	dataLink     *Link
 	heartbeater  Heartbeater
 	log          logger.ILogger
 	mu           sync.RWMutex
@@ -55,8 +53,8 @@ func NewWorker(lifeId int64) *Worker {
 		id:          rand.Int31(),
 		Server:      redeo.NewServer(nil),
 		log:         &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Worker:"},
-		ctrlLink:    redeo.NewClient(nil), // Offer response buffer
-		dataLink:    redeo.NewClient(nil), // Offer response buffer
+		ctrlLink:    NewLink(true),
+		dataLink:    NewLink(false),
 		heartbeater: new(DefaultHeartbeater),
 		closed:      WorkerClosed,
 	}
@@ -91,12 +89,8 @@ func (wrk *Worker) StartOrResume(proxyAddr string, args ...*WorkerOptions) (isSt
 	isStart = atomic.CompareAndSwapInt32(&wrk.closed, WorkerClosed, WorkerRunning)
 	wrk.dryrun = false
 
-	if err = wrk.ensureConnection(wrk.ctrlLink, true, proxyAddr, opts); err != nil {
-		return
-	}
-	if err = wrk.ensureConnection(wrk.dataLink, false, proxyAddr, opts); err != nil {
-		return
-	}
+	wrk.ensureConnection(wrk.ctrlLink, proxyAddr, opts)
+	wrk.ensureConnection(wrk.dataLink, proxyAddr, opts)
 	return
 }
 
@@ -118,8 +112,8 @@ func (wrk *Worker) Close(opts ...bool) {
 		return
 	}
 
-	wrk.ctrlLink = wrk.resetLinkLocked(wrk.ctrlLink)
-	wrk.dataLink = wrk.resetLinkLocked(wrk.dataLink)
+	wrk.ctrlLink.Close()
+	wrk.dataLink.Close()
 	atomic.StoreInt32(&wrk.numLinks, 0)
 
 	wrk.readyToClose.Wait()
@@ -130,28 +124,28 @@ func (wrk *Worker) Close(opts ...bool) {
 // if payload is large enough.
 // In case an error is returned on closing, the caller can safely ignore the error and call rsp.Flush() afterward
 // without side affect.
-func (wrk *Worker) AddResponses(rsp Response, datalinks ...interface{}) (err error) {
+func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) {
 	if wrk.dryrun {
 		return nil
 	}
 
-	var datalink *redeo.Client
+	var link *Link
 	wrk.mu.RLock()
 
-	if len(datalinks) > 0 {
-		switch dl := datalinks[0].(type) {
+	if len(links) > 0 {
+		switch dl := links[0].(type) {
 		case *redeo.Client:
-			datalink = dl
+			link = LinkFromClient(dl)
 		case bool:
 			if dl {
-				datalink = wrk.dataLink
+				link = wrk.dataLink
 			}
 		}
 	}
 
 	// Default to use ctrlLink
-	if datalink == nil {
-		datalink = wrk.ctrlLink
+	if link == nil {
+		link = wrk.ctrlLink
 	}
 
 	// Stick to original link, proxy may decide which link to use.
@@ -162,16 +156,13 @@ func (wrk *Worker) AddResponses(rsp Response, datalinks ...interface{}) (err err
 	// }
 	wrk.mu.RUnlock()
 
-	rsp.reset(rsp, datalink)
-	if err = datalink.AddResponses(rsp); err != nil {
-		rsp.close()
-	}
-	return err
+	rsp.reset(rsp, link)
+	return link.AddResponses(rsp)
 }
 
-func (wrk *Worker) AddResponsesWithPreparer(preparer Preparer, datalinks ...interface{}) (Response, error) {
+func (wrk *Worker) AddResponsesWithPreparer(preparer Preparer, links ...interface{}) (Response, error) {
 	resp := &BaseResponse{preparer: preparer}
-	return resp, wrk.AddResponses(resp, datalinks...)
+	return resp, wrk.AddResponses(resp, links...)
 }
 
 func (wrk *Worker) SetManualAck(enable bool) {
@@ -182,34 +173,19 @@ func (wrk *Worker) SetManualAck(enable bool) {
 	}
 }
 
-func GetConnectionByLink(link *redeo.Client) net.Conn {
-	if link == nil {
-		return nil
-	}
-
-	if conn, ok := link.Context().Value(ctxKeyConn).(net.Conn); ok {
-		return conn
-	}
-
-	return nil
-}
-
-func (wrk *Worker) ensureConnection(link *redeo.Client, isCtrl bool, proxyAddr string, opts *WorkerOptions) error {
-	initialized := false
-	wrk.mu.Lock()
-	initialized = link.ID() != uint64(0)
-	wrk.mu.Unlock()
-	if initialized {
+func (wrk *Worker) ensureConnection(link *Link, proxyAddr string, opts *WorkerOptions) error {
+	if !link.Initialize() {
+		// Initilized.
 		return nil
 	}
 
 	id := atomic.AddInt32(&wrk.numLinks, 1)
 	wrk.readyToClose.Add(1)
-	go wrk.serve(int(id), link, isCtrl, proxyAddr, opts)
+	go wrk.serve(int(id), link, proxyAddr, opts)
 	return nil
 }
 
-func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr string, opts *WorkerOptions) {
+func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptions) {
 	for {
 		// Connect to proxy.
 		var conn net.Conn
@@ -239,25 +215,23 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 			wrk.mu.Unlock()
 			return
 		}
-		old := link
-		link = wrk.setLinkLocked(isCtrl, redeo.NewClient(conn))
-		link.SetContext(context.WithValue(link.Context(), ctxKeyConn, conn))
+		link.Reset(conn)
 		wrk.mu.Unlock()
 
 		// Send a heartbeat on the link immediately to confirm store information.
 		// The heartbeat will be queued and send once worker started.
 		// On error, the connection will be closed .
-		if !isCtrl || atomic.LoadInt32(&wrk.manualAck) == 0 {
-			go func(link *redeo.Client) {
-				if err := wrk.heartbeater.SendToLink(link); err != nil {
+		if !link.IsControl() || atomic.LoadInt32(&wrk.manualAck) == 0 {
+			go func(client *redeo.Client) {
+				if err := wrk.heartbeater.SendToLink(client); err != nil {
 					wrk.log.Warn("%v", err)
-					link.Close()
+					client.Close()
 				}
-			}(link)
+			}(link.Client)
 		}
 
 		// Serve the client.
-		err := wrk.Server.ServeClient(link, false) // Enable asych mode to allow sending request.
+		err := wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
 		conn.Close()
 
 		// Check if worker is closed.
@@ -271,10 +245,8 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 			return
 		}
 
-		// Reset old link and buffer possible incoming response
-		wrk.mu.Lock()
-		link = wrk.setLinkLocked(isCtrl, old)
-		wrk.mu.Unlock()
+		// Reset link and buffer possible incoming response
+		link.Reset(nil)
 
 		if err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
 			wrk.log.Warn("Connection(%v) closed: %v, reconnecting...", id, err)
@@ -286,35 +258,6 @@ func (wrk *Worker) serve(id int, link *redeo.Client, isCtrl bool, proxyAddr stri
 			return
 		}
 	}
-}
-
-func (wrk *Worker) setLinkLocked(isCtrl bool, link *redeo.Client) *redeo.Client {
-	var old *redeo.Client
-	if isCtrl {
-		old = wrk.ctrlLink
-		wrk.ctrlLink = link
-	} else {
-		old = wrk.dataLink
-		wrk.dataLink = link
-	}
-	// Move cached responses
-	if len(old.Responses()) > 0 {
-		go func() {
-			for rsp := range old.Responses() {
-				rsp.(Response).reset(rsp.(Response), link)
-				link.AddResponses(rsp)
-			}
-		}()
-	}
-	return link
-}
-
-func (wrk *Worker) resetLinkLocked(link *redeo.Client) *redeo.Client {
-	link.Close()
-	if conn := GetConnectionByLink(link); conn != nil {
-		conn.Close() // force disconnect
-	}
-	return redeo.NewClient(nil) // offer response buffer
 }
 
 // HandleCallback callback handler

@@ -2,7 +2,6 @@ package lambdastore
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -965,7 +964,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		case protocol.CMD_RECOVER:
 			req.PrepareForRecover(link)
 		default:
-			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
+			req.SetResponse(fmt.Errorf("Unexpected request command: %s", cmd))
 			// Unrecoverable
 			return nil
 		}
@@ -978,6 +977,12 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			select {
 			case <-link.chanWait:
 			default:
+			}
+			// link failed, close to be reconnected.
+			if link == ctrlLink {
+				link.Close()
+			} else {
+				ctrlLink.RemoveDataLink(link)
 			}
 			return err
 		}
@@ -1013,6 +1018,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			if isDataRequest {
 				global.DataCollected.Done()
 			}
+			ctrlLink.Close()
 			// Control commands are valid to connection only.
 			return nil
 		}

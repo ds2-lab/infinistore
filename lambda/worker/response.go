@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -26,7 +25,7 @@ type Response interface {
 	Size() int64
 
 	// Reset by binding the instance itself and redeo client. Must call close later.
-	reset(Response, *redeo.Client)
+	reset(Response, *Link)
 
 	// Flush the buffer of specified writer which must match the specified client on calling reset.
 	flush(resp.ResponseWriter) error
@@ -37,7 +36,7 @@ type Response interface {
 
 type BaseResponse struct {
 	resp.ResponseWriter
-	link     *redeo.Client
+	link     *Link
 	err      error
 	done     sync.WaitGroup
 	inst     Response
@@ -64,7 +63,7 @@ func (r *BaseResponse) Size() int64 {
 	}
 }
 
-func (r *BaseResponse) reset(inst Response, link *redeo.Client) {
+func (r *BaseResponse) reset(inst Response, link *Link) {
 	if r.link == nil {
 		r.done.Add(1)
 	}
@@ -81,7 +80,7 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 		r.inst.Prepare()
 	}
 
-	conn := GetConnectionByLink(r.link)
+	conn := r.link.conn
 
 	conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
 	defer conn.SetWriteDeadline(time.Time{})

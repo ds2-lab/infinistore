@@ -421,7 +421,7 @@ func main() {
 		defer session.Timeout.DoneBusyWithReset(extension)
 
 		t := time.Now()
-		log.Debug("In GET handler")
+		log.Debug("In GET handler(link:%d)", client.ID())
 
 		connId := c.Arg(0).String()
 		reqId := c.Arg(1).String()
@@ -484,7 +484,7 @@ func main() {
 		}
 
 		t := time.Now()
-		log.Debug("In SET handler")
+		log.Debug("In SET handler(link:%d)", client.ID())
 
 		var reqId, chunkId string
 		var finalize func(*types.OpRet, bool, ...time.Duration)
@@ -578,7 +578,7 @@ func main() {
 		}()
 
 		t := time.Now()
-		log.Debug("In RECOVER handler")
+		log.Debug("In RECOVER handler(link:%d)", client.ID())
 
 		errRsp := &worker.ErrorResponse{}
 		connId := c.Arg(0).String()
