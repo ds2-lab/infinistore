@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,6 +98,7 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("should worker connect successfully", func() {
+		fmt.Println("should worker connect successfully...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		start, err := server.StartOrResume(shortcut.Address, &WorkerOptions{DryRun: true})
@@ -115,6 +117,7 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("no ack should be return on disabled", func() {
+		fmt.Println("no ack should be return on disabled...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		server.SetManualAck(true)
@@ -141,6 +144,7 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("response should be cached if connection has not been established", func() {
+		fmt.Println("response should be cached if connection has not been established...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
@@ -168,6 +172,7 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("should reflect resuming of worker on calling StartOrResume", func() {
+		fmt.Println("should reflect resuming of worker on calling StartOrResume...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		start, _ := server.StartOrResume(shortcut.Address, &WorkerOptions{DryRun: true})
@@ -189,6 +194,7 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("should worker reconnect automatically", func() {
+		fmt.Println("should worker reconnect automatically...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		start, _ := server.StartOrResume(shortcut.Address, &WorkerOptions{DryRun: true})

@@ -68,6 +68,13 @@ func (conn *Connection) AddDataLink(link *Connection) {
 	conn.dataLink = link
 }
 
+func (conn *Connection) RemoveDataLink(link *Connection) {
+	if conn.dataLink != nil && conn.dataLink == link {
+		conn.dataLink.Close()
+		conn.dataLink = nil
+	}
+}
+
 func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
