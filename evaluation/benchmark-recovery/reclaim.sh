@@ -12,6 +12,10 @@ MEM=$3
 WAIT="${4}s"
 I=$5
 
+if [ "$NODE_PREFIX" == "default" ] ; then
+  NODE_PREFIX="Store1VPCNode"
+fi
+
 ((TIMEOUT=900-I*10))
 
 source $PWD/util.sh
