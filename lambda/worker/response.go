@@ -2,33 +2,48 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
 	RequestTimeout = 1 * time.Second
+
+	ctxKeyClient = struct{}{}
 )
 
-type Preparer func(resp.ResponseWriter)
+type Preparer func(*SimpleResponse, resp.ResponseWriter)
 
 type Response interface {
-	// Overwrite to customize fields of a Response.
+	redeo.Contextable
+
+	// String show friendly name
+	String() string
+
+	// Prepare overwrite to customize fields of a Response.
 	Prepare()
 
-	// Wait for flushing.
+	// Flush wait for flushing.
 	Flush() error
 
-	// Overwrite to return the size of a Response.
+	// Size overwrite to return the size of a Response.
 	Size() int64
 
 	// Reset by binding the instance itself and redeo client. Must call close later.
-	reset(Response, *Link)
+	bind(*Link)
+
+	// Get binded link
+	getLink() *Link
 
 	// Flush the buffer of specified writer which must match the specified client on calling reset.
 	flush(resp.ResponseWriter) error
+
+	// Mark an attempt to flush response, return attempts left.
+	markAttempt() int
 
 	// Close the response.
 	close()
@@ -36,14 +51,22 @@ type Response interface {
 
 type BaseResponse struct {
 	resp.ResponseWriter
-	link     *Link
-	err      error
-	done     sync.WaitGroup
-	inst     Response
-	preparer Preparer
+	link      *Link
+	attempted int
+	err       error
+	done      sync.WaitGroup
+	inst      Response
+	preparer  Preparer
+	ctx       context.Context
 
+	Attempts   int
+	Cmd        string
 	Body       []byte
 	BodyStream resp.AllReadCloser
+}
+
+func (r *BaseResponse) String() string {
+	return r.Cmd
 }
 
 // Overwrite me
@@ -63,24 +86,49 @@ func (r *BaseResponse) Size() int64 {
 	}
 }
 
-func (r *BaseResponse) reset(inst Response, link *Link) {
-	if r.link == nil {
-		r.done.Add(1)
+// Context return the response context
+func (r *BaseResponse) Context() context.Context {
+	if r.ctx != nil {
+		return r.ctx
 	}
-	r.inst = inst
-	r.link = link
+	return context.Background()
+}
+
+// SetContext sets the client's context
+func (r *BaseResponse) SetContext(ctx context.Context) {
+	r.ctx = ctx
+}
+
+func (r *BaseResponse) bind(link *Link) {
+	r.bindImpl(r, link)
+}
+
+func (r *BaseResponse) bindImpl(inst Response, link *Link) {
+	if r.link == nil {
+		if r.Attempts == 0 {
+			r.Attempts = MaxAttempts
+		}
+		r.done.Add(1)
+		r.inst = inst
+		r.link = link
+	}
+}
+
+func (r *BaseResponse) getLink() *Link {
+	return r.link
 }
 
 func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	r.ResponseWriter = writer
 	r.err = nil
 	if r.preparer != nil {
-		r.preparer(writer)
+		r.preparer(r.inst.(*SimpleResponse), writer)
 	} else {
 		r.inst.Prepare()
 	}
 
-	conn := r.link.conn
+	client := redeo.GetClient(r.Context())
+	conn := client.Conn()
 
 	conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
 	defer conn.SetWriteDeadline(time.Time{})
@@ -118,8 +166,21 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	return r.err
 }
 
+func (r *BaseResponse) markAttempt() int {
+	r.attempted++
+	return r.Attempts - r.attempted
+}
+
 func (r *BaseResponse) close() {
 	r.done.Done()
+}
+
+type SimpleResponse struct {
+	BaseResponse
+}
+
+func (r *SimpleResponse) bind(link *Link) {
+	r.BaseResponse.bindImpl(r, link)
 }
 
 // ObjectResponse Response wrapper for objects.
@@ -147,6 +208,10 @@ func (r *ObjectResponse) Prepare() {
 	r.BaseResponse.BodyStream = r.BodyStream
 }
 
+func (r *ObjectResponse) bind(link *Link) {
+	r.BaseResponse.bindImpl(r, link)
+}
+
 func (r *ObjectResponse) Size() int64 {
 	if r.BodyStream != nil {
 		return r.BodyStream.Len()
@@ -165,5 +230,10 @@ type ErrorResponse struct {
 }
 
 func (e *ErrorResponse) Prepare() {
+	e.BaseResponse.Cmd = "error"
 	e.AppendErrorf("%v", e.Error)
+}
+
+func (e *ErrorResponse) bind(link *Link) {
+	e.BaseResponse.bindImpl(e, link)
 }

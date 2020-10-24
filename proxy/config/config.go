@@ -26,10 +26,10 @@ const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Store1VPCNode"
 
 // InstanceWarmTimout Interval to warmup Lambda functions.
-const InstanceWarmTimout = 1 * time.Minute
+const InstanceWarmTimeout = 1 * time.Minute
 
 // Instance degrade warmup interval
-const InstanceDegradeWarmTimout = 5 * time.Minute
+const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.

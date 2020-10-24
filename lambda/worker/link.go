@@ -16,12 +16,12 @@ const (
 
 var (
 	ctxKeyLink = struct{}{}
+	ctxKeyConn = struct{}{}
 )
 
 // Wrapper for redeo client that support response buffering if connection is unavailable
 type Link struct {
 	*redeo.Client
-	conn net.Conn
 	ctrl bool
 	buff chan interface{}
 	mu   sync.RWMutex
@@ -59,12 +59,13 @@ func (ln *Link) Reset(conn net.Conn) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.conn = conn
 	if conn == nil {
 		ln.Client = nil
+		return
 	}
 
 	ln.Client = redeo.NewClient(conn)
+	ln.Client.SetContext(context.WithValue(ln.Client.Context(), ctxKeyLink, ln))
 	ln.Client.SetContext(context.WithValue(ln.Client.Context(), ctxKeyLink, ln))
 	// Move cached responses
 	if len(ln.buff) > 0 {
@@ -90,12 +91,9 @@ func (ln *Link) Close() {
 	defer ln.mu.Unlock()
 
 	if ln.Client != nil {
+		ln.Client.Conn().Close()
 		ln.Client.Close()
 		ln.Client = nil
-	}
-	if ln.conn != nil {
-		ln.conn.Close()
-		ln.conn = nil
 	}
 	atomic.StoreInt32(&ln.once, LinkUninitialized)
 }

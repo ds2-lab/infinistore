@@ -51,10 +51,12 @@ type Timeout struct {
 	interruptEnd  time.Time
 	timer         *time.Timer
 	lastExtension time.Duration
+	lastReason    string
+	reset         chan time.Duration
+	resetReason   string
 	log           logger.ILogger
 	active        int32
 	disabled      int32
-	reset         chan time.Duration
 	c             chan time.Time
 	timeout       bool
 	due           time.Duration
@@ -135,7 +137,7 @@ func (t *Timeout) Restart(ext time.Duration) {
 	// Prevent timeout being triggered or reset after stopped
 	t.Enable()
 
-	t.ResetWithExtension(ext)
+	t.ResetWithExtension(ext, "restart")
 }
 
 func (t *Timeout) Reset() bool {
@@ -154,8 +156,9 @@ func (t *Timeout) Reset() bool {
 	return true
 }
 
-func (t *Timeout) ResetWithExtension(ext time.Duration) bool {
+func (t *Timeout) ResetWithExtension(ext time.Duration, reason string) bool {
 	t.lastExtension = ext
+	t.lastReason = reason
 	return t.Reset()
 }
 
@@ -163,20 +166,22 @@ func (t *Timeout) SetLogger(log logger.ILogger) {
 	t.log = log
 }
 
-func (t *Timeout) Busy() {
+func (t *Timeout) Busy(reason string) {
 	// log.Println("busy")
-	atomic.AddInt32(&t.active, 1)
+	actives := atomic.AddInt32(&t.active, 1)
+	t.log.Debug("Busy %s(%d)", reason, actives)
 }
 
-func (t *Timeout) DoneBusy() {
+func (t *Timeout) DoneBusy(reason string) {
 	// log.Println("done busy")
-	atomic.AddInt32(&t.active, -1)
+	actives := atomic.AddInt32(&t.active, -1)
+	t.log.Debug("Done busy %s(%d)", reason, actives)
 }
 
-func (t *Timeout) DoneBusyWithReset(ext time.Duration) {
+func (t *Timeout) DoneBusyWithReset(ext time.Duration, reason string) {
 	// log.Printf("done busy with reset %v\n", ext)
-	atomic.AddInt32(&t.active, -1)
-	t.ResetWithExtension(ext)
+	t.DoneBusy(reason)
+	t.ResetWithExtension(ext, reason)
 }
 
 func (t *Timeout) IsBusy() bool {
@@ -207,7 +212,7 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			timeout, due := t.getTimeout(extension)
 			t.due = due
 			t.timer.Reset(timeout)
-			t.log.Debug("Due expectation updated: %v, timeout in %v", due, timeout)
+			t.log.Debug("Due extended to %v, timeout in %v: %s", due, timeout, t.resetReason)
 		case <-t.timer.C:
 			// Timeout channel should be empty, or we clear it
 			select {
@@ -249,7 +254,8 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 
 func (t *Timeout) resetLocked() {
 	_, t.due = t.getTimeout(t.lastExtension)
-	t.log.Debug("Due expectation updated: %v", t.due)
+	t.log.Debug("Due expected at %v: %s", t.due, t.lastReason)
+	t.resetReason = t.lastReason
 	select {
 	case t.reset <- t.lastExtension:
 	default:

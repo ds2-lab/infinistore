@@ -204,11 +204,11 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 
 func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
 	s.setSafe.Wait()
-	s.log.Debug("ready to set key %v", key)
+	// s.log.Debug("ready to set key %v", key)
 	// Lock lineage, ensure operation get processed in the term.
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
-	s.log.Debug("in mutex of setting key %v", key)
+	// s.log.Debug("in mutex of setting key %v", key)
 
 	chunk := types.NewChunk(key, chunkId, val)
 	chunk.Term = 1
@@ -235,7 +235,7 @@ func (s *Storage) setImpl(key string, chunkId string, val []byte, opt *types.OpW
 			op.Persisted = opt.Persisted
 		}
 		s.chanOps <- op
-		s.log.Debug("local set ok, key %v", key)
+		// s.log.Debug("local set ok, key %v", key)
 		return op.OpRet
 	} else {
 		return types.OpSuccess()
@@ -522,18 +522,23 @@ func (s *Storage) TrackLineage() {
 				token <- op
 			}
 		case persistedOp := <-token:
+			// A operation has been persisted.
 			if persistedOp != nil {
-				// Accept result
+				// Fill in the allocated slot.
 				persistedOps[persistedOp.OpIdx] = persistedOp
+
+				// Check persisted yet has not been processed operations.
 				for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
 					persistedOp = persistedOps[persisted]
-					if persistedOp.OpRet.Wait() == nil {
+					if persistedOp.OpRet.IsDone() {
 						s.lineage.Ops = append(s.lineage.Ops, persistedOp.LineageOp)
 
 						// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
 						if !s.getSafe.IsWaiting() {
 							s.diffrank.AddOp(&persistedOp.LineageOp)
 						} // else: Skip
+					} else {
+						break
 					}
 				}
 			}
@@ -617,6 +622,7 @@ func (s *Storage) StopTracker(option *types.CommitOption) types.LineageStatus {
 		}
 		s.signalTracker = nil
 		s.committed = nil
+		s.log.Debug("Tracking lineage stopped.")
 	}
 
 	return s.Status()

@@ -11,12 +11,13 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/store"
+	"github.com/mason-leap-lab/infinicache/lambda/worker"
 )
 
 var (
 	ContextKeyReady    = "ready"
 	DefaultPongTimeout = 30 * time.Millisecond
-	DefaultRetry       = 3
+	DefaultRetry       = 0 // Disable retrial for backend link intergrated retrial and reconnection.
 
 	log = store.Log
 )
@@ -179,9 +180,9 @@ func pongLog(flags int64, forLink bool) {
 }
 
 func sendPong(link *redeo.Client, flags int64) error {
-	rsp, _ := store.Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
+	store.Server.AddResponsesWithPreparer(protocol.CMD_PONG, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
 		// CMD
-		w.AppendBulkString(protocol.CMD_PONG)
+		w.AppendBulkString(rsp.Cmd)
 		// WorkerID + StoreID
 		// fmt.Printf("store id:%d, worker id:%d, sent: %d\n", store.Store.Id(), store.Server.Id(), int64(store.Store.Id())+int64(store.Server.Id())<<32)
 		w.AppendInt(int64(store.Store.Id()) + int64(store.Server.Id())<<32)
@@ -190,5 +191,6 @@ func sendPong(link *redeo.Client, flags int64) error {
 		// Flags
 		w.AppendInt(flags)
 	}, link)
-	return rsp.Flush()
+	// return rsp.Flush()
+	return nil
 }
