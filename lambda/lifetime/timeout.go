@@ -46,7 +46,7 @@ func init() {
 }
 
 func GetStreamingDeadline(size int64) time.Time {
-	return time.Now().Add(time.Duration(float64(size) / BANDWIDTH * STREAMING_TIMEOUT_FACTOR))
+	return time.Now().Add(time.Duration(float64(size) / BANDWIDTH * STREAMING_TIMEOUT_FACTOR * float64(time.Second)))
 }
 
 type Timeout struct {
