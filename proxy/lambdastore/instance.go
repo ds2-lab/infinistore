@@ -3,6 +3,7 @@ package lambdastore
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -58,7 +59,7 @@ const (
 
 var (
 	IM                    InstanceManager
-	WarmTimout            = config.InstanceWarmTimout
+	WarmTimeout           = config.InstanceWarmTimeout
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
@@ -143,8 +144,8 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		chanPriorCmd:  make(chan types.Command, 1),
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
-		coolTimer:     time.NewTimer(WarmTimout),
-		coolTimeout:   WarmTimout,
+		coolTimer:     time.NewTimer(time.Duration(rand.Int63n(int64(WarmTimeout)) + int64(WarmTimeout)/2)), // Differentiate the time to start warming up.
+		coolTimeout:   WarmTimeout,
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 
@@ -412,7 +413,7 @@ func (ins *Instance) Migrate() error {
 
 func (ins *Instance) Degrade() {
 	if atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY) {
-		ins.coolTimeout = config.InstanceDegradeWarmTimout
+		ins.coolTimeout = config.InstanceDegradeWarmTimeout
 	}
 }
 
@@ -856,6 +857,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		err = ins.request(ctrlLink, cmd, validateDuration)
 		if err == nil {
 			break
+		} else if !cmd.Retriable() { // Request can become streaming, so we need to test again everytime.
+			break
 		}
 	}
 	if err != nil {
@@ -964,7 +967,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		case protocol.CMD_RECOVER:
 			req.PrepareForRecover(link)
 		default:
-			req.SetResponse(fmt.Errorf("Unexpected request command: %s", cmd))
+			req.SetResponse(fmt.Errorf("unexpected request command: %s", cmd))
 			// Unrecoverable
 			return nil
 		}
@@ -978,12 +981,12 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			case <-link.chanWait:
 			default:
 			}
-			// link failed, close to be reconnected.
-			if link == ctrlLink {
-				link.Close()
-			} else {
-				ctrlLink.RemoveDataLink(link)
-			}
+			// // link failed, close to be reconnected.
+			// if link == ctrlLink {
+			// 	link.Close()
+			// } else {
+			// 	ctrlLink.RemoveDataLink(link)
+			// }
 			return err
 		}
 

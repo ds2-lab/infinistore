@@ -3,11 +3,13 @@ package worker
 import (
 	"errors"
 	"io"
+	"math"
 	"math/rand"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -24,8 +26,13 @@ const (
 var (
 	defaultOption WorkerOptions
 
+	ErrWorkerClosed     = errors.New("worker closed")
 	ErrNoProxySpecified = errors.New("no proxy specified")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
+
+	MaxAttempts           = 3
+	RetrialDelayStartFrom = 20 * time.Millisecond
+	RetrialBackoffFactor  = 2
 )
 
 type Worker struct {
@@ -117,6 +124,18 @@ func (wrk *Worker) Close(opts ...bool) {
 	atomic.StoreInt32(&wrk.numLinks, 0)
 
 	wrk.readyToClose.Wait()
+	wrk.log.Info("Closed")
+}
+
+func (wrk *Worker) IsClosed() bool {
+	wrk.mu.RLock()
+	defer wrk.mu.RUnlock()
+
+	return wrk.isClosedLocked()
+}
+
+func (wrk *Worker) isClosedLocked() bool {
+	return atomic.LoadInt32(&wrk.closed) == WorkerClosed
 }
 
 // Add asynchronize response, error if the client is closed.
@@ -131,6 +150,11 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 
 	var link *Link
 	wrk.mu.RLock()
+
+	if wrk.isClosedLocked() {
+		wrk.mu.RUnlock()
+		return ErrWorkerClosed
+	}
 
 	if len(links) > 0 {
 		switch dl := links[0].(type) {
@@ -154,14 +178,16 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 	// if datalink == wrk.ctrlLink && rsp.Size() > MaxControlRequestSize {
 	// 	datalink = wrk.dataLink
 	// }
+
 	wrk.mu.RUnlock()
 
-	rsp.reset(rsp, link)
-	return link.AddResponses(rsp)
+	// Link will only be binded once. We use binded link to add the response.
+	rsp.bind(link)
+	return rsp.getLink().AddResponses(rsp)
 }
 
-func (wrk *Worker) AddResponsesWithPreparer(preparer Preparer, links ...interface{}) (Response, error) {
-	resp := &BaseResponse{preparer: preparer}
+func (wrk *Worker) AddResponsesWithPreparer(cmd string, preparer Preparer, links ...interface{}) (Response, error) {
+	resp := &SimpleResponse{BaseResponse{Cmd: cmd, preparer: preparer}}
 	return resp, wrk.AddResponses(resp, links...)
 }
 
@@ -233,6 +259,8 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 		// Serve the client.
 		err := wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
 		conn.Close()
+		// Reset link and buffer possible incoming response
+		link.Reset(nil)
 
 		// Check if worker is closed.
 		// Must Check first to avoid deadlock on calling Close()
@@ -244,9 +272,6 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 			wrk.log.Info("Connection(%v) closed.", id)
 			return
 		}
-
-		// Reset link and buffer possible incoming response
-		link.Reset(nil)
 
 		if err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
 			wrk.log.Warn("Connection(%v) closed: %v, reconnecting...", id, err)
@@ -263,9 +288,24 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 // HandleCallback callback handler
 func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp := r.(Response)
-	defer rsp.close()
 
-	rsp.flush(w)
+	err := rsp.flush(w)
+	if err != nil {
+		left := rsp.markAttempt()
+		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left)))
+		if left > 0 {
+			wrk.log.Warn("Error on flush response(%v), retry in %v: %v", rsp, retryIn, err)
+			go func() {
+				time.Sleep(retryIn)
+				wrk.AddResponses(rsp)
+			}()
+			return
+		} else {
+			wrk.log.Warn("Error on flush response(%v), abandon attempts: %v", rsp, err)
+		}
+	}
+
+	rsp.close()
 }
 
 type TestClient struct {

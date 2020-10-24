@@ -127,9 +127,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// Extend timeout for expecting requests except invocation with cmd "warmup".
 	if input.Cmd == protocol.CMD_WARMUP {
-		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR)
+		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR, input.Cmd)
 	} else {
-		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
+		session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND, input.Cmd)
 	}
 
 	// Start data collector
@@ -178,7 +178,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			// PONG represents the node is ready to serve, no fast recovery required.
 			pong.SendWithFlags(ctx, flags)
 		} else {
-			session.Timeout.Busy()
+			session.Timeout.Busy("recover")
 			recoverErrs = make([]chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
@@ -220,7 +220,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				// Continue...
 			}
 		}
-		session.Timeout.DoneBusy()
+		session.Timeout.DoneBusy("recover")
 	}
 
 	// Adaptive timeout control
@@ -268,6 +268,8 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 
 	select {
 	case <-session.WaitDone():
+		// Usually, timeout is used to quit.
+		// On system closing, the lineage should have been unset.
 		if Lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
 			status = Lineage.Status()
@@ -308,15 +310,13 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		}
 	}
 
-	// Unlikely to reach here
-	log.Error("Wait, where am I?")
 	return
 }
 
 func recoveredHandler(ctx context.Context) error {
 	log.Debug("Sending recovered notification.")
-	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-		w.AppendBulkString(protocol.CMD_RECOVERED)
+	rsp, _ := Server.AddResponsesWithPreparer(protocol.CMD_RECOVERED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+		w.AppendBulkString(rsp.Cmd)
 	})
 	return rsp.Flush()
 }
@@ -352,8 +352,8 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	// Reader will be avaiable after connecting and source being replaced
 	go func(s *lambdaLife.Session) {
 		// In-session gorouting
-		s.Timeout.Busy()
-		defer s.Timeout.DoneBusy()
+		s.Timeout.Busy(input.Cmd)
+		defer s.Timeout.DoneBusy(input.Cmd)
 
 		s.Migrator.Migrate(reader, Store)
 		s.Migrator = nil
@@ -365,8 +365,8 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 
 func initMigrateHandler() error {
 	// init backup cmd
-	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-		w.AppendBulkString("initMigrate")
+	rsp, _ := Server.AddResponsesWithPreparer("initMigrate", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+		w.AppendBulkString(rsp.Cmd)
 	})
 	return rsp.Flush()
 }
@@ -377,8 +377,8 @@ func byeHandler() error {
 		return nil
 	}
 	// init backup cmd
-	rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-		w.AppendBulkString("bye")
+	rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+		w.AppendBulkString(rsp.Cmd)
 	})
 	return rsp.Flush()
 }
@@ -390,17 +390,17 @@ func main() {
 
 		pong.Cancel()
 		session := lambdaLife.GetSession()
-		session.Timeout.Busy()
+		session.Timeout.Busy(c.Name)
 		extension := lambdaLife.TICK_ERROR
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		defer session.Timeout.DoneBusyWithReset(extension, c.Name)
 
 		log.Debug("In Test handler")
 
-		rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-			w.AppendBulkString(c.Name)
+		rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+			w.AppendBulkString(rsp.Cmd)
 		}, client)
 		if err := rsp.Flush(); err != nil {
 			log.Error("Error on data::flush: %v", err)
@@ -412,13 +412,13 @@ func main() {
 
 		pong.Cancel()
 		session := lambdaLife.GetSession()
-		session.Timeout.Busy()
+		session.Timeout.Busy(c.Name)
 		session.Requests++
 		extension := lambdaLife.TICK_ERROR
 		if session.Requests > 1 {
 			extension = lambdaLife.TICK
 		}
-		defer session.Timeout.DoneBusyWithReset(extension)
+		defer session.Timeout.DoneBusyWithReset(extension, c.Name)
 
 		t := time.Now()
 		log.Debug("In GET handler(link:%d)", client.ID())
@@ -476,7 +476,7 @@ func main() {
 
 		pong.Cancel()
 		session := lambdaLife.GetSession()
-		session.Timeout.Busy()
+		session.Timeout.Busy(c.Name)
 		session.Requests++
 		extension := lambdaLife.TICK_ERROR
 		if session.Requests > 1 {
@@ -499,7 +499,7 @@ func main() {
 				go finalize(ret, true, ds...)
 				return
 			}
-			session.Timeout.DoneBusyWithReset(extension)
+			session.Timeout.DoneBusyWithReset(extension, c.Name)
 		}
 
 		errRsp := &worker.ErrorResponse{}
@@ -559,7 +559,7 @@ func main() {
 		client := redeo.GetClient(c.Context())
 
 		session := lambdaLife.GetSession()
-		session.Timeout.Busy()
+		session.Timeout.Busy(c.Name)
 		session.Requests++
 		extension := lambdaLife.TICK_ERROR
 		if session.Requests > 1 {
@@ -568,11 +568,11 @@ func main() {
 		var ret *types.OpRet
 		defer func() {
 			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension)
+				session.Timeout.DoneBusyWithReset(extension, c.Name)
 			} else {
 				go func() {
 					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension)
+					session.Timeout.DoneBusyWithReset(extension, c.Name)
 				}()
 			}
 		}()
@@ -588,7 +588,7 @@ func main() {
 		retCmd := c.Arg(4).String()
 
 		if Persist == nil {
-			errRsp.Error = errors.New("Recover is not supported")
+			errRsp.Error = errors.New("recover is not supported")
 			Server.AddResponses(errRsp, client)
 			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
@@ -646,7 +646,7 @@ func main() {
 
 		pong.Cancel()
 		session := lambdaLife.GetSession()
-		session.Timeout.Busy()
+		session.Timeout.Busy(c.Name)
 		session.Requests++
 		extension := lambdaLife.TICK_ERROR
 		if session.Requests > 1 {
@@ -655,11 +655,11 @@ func main() {
 		var ret *types.OpRet
 		defer func() {
 			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension)
+				session.Timeout.DoneBusyWithReset(extension, c.Name)
 			} else {
 				go func() {
 					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension)
+					session.Timeout.DoneBusyWithReset(extension, c.Name)
 				}()
 			}
 		}()
@@ -719,14 +719,13 @@ func main() {
 		// put DATA to s3
 		collector.Save()
 
-		rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-			w.AppendBulkString("data")
+		rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+			w.AppendBulkString(rsp.Cmd)
 			w.AppendBulkString("OK")
 		}, client)
-		if err := rsp.Flush(); err != nil {
-			log.Error("Error on data::flush: %v", err)
-			return
-		}
+
+		rsp.Flush()
+
 		log.Debug("data complete")
 		Server.Close()
 		Lifetime.Rest()
@@ -734,6 +733,7 @@ func main() {
 		// Reset store
 		Store = (*storage.Storage)(nil)
 		Lineage = nil
+		log.Debug("before done")
 		session.Done()
 	})
 
@@ -746,7 +746,7 @@ func main() {
 			// Possibilities are ping may comes after HandleRequest returned or before session started.
 			log.Debug("PING ignored: session ended.")
 			return
-		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND) && !session.IsMigrating() {
+		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND, c.Name) && !session.IsMigrating() {
 			// Failed to extend timeout, do nothing and prepare to return from lambda.
 			log.Debug("PING ignored: timeout extension denied.")
 			return
@@ -766,7 +766,7 @@ func main() {
 
 		// Deal with payload
 		if len(payload) > 0 {
-			session.Timeout.Busy()
+			session.Timeout.Busy(c.Name)
 			skip := true
 
 			var pmeta protocol.Meta
@@ -793,7 +793,7 @@ func main() {
 					_, chanErr := Lineage.Recover(meta)
 					go func() {
 						waitForRecovery(chanErr)
-						session.Timeout.DoneBusy()
+						session.Timeout.DoneBusy(c.Name)
 					}()
 				} else {
 					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
@@ -801,7 +801,7 @@ func main() {
 			}
 
 			if skip {
-				session.Timeout.DoneBusy()
+				session.Timeout.DoneBusy(c.Name)
 			}
 		}
 	})
@@ -866,41 +866,6 @@ func main() {
 				session.Timeout.Restart(lambdaLife.TICK_ERROR)
 			}
 		}(session)
-
-		Server.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
-			client := redeo.GetClient(c.Context())
-
-			pong.Cancel()
-			session := lambdaLife.GetSession()
-			session.Timeout.Halt()
-			log.Debug("In DATA handler")
-
-			if session.Migrator != nil {
-				session.Migrator.SetError(types.ErrProxyClosing)
-				session.Migrator.Close()
-				session.Migrator = nil
-			}
-
-			// put DATA to s3
-			collector.Save()
-
-			rsp, _ := Server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-				w.AppendBulkString("data")
-				w.AppendBulkString("OK")
-			}, client)
-			if err := rsp.Flush(); err != nil {
-				log.Error("Error on data::flush: %v", err)
-				return
-			}
-			log.Debug("data complete")
-			Server.Close()
-			Lifetime.Rest()
-
-			// Reset store
-			Store = (*storage.Storage)(nil)
-			Lineage = nil
-			session.Done()
-		})
 
 		// Gracefully close the server.
 		// The server will not be closed immediately. Instead, it waits until:
@@ -1039,15 +1004,8 @@ func main() {
 		}
 
 		if DRY_RUN {
-			d := time.Now().Add(time.Duration(*timeout) * time.Second)
-			ctx, cancel := context.WithDeadline(context.Background(), d)
+			ctx := context.Background()
 
-			// Even though ctx will be expired, it is good practice to call its
-			// cancellation function in any case. Failure to do so may keep the
-			// context and its parent alive longer than necessary.
-			defer cancel()
-
-			start := time.Now()
 			log.Color = true
 			log.Verbose = true
 			storage.Concurrency = *concurrency
@@ -1060,11 +1018,16 @@ func main() {
 			}
 
 			ready := make(chan struct{})
+			invokes := make(chan *protocol.InputEvent, 1)
+			ended := make(chan context.Context, 1)
 			alldone := sync.WaitGroup{}
+			exit := make(chan struct{})
 
 			// Dummy Proxy
 			if shortcut == nil {
 				ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
+				invokes <- &input
+				close(invokes)
 			} else {
 				writePing := func(writer *resp.RequestWriter, payload []byte) {
 					writer.WriteMultiBulkSize(2)
@@ -1089,8 +1052,33 @@ func main() {
 					reader.ReadBulkString() // test
 				}
 
-				alldone.Add(len(shortcut.Conns))
+				consumeDataPongs := func(conns ...*mock.Conn) {
+					for _, conn := range conns {
+						go func(cn net.Conn) {
+							client := worker.NewClient(cn)
+							readPong(client.Reader)
+							log.Info("Data PONG received.")
+						}(conn.Server)
+					}
+				}
+
+				cutConnection := func(idx int) net.Conn {
+					old := shortcut.Conns[idx]
+					shortcut.Conns[idx] = mock.NewConn()
+					old.Close()
+
+					return shortcut.Conns[idx].Server
+				}
+
+				alldone.Add(1)
+				// Proxy simulator
 				go func() {
+					log.Info("First Invocation")
+					// First invocation
+					invokes <- &input
+
+					// Consume messages from datalinks
+					consumeDataPongs(shortcut.Conns[1:]...)
 					ctrlClient := worker.NewClient(shortcut.Conns[0].Server)
 					readPong(ctrlClient.Reader)
 					log.Info("Ctrl PONG received.")
@@ -1102,10 +1090,10 @@ func main() {
 						readPong(ctrlClient.Reader)
 					}
 
-					close := false
+					interupted := false
 					for i := 0; i < 5; i++ {
 						start := time.Now()
-						if !close {
+						if !interupted {
 							writePing(ctrlClient.Writer, nil)
 						}
 						readPong(ctrlClient.Reader)
@@ -1119,45 +1107,77 @@ func main() {
 						time.Sleep(1 * time.Second)
 
 						// Simulate network interruption.
-						close = rand.Int()%2 == 0
-						if close {
-							// Prepare new shortcut connection for redial.
-							old := shortcut.Conns[0]
-							shortcut.Conns[0] = mock.NewConn()
-
-							// Server should redail now.
-							old.Close()
-
-							ctrlClient = worker.NewClient(shortcut.Conns[0].Server)
+						interupted = rand.Int()%2 == 0
+						if interupted {
+							ctrlClient = worker.NewClient(cutConnection(0))
 						}
 					}
 
-					if close {
+					// Consume left pongs
+					if interupted {
 						readPong(ctrlClient.Reader)
 					}
 
+					<-ended
+
+					// Second Invocation
+					log.Info("Second Invocation")
+					input.Cmd = "ping"
+					// input.Status[0] = protocol.Meta{
+					// 	1, 3, 1178, 110, "8ecfe3b5ccf81b28fcb008ebec3d38b1507a52a186a920542f602f4a964d7eba", 3, 1178, 358, "",
+					// }
+					invokes <- &input
+					// ctrlClient = worker.NewClient(cutConnection(0))
+					// cutConnection(1)
+					// consumeDataPongs(shortcut.Conns[1:]...)
+					readPong(ctrlClient.Reader)
+					log.Info("Ctrl PONG received.")
+					// // Do nothing
+					// // ready <- struct{}{}
+					ctrlClient.Writer.WriteCmd(protocol.CMD_DATA)
+					ctrlClient.Writer.Flush()
+
+					// Simulate disconnection between request and response.
+					ctrlClient = worker.NewClient(cutConnection(0))
+					readPong(ctrlClient.Reader)
+					log.Info("Ctrl PONG received.")
+
+					// data
+					// OK
+					for line := 2; line > 0; line-- {
+						str, _ := ctrlClient.Reader.ReadBulkString()
+						fmt.Println(str)
+					}
+
+					<-ended
+
+					// End of invocations
+					close(invokes)
+
 					alldone.Done()
 				}()
-				for _, conn := range shortcut.Conns[1:] {
-					go func(cn net.Conn) {
-						client := worker.NewClient(cn)
-						readPong(client.Reader)
-						log.Info("Data PONG received.")
-						alldone.Done()
-					}(conn.Server)
-				}
 			}
 
 			// Lambda Function
 			alldone.Add(1)
 			go func() {
-				lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
-				log.Info("Start dummy node: %s", lambdacontext.FunctionName)
-				output, err := HandleRequest(ctx, input)
-				if err != nil {
-					log.Error("Error: %v", err)
-				} else {
-					log.Info("Output: %v", output)
+				for input := range invokes {
+					d := time.Now().Add(time.Duration(*timeout) * time.Second)
+					ctx, cancel := context.WithDeadline(ctx, d)
+
+					start := time.Now()
+					lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
+					log.Info("Start dummy node: %s", lambdacontext.FunctionName)
+					output, err := HandleRequest(ctx, *input)
+					if err != nil {
+						log.Error("Error: %v", err)
+					} else {
+						log.Info("Output: %v", output)
+					}
+
+					cancel()
+					log.Trace("Bill duration for dryrun: %v", time.Since(start))
+					ended <- ctx
 				}
 				alldone.Done()
 			}()
@@ -1165,21 +1185,21 @@ func main() {
 			// Wait()
 			go func() {
 				alldone.Wait()
-				cancel()
+				close(exit)
 			}()
 
-			// Simulate data operation
+			// Simulate data operation on each invocation
 			for {
 				select {
 				case <-ready:
 					session := lambdaLife.GetOrCreateSession()
-					session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND)
-					session.Timeout.Busy()
+					session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND, "dryrun")
+					session.Timeout.Busy("dryrun")
 					if tips.Get(protocol.TIP_SERVING_KEY) != "" {
 						if _, _, ret := Store.Get(tips.Get(protocol.TIP_SERVING_KEY)); ret.Error() != nil {
 							log.Error("Error on get %s: %v", tips.Get(protocol.TIP_SERVING_KEY), ret.Error())
 						} else {
-							log.Trace("Delay to serve requested key %s: %v", tips.Get(protocol.TIP_SERVING_KEY), time.Since(start))
+							log.Trace("Delay to serve requested key %s", tips.Get(protocol.TIP_SERVING_KEY))
 						}
 					}
 					for i := 0; i < *numToInsert; i++ {
@@ -1193,9 +1213,8 @@ func main() {
 					if *statusAsPayload {
 						time.Sleep(10 * time.Second)
 					}
-					session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR)
-				case <-ctx.Done():
-					log.Trace("Bill duration for dryrun: %v", time.Since(start))
+					session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, "dryrun")
+				case <-exit:
 					// if *memprofile != "" {
 					// 	f, err := os.Create(*memprofile)
 					// 	if err != nil {
