@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -139,13 +140,13 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 
 	hasBulk := true
 	if r.Body != nil {
-		conn.SetWriteDeadline(time.Time{}) // Disable timeout for bulk data
+		conn.SetWriteDeadline(lifetime.GetStreamingDeadline(int64(len(r.Body))))
 		if err := r.CopyBulk(bytes.NewReader(r.Body), int64(len(r.Body))); err != nil {
 			r.err = err
 			return err
 		}
 	} else if r.BodyStream != nil {
-		conn.SetWriteDeadline(time.Time{}) // Disable timeout for bulk data
+		conn.SetWriteDeadline(lifetime.GetStreamingDeadline(r.BodyStream.Len()))
 		if err := r.CopyBulk(r.BodyStream, r.BodyStream.Len()); err != nil {
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := r.BodyStream.(resp.Holdable); ok {

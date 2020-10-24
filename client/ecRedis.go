@@ -234,10 +234,11 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		return
 	}
 	cn := c.conns[addr][i]
+	w := cn.W
+
 	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
-	w := cn.W
 	w.WriteMultiBulkSize(10)
 	w.WriteBulkString(protocol.CMD_SET_CHUNK)
 	w.WriteBulkString(key)
@@ -248,20 +249,25 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	w.WriteBulkString(strconv.Itoa(c.ParityShards))
 	w.WriteBulkString(strconv.Itoa(lambdaId))
 	w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
+	if err := w.Flush(); err != nil {
+		c.setError(ret, addr, i, err)
+		log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+		return
+	}
+	cn.conn.SetWriteDeadline(time.Time{})
 
 	// Flush pipeline
 	//if err := c.W[i].Flush(); err != nil {
 	if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
 		c.setError(ret, addr, i, err)
-		log.Warn("Failed to initiate setting %d@%s(%s): %v", i, key, addr, err)
+		log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
 		return
 	}
 	if err := w.Flush(); err != nil {
 		c.setError(ret, addr, i, err)
-		log.Warn("Failed to initiate setting %d@%s(%s): %v", i, key, addr, err)
+		log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
 		return
 	}
-	cn.conn.SetWriteDeadline(time.Time{})
 
 	log.Debug("Initiated setting %d@%s(%s)", i, key, addr)
 	c.recvSet("Set", addr, reqId, i, ret, nil)
@@ -389,6 +395,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	respId, _ := c.conns[addr][i].R.ReadBulkString()
 	strSize, _ := c.conns[addr][i].R.ReadBulkString()
 	chunkId, _ := c.conns[addr][i].R.ReadBulkString()
+	cn.conn.SetReadDeadline(time.Time{})
 
 	// Matching reqId and chunk
 	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
@@ -406,13 +413,13 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// Read value
 	valReader, err := c.conns[addr][i].R.StreamBulk()
 	if err != nil {
-		log.Warn("Error on get value reader on receiving chunk %d: %v", i, err)
+		log.Warn("Error on getting reader of received chunk %d: %v", i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
 	val, err := valReader.ReadAll()
 	if err != nil {
-		log.Error("Error on get value on receiving chunk %d: %v", i, err)
+		log.Error("Error on steaming received chunk %d: %v", i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}

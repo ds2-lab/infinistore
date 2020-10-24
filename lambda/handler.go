@@ -519,7 +519,9 @@ func main() {
 		}
 
 		// Streaming set.
+		client.Conn().SetReadDeadline(lambdaLife.GetStreamingDeadline(valReader.Len()))
 		ret := Store.SetStream(key, chunkId, valReader)
+		client.Conn().SetReadDeadline(time.Time{})
 		d1 := time.Since(t)
 		if ret.Error() != nil {
 			errRsp.Error = ret.Error()
