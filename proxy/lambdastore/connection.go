@@ -315,39 +315,39 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 func (conn *Connection) pongHandler() {
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, err := conn.r.ReadInt()
-	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
+	if conn.closeIfError("Discard rouge PONG for missing store id: %v.", err) {
 		return
 	}
 	storeId := id & 0xFFFF
 	conn.workerId = int32(id >> 32)
 
 	sid, err := conn.r.ReadBulkString()
-	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
+	if conn.closeIfError("Discard rouge PONG for missing session id: %v.", err) {
 		return
 	}
 
 	flags, err := conn.r.ReadInt()
-	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
+	if conn.closeIfError("Discard rouge PONG for missing flags: %v.", err) {
 		return
 	}
 	conn.control = flags&protocol.PONG_FOR_CTRL > 0
 
 	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
-	if conn.instance != nil {
-		conn.instance.flagValidated(conn, sid, flags)
-		return
+	instance := conn.instance
+	if instance == nil {
+		// Lock up lambda instance
+		instance, _ = IM.Instance(uint64(storeId))
 	}
-
-	// Lock up lambda instance
-	instance, exists := IM.Instance(uint64(storeId))
-	if !exists {
+	if instance == nil {
 		conn.log.Error("Failed to match lambda: %d", storeId)
 		return
 	}
-	if instance.flagValidated(conn, sid, flags).instance != nil {
+
+	conn, err = instance.tryFlagValidated(conn, sid, flags)
+	if err == nil || err == ErrNotCtrlLink || err == ErrInstanceValidated {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
-		conn.log.Warn("Discard rouge POND for %d.", storeId)
+		conn.log.Warn("Discard rouge PONG for %d.", storeId)
 		conn.close()
 	}
 }
