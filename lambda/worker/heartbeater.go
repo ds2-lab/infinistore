@@ -2,8 +2,6 @@ package worker
 
 import (
 	"errors"
-
-	"github.com/mason-leap-lab/redeo"
 )
 
 var (
@@ -11,12 +9,12 @@ var (
 )
 
 type Heartbeater interface {
-	SendToLink(*redeo.Client) error
+	SendToLink(*Link) error
 }
 
 type DefaultHeartbeater struct {
 }
 
-func (hb *DefaultHeartbeater) SendToLink(link *redeo.Client) error {
+func (hb *DefaultHeartbeater) SendToLink(link *Link) error {
 	return nil
 }

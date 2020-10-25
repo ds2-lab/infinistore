@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	WorkerRunning = int32(0)
-	WorkerClosing = int32(1)
-	WorkerClosed  = int32(2)
+	WorkerRunning        = int32(0)
+	WorkerClosing        = int32(1)
+	WorkerClosed         = int32(2)
+	RetrialBackoffFactor = 2
 )
 
 var (
@@ -32,7 +33,7 @@ var (
 
 	MaxAttempts           = 3
 	RetrialDelayStartFrom = 20 * time.Millisecond
-	RetrialBackoffFactor  = 2
+	RetrialMaxDelay       = 10 * time.Second
 )
 
 type Worker struct {
@@ -96,8 +97,11 @@ func (wrk *Worker) StartOrResume(proxyAddr string, args ...*WorkerOptions) (isSt
 	isStart = atomic.CompareAndSwapInt32(&wrk.closed, WorkerClosed, WorkerRunning)
 	wrk.dryrun = false
 
-	wrk.ensureConnection(wrk.ctrlLink, proxyAddr, opts)
-	wrk.ensureConnection(wrk.dataLink, proxyAddr, opts)
+	var started sync.WaitGroup
+	started.Add(2)
+	wrk.ensureConnection(wrk.ctrlLink, proxyAddr, opts, &started)
+	wrk.ensureConnection(wrk.dataLink, proxyAddr, opts, &started)
+	started.Wait()
 	return
 }
 
@@ -158,6 +162,8 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 
 	if len(links) > 0 {
 		switch dl := links[0].(type) {
+		case *Link:
+			link = dl
 		case *redeo.Client:
 			link = LinkFromClient(dl)
 		case bool:
@@ -199,19 +205,23 @@ func (wrk *Worker) SetManualAck(enable bool) {
 	}
 }
 
-func (wrk *Worker) ensureConnection(link *Link, proxyAddr string, opts *WorkerOptions) error {
+func (wrk *Worker) ensureConnection(link *Link, proxyAddr string, opts *WorkerOptions, started *sync.WaitGroup) error {
 	if !link.Initialize() {
 		// Initilized.
+		started.Done()
 		return nil
 	}
 
-	id := atomic.AddInt32(&wrk.numLinks, 1)
+	link.id = int(atomic.AddInt32(&wrk.numLinks, 1))
 	wrk.readyToClose.Add(1)
-	go wrk.serve(int(id), link, proxyAddr, opts)
+	go wrk.serve(link, proxyAddr, opts, started)
 	return nil
 }
 
-func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptions) {
+func (wrk *Worker) serve(link *Link, proxyAddr string, opts *WorkerOptions, started *sync.WaitGroup) {
+	var once sync.Once
+	defer once.Do(started.Done)
+	delay := RetrialDelayStartFrom
 	for {
 		// Connect to proxy.
 		var conn net.Conn
@@ -219,26 +229,30 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 		if opts.DryRun {
 			shortcuts, ok := protocol.Shortcut.Dial(proxyAddr)
 			if !ok {
-				wrk.log.Error("Oops, no shortcut connection available for dry running.")
-				return
+				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", delay)
+				delay = wrk.waitDelay(delay)
+				continue
 			}
-			conn = shortcuts[id-1].Client
+			conn = shortcuts[link.ID()-1].Client
 		} else {
 			cn, err := net.Dial("tcp", proxyAddr)
 			if err != nil {
-				wrk.log.Error("Failed to connect proxy %s: %v", proxyAddr, err)
-				return
+				wrk.log.Error("Failed to connect proxy %s, retry after %v: %v", proxyAddr, delay, err)
+				delay = wrk.waitDelay(delay)
+				continue
 			}
 			conn = cn
 		}
+		delay = RetrialDelayStartFrom
 
-		wrk.log.Info("Connection(%v) to %v established.", id, conn.RemoteAddr())
+		wrk.log.Info("Connection(%v) to %v established.", link.ID(), conn.RemoteAddr())
 
 		wrk.mu.Lock()
 		// Recheck if server closed in mutex
 		if atomic.LoadInt32(&wrk.closed) == WorkerClosed {
 			conn.Close()
 			wrk.mu.Unlock()
+			wrk.readyToClose.Done()
 			return
 		}
 		link.Reset(conn)
@@ -249,12 +263,14 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 		// On error, the connection will be closed .
 		if !link.IsControl() || atomic.LoadInt32(&wrk.manualAck) == 0 {
 			go func(client *redeo.Client) {
-				if err := wrk.heartbeater.SendToLink(client); err != nil {
+				wrk.log.Info("heartbeater")
+				if err := wrk.heartbeater.SendToLink(link); err != nil {
 					wrk.log.Warn("%v", err)
 					client.Close()
 				}
 			}(link.Client)
 		}
+		once.Do(started.Done)
 
 		// Serve the client.
 		err := wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
@@ -263,21 +279,20 @@ func (wrk *Worker) serve(id int, link *Link, proxyAddr string, opts *WorkerOptio
 		link.Reset(nil)
 
 		// Check if worker is closed.
-		// Must Check first to avoid deadlock on calling Close()
 		switch atomic.LoadInt32(&wrk.closed) {
 		case WorkerClosed:
 			fallthrough
 		case WorkerClosing:
+			wrk.log.Info("Connection(%v) closed.", link.ID())
 			wrk.readyToClose.Done()
-			wrk.log.Info("Connection(%v) closed.", id)
 			return
 		}
 
 		if err != nil && err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
-			wrk.log.Warn("Connection(%v) closed: %v, reconnecting...", id, err)
+			wrk.log.Warn("Connection(%v) closed: %v, reconnecting...", link.ID(), err)
 		} else {
 			// Closed by the proxy, stop worker.
-			wrk.log.Info("Connection(%v) closed from proxy. Closing worker...", id)
+			wrk.log.Info("Connection(%v) closed from proxy. Closing worker...", link.ID())
 			wrk.readyToClose.Done()
 			wrk.Close()
 			return
@@ -294,18 +309,27 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 		left := rsp.markAttempt()
 		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left)))
 		if left > 0 {
-			wrk.log.Warn("Error on flush response(%v), retry in %v: %v", rsp, retryIn, err)
+			wrk.log.Warn("Error on flush response(%s), retry in %v: %v", rsp.Command(), retryIn, err)
 			go func() {
 				time.Sleep(retryIn)
 				wrk.AddResponses(rsp)
 			}()
 			return
 		} else {
-			wrk.log.Warn("Error on flush response(%v), abandon attempts: %v", rsp, err)
+			wrk.log.Warn("Error on flush response(%s), abandon attempts: %v", rsp.Command(), err)
 		}
 	}
 
 	rsp.close()
+}
+
+func (wrk *Worker) waitDelay(delay time.Duration) time.Duration {
+	<-time.After(delay)
+	after := delay * RetrialBackoffFactor
+	if after > RetrialMaxDelay {
+		after = RetrialMaxDelay
+	}
+	return after
 }
 
 type TestClient struct {

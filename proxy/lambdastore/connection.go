@@ -58,6 +58,10 @@ func NewConnection(c net.Conn) *Connection {
 	return conn
 }
 
+func (conn *Connection) String() string {
+	return fmt.Sprintf("%d%s", conn.workerId, util.Ifelse(conn.control, "c", "d"))
+}
+
 func (conn *Connection) Writer() *resp.RequestWriter {
 	return conn.w
 }
@@ -71,7 +75,7 @@ func (conn *Connection) BindInstance(ins *Instance) {
 	conn.log = ins.log
 	if l, ok := conn.log.(*logger.ColorLogger); ok {
 		copied := *l
-		copied.Prefix = fmt.Sprintf("%s%d%s ", copied.Prefix, conn.workerId, util.Ifelse(conn.control, "c", "d"))
+		copied.Prefix = fmt.Sprintf("%s%v ", copied.Prefix, conn)
 		conn.log = &copied
 	}
 }
@@ -86,7 +90,7 @@ func (conn *Connection) AddDataLink(link *Connection) bool {
 	}
 
 	conn.dataLink = link
-	conn.log.Debug("Data link added")
+	conn.log.Debug("Data link added:%v", link)
 	return true
 }
 
@@ -116,7 +120,6 @@ func (conn *Connection) Close() error {
 		conn.dataLink = nil
 	}
 
-	conn.log.Debug("Signaled.")
 	return nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -22,7 +21,7 @@ var (
 	log = store.Log
 )
 
-type pong func(*redeo.Client, int64) error
+type pong func(*worker.Link, int64) error
 
 type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
@@ -79,8 +78,12 @@ func (p *PongHandler) Send() error {
 	return p.sendImpl(0, nil)
 }
 
-func (p *PongHandler) SendToLink(link *redeo.Client) error {
-	return p.sendImpl(0, link)
+func (p *PongHandler) SendToLink(link *worker.Link) error {
+	if link.IsControl() {
+		return p.sendImpl(protocol.PONG_FOR_CTRL, link)
+	} else {
+		return p.sendImpl(protocol.PONG_FOR_DATA, link)
+	}
 }
 
 func (p *PongHandler) Cancel() {
@@ -103,7 +106,7 @@ func (p *PongHandler) IsCancelled() bool {
 	return p.canceled
 }
 
-func (p *PongHandler) sendImpl(flags int64, link *redeo.Client) error {
+func (p *PongHandler) sendImpl(flags int64, link *worker.Link) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -179,8 +182,9 @@ func pongLog(flags int64, forLink bool) {
 	log.Debug("PONG%s", claim)
 }
 
-func sendPong(link *redeo.Client, flags int64) error {
+func sendPong(link *worker.Link, flags int64) error {
 	store.Server.AddResponsesWithPreparer(protocol.CMD_PONG, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+		rsp.Attempts = 1
 		// CMD
 		w.AppendBulkString(rsp.Cmd)
 		// WorkerID + StoreID

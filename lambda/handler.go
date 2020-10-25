@@ -1039,10 +1039,11 @@ func main() {
 				}
 
 				readPong := func(reader resp.ResponseReader) {
-					reader.ReadBulkString() // pong
-					reader.ReadInt()        // store id
-					reader.ReadBulkString() // session id
-					reader.ReadInt()        // flag
+					reader.ReadBulkString()     // pong
+					reader.ReadInt()            // store id
+					reader.ReadBulkString()     // session id
+					flag, _ := reader.ReadInt() // flag
+					log.Debug("pong flag: %d", flag)
 				}
 
 				writeTest := func(writer *resp.RequestWriter) {
