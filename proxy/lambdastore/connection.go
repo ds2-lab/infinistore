@@ -11,6 +11,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -22,13 +23,14 @@ var (
 		Prefix: fmt.Sprintf("Undesignated "),
 		Color:  !global.Options.NoColor,
 	}
-	ErrConnectionClosed = errors.New("Connection closed")
-	ErrMissingResponse  = errors.New("Missing response")
+	ErrConnectionClosed = errors.New("connection closed")
+	ErrMissingResponse  = errors.New("missing response")
 )
 
 type Connection struct {
 	net.Conn
 	workerId int32       // Identify a unique lambda worker
+	control  bool        // Identify if the connection is control link or not.
 	dataLink *Connection // Only works for the control link to find its data link.
 
 	instance *Instance
@@ -60,17 +62,36 @@ func (conn *Connection) Writer() *resp.RequestWriter {
 	return conn.w
 }
 
+func (conn *Connection) BindInstance(ins *Instance) {
+	if conn.instance == ins {
+		return
+	}
+
+	conn.instance = ins
+	conn.log = ins.log
+	if l, ok := conn.log.(*logger.ColorLogger); ok {
+		copied := *l
+		copied.Prefix = fmt.Sprintf("%s%d%s ", copied.Prefix, conn.workerId, util.Ifelse(conn.control, "c", "d"))
+		conn.log = &copied
+	}
+}
+
 func (conn *Connection) GetDataLink() *Connection {
 	return conn.dataLink
 }
 
-func (conn *Connection) AddDataLink(link *Connection) {
+func (conn *Connection) AddDataLink(link *Connection) bool {
+	if conn.workerId != link.workerId {
+		return false
+	}
+
 	conn.dataLink = link
+	conn.log.Debug("Data link added")
+	return true
 }
 
 func (conn *Connection) RemoveDataLink(link *Connection) {
 	if conn.dataLink != nil && conn.dataLink == link {
-		conn.dataLink.Close()
 		conn.dataLink = nil
 	}
 }
@@ -86,14 +107,16 @@ func (conn *Connection) Close() error {
 	default:
 	}
 
-	// Signal colosed only. This allow ongoing transmission to finish.
-	close(conn.closed)
+	// Signal closed only. This allow ongoing transmission to finish.
 	conn.log.Debug("Signal to close.")
+	close(conn.closed)
 
 	if conn.dataLink != nil {
 		conn.dataLink.Close()
+		conn.dataLink = nil
 	}
 
+	conn.log.Debug("Signaled.")
 	return nil
 }
 
@@ -103,8 +126,10 @@ func (conn *Connection) close() {
 	}
 	conn.Close()
 	conn.bye()
-	// Don't use c.Close(), it will stuck and wait for lambda.
-	conn.Conn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
+		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	}
 	conn.Conn.Close()
 	conn.clearResponses()
 	conn.log.Debug("Closed.")
@@ -132,9 +157,10 @@ func (conn *Connection) ServeLambda() {
 				return
 			}
 		case retPeek = <-conn.respType:
-			// Got response, reset read deadline.
-			conn.Conn.SetReadDeadline(time.Time{})
 		}
+
+		// Got response, reset read deadline.
+		conn.Conn.SetReadDeadline(time.Time{})
 
 		var respType resp.ResponseType
 		switch ret := retPeek.(type) {
@@ -155,9 +181,9 @@ func (conn *Connection) ServeLambda() {
 		case resp.TypeError:
 			strErr, err := conn.r.ReadError()
 			if err != nil {
-				err = fmt.Errorf("Response error (Unknown): %v", err)
+				err = fmt.Errorf("response error (Unknown): %v", err)
 			} else {
-				err = fmt.Errorf("Response error: %s", strErr)
+				err = fmt.Errorf("response error: %s", strErr)
 			}
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
@@ -301,6 +327,7 @@ func (conn *Connection) pongHandler() {
 	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
 		return
 	}
+	conn.control = flags&protocol.PONG_FOR_CTRL > 0
 
 	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
 	if conn.instance != nil {
@@ -437,9 +464,8 @@ func (conn *Connection) delHandler() {
 func (conn *Connection) receiveData() {
 	conn.log.Debug("DATA from lambda.")
 
-	_, err := conn.r.ReadBulkString()
 	ok, err := conn.r.ReadBulkString()
-	if err != nil && err != io.EOF {
+	if err != nil {
 		conn.log.Error("Error on processing result of data collection: %v", err)
 	}
 	conn.instance.FlagDataCollected(ok)

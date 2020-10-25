@@ -237,7 +237,6 @@ func (ins *Instance) HandleRequests() {
 		case <-ins.coolTimer.C:
 			// Warmup will not work until first call.
 			// Double check, for it could timeout before a previous request got handled.
-			// Warmup will not work until first call.
 			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
 				ins.resetCoolTimer()
 			} else {
@@ -431,15 +430,12 @@ func (ins *Instance) IsReclaimed() bool {
 }
 
 func (ins *Instance) MatchDataLink(ctrl *Connection) {
-	if ins.dataLink == nil {
-		return
-	} else if ins.dataLink.workerId == ctrl.workerId {
-		ctrl.AddDataLink(ins.dataLink)
+	if ins.dataLink != nil && ctrl.AddDataLink(ins.dataLink) {
 		ins.dataLink = nil
 	}
 }
 
-func (ins *Instance) RegisterDataLink(link *Connection) {
+func (ins *Instance) CacheDataLink(link *Connection) {
 	ins.dataLink = link
 }
 
@@ -709,15 +705,13 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 		return conn
 	}
 
-	if flags&protocol.PONG_FOR_CTRL == protocol.PONG_FOR_DATA {
-		// Datalinks usually come earlier than ctrl link.
+	if !conn.control {
+		// Datalinks can come earlier than ctrl link.
 		// Keeping using the newly connectioned datalinks, and we are safe, or just wait it timeout and try to get a new one.
-		conn.instance = ins
-		conn.log = ins.log
+		conn.BindInstance(ins)
 		// Connect to corresponding ctrl link
-		ins.RegisterDataLink(conn)
-		if ins.ctrlLink != nil {
-			ins.MatchDataLink(ins.ctrlLink)
+		if ins.ctrlLink == nil || !ins.ctrlLink.AddDataLink(conn) {
+			ins.CacheDataLink(conn)
 		}
 		return conn
 	}
@@ -739,8 +733,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 		oldConn := ins.ctrlLink
 
 		// Set instance, order matters here.
-		conn.instance = ins
-		conn.log = ins.log
+		conn.BindInstance(ins)
 		ins.ctrlLink = conn
 
 		if oldConn != nil {
@@ -981,12 +974,11 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			case <-link.chanWait:
 			default:
 			}
-			// // link failed, close to be reconnected.
-			// if link == ctrlLink {
-			// 	link.Close()
-			// } else {
-			// 	ctrlLink.RemoveDataLink(link)
-			// }
+			// link failed, close so it can be reconnected.
+			if link != ctrlLink {
+				ctrlLink.RemoveDataLink(link)
+			}
+			link.Close()
 			return err
 		}
 
