@@ -22,8 +22,8 @@ type Preparer func(*SimpleResponse, resp.ResponseWriter)
 type Response interface {
 	redeo.Contextable
 
-	// String show friendly name
-	String() string
+	// Command get command
+	Command() string
 
 	// Prepare overwrite to customize fields of a Response.
 	Prepare()
@@ -66,7 +66,7 @@ type BaseResponse struct {
 	BodyStream resp.AllReadCloser
 }
 
-func (r *BaseResponse) String() string {
+func (r *BaseResponse) Command() string {
 	return r.Cmd
 }
 

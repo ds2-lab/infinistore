@@ -11,7 +11,6 @@ import (
 
 	mock "github.com/jordwest/mock-conn"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -34,9 +33,9 @@ type TestHeartbeater struct {
 	worker *Worker
 }
 
-func (hb *TestHeartbeater) SendToLink(link *redeo.Client) error {
-	rsp, err := hb.worker.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-		w.AppendBulkString("pong")
+func (hb *TestHeartbeater) SendToLink(link *Link) error {
+	rsp, err := hb.worker.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) {
+		w.AppendBulkString(rsp.Cmd)
 	}, link)
 	if err != nil {
 		return err
@@ -147,8 +146,8 @@ var _ = Describe("Worker", func() {
 		fmt.Println("response should be cached if connection has not been established...")
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
-		server.AddResponsesWithPreparer(func(w resp.ResponseWriter) {
-			w.AppendBulkString("pong")
+		server.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) {
+			w.AppendBulkString(rsp.Cmd)
 		})
 		server.SetManualAck(true)
 		start, err := server.StartOrResume(shortcut.Address, &WorkerOptions{DryRun: true})

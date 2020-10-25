@@ -16,11 +16,11 @@ const (
 
 var (
 	ctxKeyLink = struct{}{}
-	ctxKeyConn = struct{}{}
 )
 
 // Wrapper for redeo client that support response buffering if connection is unavailable
 type Link struct {
+	id int
 	*redeo.Client
 	ctrl bool
 	buff chan interface{}
@@ -49,6 +49,10 @@ func NewLink(ctrl bool) *Link {
 
 func (ln *Link) Initialize() bool {
 	return atomic.CompareAndSwapInt32(&ln.once, LinkUninitialized, LinkInitialized)
+}
+
+func (ln *Link) ID() int {
+	return ln.id
 }
 
 func (ln *Link) IsControl() bool {
