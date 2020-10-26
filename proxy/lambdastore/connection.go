@@ -3,19 +3,19 @@ package lambdastore
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo/resp"
 	"io"
 	"net"
-	"math"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
@@ -23,14 +23,18 @@ var (
 		Prefix: fmt.Sprintf("Undesignated "),
 		Color:  !global.Options.NoColor,
 	}
-	ErrConnectionClosed = errors.New("Connection closed")
-	ErrMissingResponse  = errors.New("Missing response")
+	ErrConnectionClosed = errors.New("connection closed")
+	ErrMissingResponse  = errors.New("missing response")
 )
 
 type Connection struct {
+	net.Conn
+	workerId int32       // Identify a unique lambda worker
+	control  bool        // Identify if the connection is control link or not.
+	dataLink *Connection // Only works for the control link to find its data link.
+
 	instance *Instance
 	log      logger.ILogger
-	cn       net.Conn
 	w        *resp.RequestWriter
 	r        resp.ResponseReader
 	mu       sync.Mutex
@@ -41,8 +45,8 @@ type Connection struct {
 
 func NewConnection(c net.Conn) *Connection {
 	conn := &Connection{
-		log: defaultConnectionLog,
-		cn:  c,
+		Conn: c,
+		log:  defaultConnectionLog,
 		// wrap writer and reader
 		w:        resp.NewRequestWriter(c),
 		r:        resp.NewResponseReader(c),
@@ -54,20 +58,69 @@ func NewConnection(c net.Conn) *Connection {
 	return conn
 }
 
-func (conn *Connection) Close() {
+func (conn *Connection) String() string {
+	return fmt.Sprintf("%d%s", conn.workerId, util.Ifelse(conn.control, "c", "d"))
+}
+
+func (conn *Connection) Writer() *resp.RequestWriter {
+	return conn.w
+}
+
+func (conn *Connection) BindInstance(ins *Instance) {
+	if conn.instance == ins {
+		return
+	}
+
+	conn.instance = ins
+	conn.log = ins.log
+	if l, ok := conn.log.(*logger.ColorLogger); ok {
+		copied := *l
+		copied.Prefix = fmt.Sprintf("%s%v ", copied.Prefix, conn)
+		conn.log = &copied
+	}
+}
+
+func (conn *Connection) GetDataLink() *Connection {
+	return conn.dataLink
+}
+
+func (conn *Connection) AddDataLink(link *Connection) bool {
+	if conn.workerId != link.workerId {
+		return false
+	}
+
+	conn.dataLink = link
+	conn.log.Debug("Data link added:%v", link)
+	return true
+}
+
+func (conn *Connection) RemoveDataLink(link *Connection) {
+	if conn.dataLink != nil && conn.dataLink == link {
+		conn.dataLink = nil
+	}
+}
+
+func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
 	select {
 	case <-conn.closed:
 		// already closed
-		return
+		return nil
 	default:
 	}
 
-	// Signal colosed only. This allow ongoing transmission to finish.
-	close(conn.closed)
+	// Signal closed only. This allow ongoing transmission to finish.
 	conn.log.Debug("Signal to close.")
+	close(conn.closed)
+
+	if conn.dataLink != nil {
+		conn.dataLink.Close()
+		conn.dataLink = nil
+	}
+
+	return nil
 }
 
 func (conn *Connection) close() {
@@ -76,9 +129,11 @@ func (conn *Connection) close() {
 	}
 	conn.Close()
 	conn.bye()
-	// Don't use c.Close(), it will stuck and wait for lambda.
-	conn.cn.(*net.TCPConn).SetLinger(0) // The operating system discards any unsent or unacknowledged data.
-	conn.cn.Close()
+	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
+		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	}
+	conn.Conn.Close()
 	conn.clearResponses()
 	conn.log.Debug("Closed.")
 }
@@ -105,23 +160,23 @@ func (conn *Connection) ServeLambda() {
 				return
 			}
 		case retPeek = <-conn.respType:
-			// Got response, reset read deadline.
-			conn.cn.SetReadDeadline(time.Time{})
 		}
 
+		// Got response, reset read deadline.
+		conn.Conn.SetReadDeadline(time.Time{})
+
 		var respType resp.ResponseType
-		switch retPeek.(type) {
+		switch ret := retPeek.(type) {
 		case error:
-			err := retPeek.(error)
-			if err == io.EOF {
+			if ret == io.EOF {
 				conn.log.Warn("Lambda store disconnected.")
 			} else {
-				conn.log.Warn("Failed to peek response type: %v", err)
+				conn.log.Warn("Failed to peek response type: %v", ret)
 			}
 			conn.close()
 			return
 		case resp.ResponseType:
-			respType = retPeek.(resp.ResponseType)
+			respType = ret
 		}
 
 		start := time.Now()
@@ -129,9 +184,9 @@ func (conn *Connection) ServeLambda() {
 		case resp.TypeError:
 			strErr, err := conn.r.ReadError()
 			if err != nil {
-				err = errors.New(fmt.Sprintf("Response error (Unknown): %v", err))
+				err = fmt.Errorf("response error (Unknown): %v", err)
 			} else {
-				err = errors.New(fmt.Sprintf("Response error: %s", strErr))
+				err = fmt.Errorf("response error: %s", strErr)
 			}
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
@@ -146,7 +201,7 @@ func (conn *Connection) ServeLambda() {
 				break
 			}
 
-			if cmd == protocol.CMD_POND {
+			if cmd == protocol.CMD_PONG {
 				conn.pongHandler()
 				break
 			} else if conn.instance == nil {
@@ -169,6 +224,8 @@ func (conn *Connection) ServeLambda() {
 				go conn.initMigrateHandler()
 			case protocol.CMD_BYE:
 				conn.bye()
+			case protocol.CMD_RECOVER:
+				conn.recoverHandler()
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
 			}
@@ -184,9 +241,11 @@ func (conn *Connection) Ping(payload []byte) {
 	conn.w.WriteMultiBulkSize(2)
 	conn.w.WriteBulkString(protocol.CMD_PING)
 	conn.w.WriteBulk(payload)
+	conn.SetWriteDeadline(time.Now().Add(RequestTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
 	err := conn.w.Flush()
 	if err != nil {
-		conn.log.Warn("Flush pipeline error(ping): %v", err)
+		conn.log.Warn("Flush ping error: %v", err)
 	}
 }
 
@@ -254,38 +313,41 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 }
 
 func (conn *Connection) pongHandler() {
-	conn.log.Debug("PONG from lambda.")
-
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
 	id, err := conn.r.ReadInt()
-	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
+	if conn.closeIfError("Discard rouge PONG for missing store id: %v.", err) {
 		return
 	}
+	storeId := id & 0xFFFF
+	conn.workerId = int32(id >> 32)
+
 	sid, err := conn.r.ReadBulkString()
-	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
-		return
-	}
-	flag, err := conn.r.ReadInt()
-	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
-		return
-	}
-	recovery := flag & 0x01 > 0
-
-	if conn.instance != nil {
-		conn.instance.flagValidated(conn, sid, recovery)
+	if conn.closeIfError("Discard rouge PONG for missing session id: %v.", err) {
 		return
 	}
 
-	// Lock up lambda instance
-	instance, exists := Registry.Instance(uint64(math.Abs(float64(id))))
-	if !exists {
-		conn.log.Error("Failed to match lambda: %d", id)
+	flags, err := conn.r.ReadInt()
+	if conn.closeIfError("Discard rouge PONG for missing flags: %v.", err) {
 		return
 	}
-	if instance.flagValidated(conn, sid, recovery).instance != nil {
+	conn.control = flags&protocol.PONG_FOR_CTRL > 0
+
+	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
+	instance := conn.instance
+	if instance == nil {
+		// Lock up lambda instance
+		instance, _ = IM.Instance(uint64(storeId))
+	}
+	if instance == nil {
+		conn.log.Error("Failed to match lambda: %d", storeId)
+		return
+	}
+
+	conn, err = instance.tryFlagValidated(conn, sid, flags)
+	if err == nil || err == ErrNotCtrlLink || err == ErrInstanceValidated {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
-		conn.log.Warn("Discard rouge POND for %d.", id)
+		conn.log.Warn("Discard rouge PONG for %d.", storeId)
 		conn.close()
 	}
 }
@@ -308,8 +370,8 @@ func (conn *Connection) getHandler(start time.Time) {
 	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter, ok := global.ReqCoordinator.Load(reqId)
-	if ok == false {
+	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
 		if err := conn.r.SkipBulk(); err != nil {
@@ -324,21 +386,19 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ChunkId = chunkId
 	chunk, _ := strconv.Atoi(chunkId)
 
-	returned := counter.AddReturned(chunk)
+	status := counter.AddSucceeded(chunk)
 	// Check if chunks are enough? Shortcut response if YES.
-	if counter.IsLate(returned) {
+	if counter.IsLate(status) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		req, _ := conn.SetResponse(rsp)
-		if req != nil && req.EnableCollector {
-			err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
+		if req != nil {
+			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 			if err != nil {
 				conn.log.Warn("LogProxy err %v", err)
 			}
 		}
-		if counter.IsAllReturned(returned) {
-			global.ReqCoordinator.Clear(reqId, counter)
-		}
+		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
@@ -359,14 +419,11 @@ func (conn *Connection) getHandler(start time.Time) {
 	if req, ok := conn.SetResponse(rsp); !ok {
 		// Failed to set response, release hold.
 		rsp.BodyStream.(resp.Holdable).Unhold()
-	} else if req.EnableCollector {
-		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
-		if err != nil {
-			conn.log.Warn("LogProxy err %v", err)
-		}
+	} else {
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 	}
 	// Abandon rest chunks.
-	if counter.IsFulfilled(returned) {
+	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
 		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
 		for _, req := range counter.Requests {
 			if req != nil && !req.IsReturnd() {
@@ -388,11 +445,8 @@ func (conn *Connection) setHandler(start time.Time) {
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
 	req, ok := conn.SetResponse(rsp)
-	if ok && req.EnableCollector {
-		err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
-		if err != nil {
-			conn.log.Warn("LogProxy err %v", err)
-		}
+	if ok {
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
 	}
 }
 
@@ -413,9 +467,8 @@ func (conn *Connection) delHandler() {
 func (conn *Connection) receiveData() {
 	conn.log.Debug("DATA from lambda.")
 
-	_, err := conn.r.ReadBulkString()
 	ok, err := conn.r.ReadBulkString()
-	if err != nil && err != io.EOF {
+	if err != nil {
 		conn.log.Error("Error on processing result of data collection: %v", err)
 	}
 	conn.instance.FlagDataCollected(ok)
@@ -431,5 +484,22 @@ func (conn *Connection) bye() {
 	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
 		conn.instance.bye(conn)
+	}
+}
+
+func (conn *Connection) recoverHandler() {
+	conn.log.Debug("RECOVER from lambda.")
+
+	_, _ = conn.r.ReadBulkString() // connId
+	reqId, _ := conn.r.ReadBulkString()
+	_, _ = conn.r.ReadBulkString() // chunkId
+
+	ctrl := global.ReqCoordinator.Load(reqId)
+	if ctrl == nil {
+		conn.log.Warn("No control found for %s", reqId)
+	} else if ctrl.(*types.Control).Callback == nil {
+		conn.log.Warn("Control callback not defined for recover request %s", reqId)
+	} else {
+		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
 }

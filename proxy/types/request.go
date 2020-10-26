@@ -2,33 +2,39 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
+	"time"
+
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
-	REQUEST_INVOKED = 0
-	REQUEST_RETURNED = 1
+	REQUEST_INVOKED   = 0
+	REQUEST_RETURNED  = 1
 	REQUEST_RESPONDED = 2
+
+	CHANGE_PLACEMENT = 0x0001
 )
 
 type Request struct {
-	Id           Id
-	InsId        uint64   // Instance the request targeted.
-	Cmd          string
-	Key          string
-	Body         []byte
-	BodyStream   resp.AllReadCloser
-	Client       *redeo.Client
-	EnableCollector bool
-	Info         interface{}
+	Id             Id
+	InsId          uint64 // Instance the request targeted.
+	Cmd            string
+	Key            string
+	RetCommand     string
+	Body           []byte
+	BodyStream     resp.AllReadCloser
+	Client         *redeo.Client
+	Info           interface{}
+	Changes        int
+	CollectorEntry interface{}
 
-	w                *resp.RequestWriter
-	status        uint32
+	conn             Conn
+	status           uint32
 	streamingStarted bool
 }
 
@@ -44,66 +50,84 @@ func (req *Request) Retriable() bool {
 	return req.BodyStream == nil || !req.streamingStarted
 }
 
-func (req *Request) PrepareForSet(w *resp.RequestWriter) {
-	w.WriteMultiBulkSize(6)
-	w.WriteBulkString(req.Cmd)
-	w.WriteBulkString(strconv.Itoa(req.Id.ConnId))
-	w.WriteBulkString(req.Id.ReqId)
-	w.WriteBulkString(req.Id.ChunkId)
-	w.WriteBulkString(req.Key)
+func (req *Request) Size() int64 {
+	if req.BodyStream != nil {
+		return req.BodyStream.Len()
+	} else {
+		return int64(len(req.Body))
+	}
+}
+
+func (req *Request) PrepareForSet(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
+	conn.Writer().WriteBulkString(req.Key)
 	if req.Body != nil {
-		w.WriteBulk(req.Body)
+		conn.Writer().WriteBulk(req.Body)
 	}
-	req.w = w
+	req.conn = conn
 }
 
-func (req *Request) PrepareForGet(w *resp.RequestWriter) {
-	w.WriteMultiBulkSize(5)
-	w.WriteBulkString(req.Cmd)
-	w.WriteBulkString(strconv.Itoa(req.Id.ConnId))
-	w.WriteBulkString(req.Id.ReqId)
-	w.WriteBulkString("")
-	w.WriteBulkString(req.Key)
-	req.w = w
+func (req *Request) PrepareForGet(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString("")
+	conn.Writer().WriteBulkString(req.Key)
+	req.conn = conn
 }
 
-//func (req *Request) PrepareForData(w *resp.RequestWriter) {
-//	w.WriteMultiBulkSize(1)
-//	w.WriteBulkString(req.Cmd)
-//	req.w = w
-//}
-
-func (req *Request) PrepareForDel(w *resp.RequestWriter) {
-	w.WriteMultiBulkSize(5)
-	w.WriteBulkString(req.Cmd)
-	w.WriteBulkString(strconv.Itoa(req.Id.ConnId))
-	w.WriteBulkString(req.Id.ReqId)
-	w.WriteBulkString(req.Id.ChunkId)
-	w.WriteBulkString(req.Key)
-	req.w = w
+func (req *Request) PrepareForDel(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
+	conn.Writer().WriteBulkString(req.Key)
+	req.conn = conn
 }
 
-func (req *Request) Flush() error {
-	if req.w == nil {
-		return errors.New("Writer for request not set.")
+func (req *Request) PrepareForRecover(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString("") // Obsoleted. ConnId.
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString("") // Keep consistent with GET
+	conn.Writer().WriteBulkString(req.Key)
+	conn.Writer().WriteBulkString(req.RetCommand)
+	req.conn = conn
+}
+
+func (req *Request) Flush(timeout time.Duration) error {
+	if req.conn == nil {
+		return errors.New("Connection for request not set.")
 	}
-	w := req.w
-	req.w = nil
+	conn := req.conn
+	req.conn = nil
 
-	if err := w.Flush(); err != nil {
+	conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
+	defer conn.SetWriteDeadline(time.Time{})
+	if err := conn.Writer().Flush(); err != nil {
 		return err
 	}
 
 	if req.BodyStream != nil {
 		req.streamingStarted = true
-		if err := w.CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
+		conn.SetWriteDeadline(time.Time{})
+		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
 				holdable.Unhold()
 			}
 			return err
 		}
-		return w.Flush()
+
+		conn.SetWriteDeadline(time.Now().Add(timeout))
+		return conn.Writer().Flush()
 	}
 
 	return nil
@@ -133,7 +157,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return false
 	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{ rsp, req })
+		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
@@ -148,5 +172,5 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
-	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
+	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }

@@ -87,6 +87,7 @@ func SaveWithOption(snapshot bool) {
 	data := new(bytes.Buffer)
 	for _, entry := range dataDepository {
 		entry.WriteTo(data)
+		data.WriteString("\n")
 	}
 
 	// memprof := new(bytes.Buffer)

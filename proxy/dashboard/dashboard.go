@@ -13,6 +13,7 @@ import (
 type Dashboard struct {
 	*ui.Grid
 	ClusterView   *views.ClusterView
+	GroupedView   *views.GroupedClusterView
 	LogView       *views.LogView
 }
 
@@ -24,6 +25,7 @@ func NewDashboard() *Dashboard {
 	dashboard := &Dashboard{
 		Grid: ui.NewGrid(),
 		ClusterView: views.NewClusterView(" Nodes "),
+		GroupedView: views.NewGroupedClusterView(" Nodes "),
 		LogView: views.NewLogView(" Logs ", global.Options.LogFile),
 	}
 
@@ -34,7 +36,7 @@ func NewDashboard() *Dashboard {
 	// Layout
 	dashboard.Grid.Set(
 		ui.NewRow(1.0/3,
-			ui.NewCol(1.0/1, dashboard.ClusterView),
+			ui.NewCol(1.0/1, dashboard.GroupedView),
 		),
 		ui.NewRow(2.0/3,
 			ui.NewCol(1.0/1, dashboard.LogView),
@@ -44,10 +46,27 @@ func NewDashboard() *Dashboard {
 	return dashboard
 }
 
-func (dash *Dashboard) ConfigCluster(cluster types.ClusterStatus, rows int) {
-	dash.ClusterView.Cluster = cluster
-	dash.ClusterView.Rows = rows
-	dash.ClusterView.Update()
+// func (dash *Dashboard) ConfigCluster(cluster types.ClusterStats, cols int) {
+// 	dash.ClusterView.Cluster = cluster
+// 	dash.ClusterView.Cols = cols
+// 	dash.ClusterView.Update()
+// }
+
+func (dash *Dashboard) ConfigCluster(cluster interface{}, cols int) {
+	switch cluster.(type) {
+	case types.ClusterStats:
+		dash.Grid.Items[0].Entry = dash.ClusterView
+		dash.ClusterView.Cluster = cluster.(types.ClusterStats)
+		dash.ClusterView.Cols = 80
+		dash.ClusterView.Update()
+	case types.GroupedClusterStats:
+		dash.Grid.Items[0].Entry = dash.GroupedView
+		dash.GroupedView.Cluster = cluster.(types.GroupedClusterStats)
+		dash.GroupedView.Cols = cols
+		dash.GroupedView.Update()
+	default:
+		log.Println("ConfigCluster(): Invalid cluster type")
+	}
 }
 
 func (dash *Dashboard) Update() {

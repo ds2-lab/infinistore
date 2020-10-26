@@ -2,17 +2,18 @@ package server
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-	"time"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	infinicache "github.com/mason-leap-lab/infinicache/client"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
 )
 
 type RedisAdapter struct {
@@ -48,13 +49,13 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 	}
 
 	adapter := &RedisAdapter{
-		server: srv,
-		proxy: proxy,
-		d: d,
-		p: p,
+		server:    srv,
+		proxy:     proxy,
+		d:         d,
+		p:         p,
 		addresses: addresses,
 		localAddr: localAddr,
-		localIdx: included,
+		localIdx:  included,
 		log: &logger.ColorLogger{
 			Prefix: "RedisAdapter ",
 			Level:  global.Log.GetLevel(),
@@ -85,7 +86,7 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 		w.AppendInlineString("OK")
 		w.Flush()
 	}
-	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, util.Ifelse(ok, "200", "500"),
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_SET, util.Ifelse(ok, "200", "500"),
 		int64(len(body)), t.UnixNano(), int64(dt))
 }
 
@@ -123,7 +124,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 	if shortcut.Client == nil {
 		var addresses []string
 		if len(a.addresses) == 0 {
-			addresses = []string{ shortcut.Address }
+			addresses = []string{shortcut.Address}
 		} else {
 			addresses = make([]string, len(a.addresses))
 			copy(addresses, a.addresses)

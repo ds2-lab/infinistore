@@ -1,28 +1,34 @@
 package lifetime
 
 import (
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"math"
 	"sync/atomic"
 	"time"
-	// "log"
+
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 const TICK = 100 * time.Millisecond
+
 // For Lambdas below 0.5vCPU(896M).
 const TICK_1_ERROR_EXTEND = 10000 * time.Millisecond
 const TICK_1_ERROR = 10 * time.Millisecond
+
 // For Lambdas with 0.5vCPU(896M) and above.
 const TICK_5_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_5_ERROR = 10 * time.Millisecond
+
 // For Lambdas with 1vCPU(1792M) and above.
 const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
+const BANDWIDTH = 0.04 // 0.04B/ns = 40MB/s for single connection
+const STREAMING_TIMEOUT_FACTOR = 10
+
 var (
 	TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
-	TICK_ERROR = TICK_10_ERROR
+	TICK_ERROR        = TICK_10_ERROR
 )
 
 func init() {
@@ -39,8 +45,16 @@ func init() {
 	}
 }
 
+func GetStreamingDeadline(size int64) time.Time {
+	timeout := time.Duration(float64(size) / BANDWIDTH * STREAMING_TIMEOUT_FACTOR)
+	if timeout < time.Second {
+		timeout = time.Second
+	}
+	return time.Now().Add(timeout)
+}
+
 type Timeout struct {
-	Confirm       func(*Timeout) bool
+	Confirm func(*Timeout) bool
 
 	session       *Session
 	startAt       time.Time
@@ -48,22 +62,25 @@ type Timeout struct {
 	interruptEnd  time.Time
 	timer         *time.Timer
 	lastExtension time.Duration
+	lastReason    string
+	reset         chan time.Duration
+	resetReason   string
 	log           logger.ILogger
 	active        int32
 	disabled      int32
-	reset         chan time.Duration
 	c             chan time.Time
 	timeout       bool
 	due           time.Duration
+	deadline      time.Time
 }
 
 func NewTimeout(s *Session, d time.Duration) *Timeout {
 	t := &Timeout{
-		session: s,
+		session:       s,
 		lastExtension: d,
-		log: logger.NilLogger,
-		reset: make(chan time.Duration, 1),
-		c: make(chan time.Time, 1),
+		log:           logger.NilLogger,
+		reset:         make(chan time.Duration, 1),
+		c:             make(chan time.Time, 1),
 	}
 	timeout, due := t.getTimeout(d)
 	t.due = due
@@ -79,6 +96,14 @@ func (t *Timeout) Start() time.Time {
 func (t *Timeout) StartWithCalibration(startAt time.Time) time.Time {
 	t.startAt = startAt
 	return t.startAt
+}
+
+func (t *Timeout) StartWithDeadline(deadline time.Time) time.Time {
+	t.deadline = deadline
+
+	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
+	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
+	return t.StartWithCalibration(deadline.Add(-lifeInSeconds))
 }
 
 func (t *Timeout) EndInterruption() time.Time {
@@ -123,7 +148,7 @@ func (t *Timeout) Restart(ext time.Duration) {
 	// Prevent timeout being triggered or reset after stopped
 	t.Enable()
 
-	t.ResetWithExtension(ext)
+	t.ResetWithExtension(ext, "restart")
 }
 
 func (t *Timeout) Reset() bool {
@@ -142,8 +167,9 @@ func (t *Timeout) Reset() bool {
 	return true
 }
 
-func (t *Timeout) ResetWithExtension(ext time.Duration) bool {
+func (t *Timeout) ResetWithExtension(ext time.Duration, reason string) bool {
 	t.lastExtension = ext
+	t.lastReason = reason
 	return t.Reset()
 }
 
@@ -151,20 +177,22 @@ func (t *Timeout) SetLogger(log logger.ILogger) {
 	t.log = log
 }
 
-func (t *Timeout) Busy() {
+func (t *Timeout) Busy(reason string) {
 	// log.Println("busy")
-	atomic.AddInt32(&t.active, 1)
+	actives := atomic.AddInt32(&t.active, 1)
+	t.log.Debug("Busy %s(%d)", reason, actives)
 }
 
-func (t *Timeout) DoneBusy() {
+func (t *Timeout) DoneBusy(reason string) {
 	// log.Println("done busy")
-	atomic.AddInt32(&t.active, -1)
+	actives := atomic.AddInt32(&t.active, -1)
+	t.log.Debug("Done busy %s(%d)", reason, actives)
 }
 
-func (t *Timeout) DoneBusyWithReset(ext time.Duration) {
+func (t *Timeout) DoneBusyWithReset(ext time.Duration, reason string) {
 	// log.Printf("done busy with reset %v\n", ext)
-	atomic.AddInt32(&t.active, -1)
-	t.ResetWithExtension(ext)
+	t.DoneBusy(reason)
+	t.ResetWithExtension(ext, reason)
 }
 
 func (t *Timeout) IsBusy() bool {
@@ -195,10 +223,10 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			timeout, due := t.getTimeout(extension)
 			t.due = due
 			t.timer.Reset(timeout)
-			t.log.Debug("Due expectation updated: %v, timeout in %v", due, timeout)
+			t.log.Debug("Due extended to %v, timeout in %v: %s", due, timeout, t.resetReason)
 		case <-t.timer.C:
 			// Timeout channel should be empty, or we clear it
-			select{
+			select {
 			case <-t.c:
 			default:
 				// Nothing
@@ -221,11 +249,14 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			// 	t.interruptAt = time.Now()
 			// }
 			// t.session.Unlock()
-			if !t.tryTimeout(false) {
+
+			// Pre-confirmation check
+			if t.Confirm != nil && !t.tryTimeout(false) {
 				continue
 			}
 
-			if t.Confirm != nil && t.Confirm(t) {
+			if t.Confirm == nil || t.Confirm(t) {
+				// Confirmed or no need to confirm
 				t.tryTimeout(true)
 			}
 		}
@@ -234,8 +265,9 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 
 func (t *Timeout) resetLocked() {
 	_, t.due = t.getTimeout(t.lastExtension)
-	t.log.Debug("Due expectation updated: %v", t.due)
-	select{
+	t.log.Debug("Due expected at %v: %s", t.due, t.lastReason)
+	t.resetReason = t.lastReason
+	select {
 	case t.reset <- t.lastExtension:
 	default:
 		// Consume unread and replace with latest.
@@ -252,7 +284,7 @@ func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
 	}
 
 	now := time.Since(t.startAt)
-	due = time.Duration(math.Ceil(float64(now + ext) / float64(TICK)))*TICK - TICK_ERROR
+	due = time.Duration(math.Ceil(float64(now+ext)/float64(TICK)))*TICK - TICK_ERROR
 	timeout = due - now
 	return
 }
@@ -275,6 +307,7 @@ func (t *Timeout) tryTimeout(confirmed bool) bool {
 	} else if confirmed {
 		t.timeout = true
 		t.interruptAt = time.Now()
+		t.log.Debug("Timeout triggered")
 		t.c <- t.interruptAt
 	}
 

@@ -1,6 +1,6 @@
-package server
+package metastore
 
-import(
+import (
 	"fmt"
 	"sync"
 )
@@ -8,27 +8,27 @@ import(
 var (
 	metaPool = sync.Pool{
 		New: func() interface{} {
-				return &Meta{}
+			return &Meta{}
 		},
 	}
 	emptyPlacement = make(Placement, 100)
 )
 
 type Meta struct {
-	Key          string
-	Size         int64
-	DChunks      int64
-	PChunks      int64
-	NumChunks    int
+	Key       string
+	Size      int64
+	DChunks   int64
+	PChunks   int64
+	NumChunks int
 	Placement
-	ChunkSize    int64
-	Reset        bool
-	Deleted      bool
+	ChunkSize int64
+	Reset     bool
+	Deleted   bool
 
-	slice       Slice
-	placerMeta  *PlacerMeta
-	lastChunk   int64
-	mu          sync.Mutex
+	Balanced   int32
+	placerMeta interface{}
+	lastChunk  int64
+	mu         sync.Mutex
 }
 
 func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
@@ -41,10 +41,8 @@ func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
 	meta.Placement = initPlacement(meta.Placement, meta.NumChunks)
 	meta.ChunkSize = chunkSize
 	meta.Deleted = false
+	meta.Balanced = 0
 
-	if meta.slice.initialized {
-		meta.slice = Slice{}
-	}
 	meta.placerMeta = nil
 
 	return meta

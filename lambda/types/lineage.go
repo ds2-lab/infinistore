@@ -1,24 +1,24 @@
 package types
 
 import (
-	"time"
 	"net/url"
 	"strconv"
+	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 type LineageMeta struct {
 	*protocol.Meta
-	Consistent bool
-	Backup     bool
-	BackupId   int
+	Consistent  bool
+	Backup      bool
+	BackupId    int
 	BackupTotal int
-	Tips       url.Values
+	Tips        url.Values
 }
 
 func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
-	lm = &LineageMeta{ Meta: meta, Consistent: true }
+	lm = &LineageMeta{Meta: meta, Consistent: true}
 
 	// Parse tips
 	lm.Tips, err = url.ParseQuery(meta.Tip)
@@ -53,33 +53,33 @@ type Lineage interface {
 }
 
 type LineageTerm struct {
-	Size     uint64        // Storage footprint of storing current term.
-	Ops      []LineageOp  // Operations of the term.
+	Size uint64      // Storage footprint of storing current term.
+	Ops  []LineageOp // Operations of the term.
 
 	// Fields below will be serialized.
-	Term     uint64        // Term id, increase on write operation.
-	Updates  uint64        // Storage footprint of storing all terms of lineage so far.
-	RawOps   []byte        // Serialized "Ops"
-	Hash     string        // Hash value for the term.
-	DiffRank float64       // For snapshot only, this is supposed to be a moving value.
+	Term     uint64  // Term id, increase on write operation.
+	Updates  uint64  // Storage footprint of storing all terms of lineage so far.
+	RawOps   []byte  // Serialized "Ops"
+	Hash     string  // Hash value for the term.
+	DiffRank float64 // For snapshot only, this is supposed to be a moving value.
 }
 
 func LineageTermFromMeta(meta *LineageMeta) *LineageTerm {
 	if meta == nil {
-		return &LineageTerm{ Term: 1 }
+		return &LineageTerm{Term: 1}
 	}
 	return &LineageTerm{
-		Term: meta.Meta.Term,
+		Term:    meta.Meta.Term,
 		Updates: meta.Meta.Updates,
-		Hash: meta.Meta.Hash,
+		Hash:    meta.Meta.Hash,
 	}
 }
 
 type LineageOp struct {
-	Op       uint32     // Operation, can be "OP_SET" or "OP_DEL"
-	Key      string     // Key of the object
-	Id       string     // Chunk id of the object
-	Size     uint64     // Size of the object
+	Op       uint32 // Operation, can be "OP_SET" or "OP_DEL"
+	Key      string // Key of the object
+	Id       string // Chunk id of the object
+	Size     uint64 // Size of the object
 	Accessed time.Time
 	Bucket   string
 }
@@ -87,15 +87,16 @@ type LineageOp struct {
 type OpWrapper struct {
 	LineageOp
 	*OpRet
-	Body      []byte    // For safety of persistence of the SET operation in the case like DEL after SET.
+	Body      []byte // For safety of persistence of the SET operation in the case like DEL after SET.
 	OpIdx     int
+	Persisted bool // Indicate the operation has been persisted.
 }
 
 type CommitOption struct {
-	Full bool
-	Snapshotted bool
+	Full          bool
+	Snapshotted   bool
 	BytesUploaded uint64
-	Checked bool
+	Checked       bool
 }
 
 type LineageStatus []*protocol.Meta
@@ -106,9 +107,9 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 	case 0:
 		return protocol.Status{}
 	case 1:
-		return protocol.Status{ *s[0] }
+		return protocol.Status{*s[0]}
 	case 2:
-		return protocol.Status{ *s[0], *s[1] }
+		return protocol.Status{*s[0], *s[1]}
 	default:
 		status := make(protocol.Status, len(s))
 		for i := 0; i < len(s); i++ {
@@ -120,19 +121,19 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 
 type OpRet struct {
 	error
-	delayed chan error
+	delayed chan struct{}
 }
 
 func OpError(err error) *OpRet {
-	return &OpRet{ err, nil }
+	return &OpRet{err, nil}
 }
 
 func OpSuccess() *OpRet {
-	return &OpRet{ nil, nil }
+	return &OpRet{nil, nil}
 }
 
 func OpDelayedSuccess() *OpRet {
-	return &OpRet{ nil, make(chan error, 1) }
+	return &OpRet{nil, make(chan struct{}, 1)}
 }
 
 func (ret *OpRet) Error() error {
@@ -143,13 +144,29 @@ func (ret *OpRet) IsDelayed() bool {
 	return ret.delayed != nil
 }
 
+// Conclude OpRet. Noted error is evaluated before notifing "delayed" channel, so no lock is required for IsDone or Wait.
 func (ret *OpRet) Done(err ...error) {
 	if ret.delayed == nil {
 		return
-	} else if len(err) > 0 {
-		ret.delayed <- err[0]
+	}
+
+	if len(err) > 0 {
+		ret.error = err[0]
 	}
 	close(ret.delayed)
+}
+
+func (ret *OpRet) IsDone() bool {
+	if ret.delayed == nil {
+		return true
+	}
+
+	select {
+	case <-ret.delayed:
+		return true
+	default:
+		return false
+	}
 }
 
 // Behavior like the Promise in javascript.
@@ -157,11 +174,8 @@ func (ret *OpRet) Done(err ...error) {
 func (ret *OpRet) Wait() error {
 	if ret.delayed == nil {
 		return nil
-	} else if err := <-ret.delayed; err != nil {
-		ret.error = err
-		return err
-	} else {
-		// At this time, error can be stored Error.
-		return ret.error
 	}
+
+	<-ret.delayed
+	return ret.error
 }

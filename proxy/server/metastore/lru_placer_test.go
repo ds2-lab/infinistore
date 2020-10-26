@@ -1,4 +1,4 @@
-package server
+package metastore
 
 import (
 	"fmt"
@@ -8,9 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-//	"log"
 
-//	"github.com/mason-leap-lab/infinicache/proxy"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )

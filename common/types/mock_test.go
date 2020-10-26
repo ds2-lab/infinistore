@@ -2,13 +2,14 @@ package types_test
 
 import (
 	"fmt"
-	mock "github.com/jordwest/mock-conn"
-	"github.com/mason-leap-lab/redeo/resp"
 	"log"
 
+	mock "github.com/jordwest/mock-conn"
+	"github.com/mason-leap-lab/redeo/resp"
+
+	. "github.com/mason-leap-lab/infinicache/common/types"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	. "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 var (

@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo"
 	"io/ioutil"
 	syslog "log"
 	"net"
@@ -15,17 +13,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/redeo"
+
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/server"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/server"
+	"github.com/mason-leap-lab/infinicache/proxy/server/cluster"
 )
 
 var (
-	options       = &global.Options
-	log           = &logger.ColorLogger{ Color: true, Level: logger.LOG_LEVEL_INFO }
+	options = &global.Options
+	log     = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
 )
 
 func init() {
@@ -43,7 +45,8 @@ func main() {
 	}
 	log.Color = !options.NoColor
 	if options.LogFile != "" {
-		logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		// logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			syslog.Panic(err)
 		}
@@ -92,7 +95,7 @@ func main() {
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
-		dash.ConfigCluster(prxy.GetStatusProvider(), 12)
+		dash.ConfigCluster(prxy.GetStatsProvider(), cluster.ExpireBucketsNum)
 	}
 
 	// config server
@@ -153,7 +156,6 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
-	server.CleanUpScheduler()
 	if dash != nil {
 		dash.Update()
 		time.Sleep(time.Second)
@@ -187,7 +189,7 @@ func checkUsage(options *global.CommandlineOptions) {
 		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
 		fmt.Fprintf(os.Stderr, "Available options:\n")
 		flag.PrintDefaults()
-		os.Exit(0);
+		os.Exit(0)
 	}
 
 	if !options.NoDashboard {

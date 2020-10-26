@@ -58,9 +58,20 @@ function perform(){
         echo "Trigger reclaimation of node $RECLAIM in 5 seconds"
         /bin/bash -c "$PWD/reclaim.sh $NODE_PREFIX $RECLAIM $REALMEM 5 $i &"
 
-        # Get objects, be sure to long enough
-        echo "Getting random $N objects for $SECS seconds, interval: $INTERVAL ms"
-        bench $N 1 1 $SETS $BYTES 1 $INTERVAL
+        # Exp 1-3: Get objects, be sure to long enough
+        # echo "Getting random $N objects for $SECS seconds, interval: $INTERVAL ms"
+        # bench $N 1 1 $SETS $BYTES 1 $INTERVAL
+
+        # Exp 4: Set objects
+        SECS_SET=15
+        ((N_SET=SECS_SET*1000/INTERVAL))
+        echo "Setting $N_SET objects for $SECS_SET seconds, interval: $INTERVAL ms"
+        bench $N_SET 1 1 $N_SET $BYTES 0 $INTERVAL
+
+        echo "Setting $((N-N_SET)) objects for $((SECS-SECS_SET)) seconds, interval: $INTERVAL ms"
+        bench $((N-N_SET)) 1 1 $N_SET $BYTES 1 $INTERVAL
+
+        # Clean up
         kill -2 `cat /tmp/infinicache.pid`
         while [ -f /tmp/infinicache.pid ]
         do
