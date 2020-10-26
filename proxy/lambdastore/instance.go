@@ -37,10 +37,12 @@ const (
 	INSTANCE_STARTED   = 1
 
 	// Connection status
-	// Sleeping -> Activating -> Active -> Maybe (Unmanaged)
-	// Activating -> Sleeping
-	// Active -> Sleeping
-	// Maybe -> Sleeping
+	// Activate: Sleeping -> Activating -> Active
+	// Retry:    Activating/Active -> Activate (validating)
+	// Abandon:  Activating/Active -> Sleeping (validating, warmup)
+	// Sleep:    Active -> Sleeping
+	// Switch:   Active -> Maybe (Unmanaged)
+	// Sleep:    Maybe -> Sleeping
 	INSTANCE_SLEEPING   = 0
 	INSTANCE_ACTIVATING = 1
 	INSTANCE_ACTIVE     = 2
@@ -616,7 +618,16 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	ins.log.Debug("[%v]Try activate lambda.", ins)
-	if !atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEPING, INSTANCE_ACTIVATING) {
+	switch atomic.LoadUint32(&ins.awake) {
+	case INSTANCE_ACTIVATING:
+		// Cases:
+		// On validating, lambda deactivated and reactivating. Then validating timeouts and retries.
+		return true
+	case INSTANCE_SLEEPING:
+		if !atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEPING, INSTANCE_ACTIVATING) {
+			return false
+		} // Continue to activate
+	default:
 		return false
 	}
 
@@ -647,24 +658,21 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			// No retry for warming up.
 			// Possible reasons
 			// 1. Pong is delayed and lambda is returned without requesting for recovery, or the lambda will wait for the ending of the recovery.
-			statusUpdated := false
 			ins.mu.Lock()
-			// Does not affect the SWICHING or MAYBE status.
-			statusUpdated = atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_ACTIVATING, INSTANCE_SLEEPING) ||
-				atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_ACTIVE, INSTANCE_SLEEPING)
+			// Does not affect the MAYBE status.
+			atomic.StoreUint32(&ins.awake, INSTANCE_SLEEPING)
 			ins.flagValidatedLocked(nil) // No need to return a validated connection.
 			ins.mu.Unlock()
-			if statusUpdated {
-				ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
-			} else {
-				ins.log.Error("[%v]Detected unvalidated warmup, unexpected status.", ins)
-			}
-			return
-		}
 
-		// Validating, retrigger.
-		ins.log.Info("[%v]Reactivateing...", ins)
-		ins.triggerLambdaLocked(opt)
+			ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
+			return
+		} else {
+			// Validating, retrigger.
+			atomic.StoreUint32(&ins.awake, INSTANCE_ACTIVATING)
+
+			ins.log.Info("[%v]Reactivateing...", ins)
+			ins.triggerLambdaLocked(opt)
+		}
 	}
 }
 
@@ -818,6 +826,12 @@ func (ins *Instance) tryFlagValidated(conn *Connection, sid string, flags int64)
 		ins.ctrlLink = conn
 
 		if oldConn != nil {
+			// Inherit the data link so it will not be closed because of ctrl link reconnected.
+			dl := oldConn.GetDataLink()
+			if dl != nil && conn.AddDataLink(dl) {
+				// Worker matches and added
+				oldConn.RemoveDataLink(dl)
+			}
 			oldConn.Close()
 		}
 
