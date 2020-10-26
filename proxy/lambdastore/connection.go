@@ -20,7 +20,7 @@ import (
 
 var (
 	defaultConnectionLog = &logger.ColorLogger{
-		Prefix: fmt.Sprintf("Undesignated "),
+		Prefix: "Undesignated ",
 		Color:  !global.Options.NoColor,
 	}
 	ErrConnectionClosed = errors.New("connection closed")
