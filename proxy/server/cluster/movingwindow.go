@@ -1,18 +1,19 @@
 package cluster
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"math/rand"
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/config"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
+
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 var (
@@ -42,8 +43,8 @@ type MovingWindow struct {
 	scaler       chan *lambdastore.Instance
 	scaleCounter int32
 
-	mu      sync.RWMutex
-	done    chan struct{}
+	mu   sync.RWMutex
+	done chan struct{}
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
@@ -53,14 +54,14 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		num:       ActiveBucketsNum,
 		window:    window,
 		interval:  interval,
-		buckets:   make([]*Bucket, 0, ExpireBucketsNum + 1),
+		buckets:   make([]*Bucket, 0, ExpireBucketsNum+1),
 		startTime: time.Now(),
 
 		// for scaling out
 		scaler:       make(chan *lambdastore.Instance, config.NumLambdaClusters),
 		scaleCounter: 0,
 
-		done:      make(chan struct{}),
+		done: make(chan struct{}),
 	}
 	cluster.placer = metastore.NewDefaultPlacer(metastore.New(), cluster)
 	return cluster
@@ -175,9 +176,9 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int) (*lambdastore
 	bucketId := gins.idx.(*BucketIndex).BucketId
 	// Relocate if the chunk has not been touched within active window,
 	// or opportunisitcally has not been touched for a while.
-	if mw.GetCurrentBucket().id - bucketId >= ActiveBucketsNum {
+	if mw.GetCurrentBucket().id-bucketId >= ActiveBucketsNum {
 		return mw.Relocate(meta, chunkId), true
-	} else if mw.rand() == 1 && mw.GetCurrentBucket().id - bucketId >= ActiveBucketsNum / config.ActiveReplica {
+	} else if mw.rand() == 1 && mw.GetCurrentBucket().id-bucketId >= ActiveBucketsNum/config.ActiveReplica {
 		return mw.Relocate(meta, chunkId), true
 	}
 
@@ -221,7 +222,7 @@ func (mw *MovingWindow) Daemon() {
 			timer.Stop()
 			return
 		// scaling out in bucket
-		case ins:=<-mw.scaler:
+		case ins := <-mw.scaler:
 			mw.doScale(ins)
 		// for bucket rolling
 		case <-timer.C:
@@ -324,7 +325,7 @@ func (mw *MovingWindow) ExpireCheck() {
 
 func (mw *MovingWindow) getActiveInstanceForChunk(meta *metastore.Meta, chunkId int) *lambdastore.Instance {
 	instances := mw.GetActiveInstances(meta.NumChunks)
-	return instances[chunkId % len(instances)]
+	return instances[chunkId%len(instances)]
 }
 
 func (mw *MovingWindow) rand() int {
@@ -336,16 +337,15 @@ func (mw *MovingWindow) rand() int {
 func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance, current *Bucket) {
 	// When current bucket leaves active window, there backups should not have been expired.
 	bucketRange := ExpireBucketsNum - ActiveBucketsNum
-	if bucketRange > len(mw.buckets) - 1 {
+	if bucketRange > len(mw.buckets)-1 {
 		bucketRange = len(mw.buckets) - 1
 	}
-	startBucket := mw.buckets[current.id - bucketRange]
+	startBucket := mw.buckets[current.id-bucketRange]
 
 	all := mw.group.SubGroup(startBucket.start, current.end)
 	for _, gins := range gall {
-		num, candidates := mw.getBackupsForNode(all, gins.Idx() - startBucket.start.Idx())
+		num, candidates := mw.getBackupsForNode(all, gins.Idx()-startBucket.start.Idx())
 		node := gins.Instance()
-		mw.log.Debug("in assign backup, instance is %v", node.Name())
 		node.AssignBackups(num, candidates)
 	}
 }
@@ -431,12 +431,12 @@ func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int) (int, []
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= available, available - 1, numBaks).(int) // Use all
-		numTotal = util.Ifelse(numTotal >= available, available - 1, numTotal).(int)
+		numBaks = util.Ifelse(numBaks >= available, available-1, numBaks).(int) // Use all
+		numTotal = util.Ifelse(numTotal >= available, available-1, numTotal).(int)
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = gall[(i + j*distance + rand.Int()%distance + 1) % available].Instance() // Random to avoid the same backup set.
+		candidates[j] = gall[(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }

@@ -87,7 +87,7 @@ func main() {
 			sig <- syscall.SIGINT
 		}()
 	} else {
-		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL, syscall.SIGABRT)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	}
 
 	// initial proxy server
@@ -160,7 +160,6 @@ func main() {
 		dash.Update()
 		time.Sleep(time.Second)
 	}
-	return
 }
 
 func checkUsage(options *global.CommandlineOptions) {
@@ -171,7 +170,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
-	flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
+	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
 	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
 	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
@@ -201,6 +200,6 @@ func checkUsage(options *global.CommandlineOptions) {
 
 	if options.Evaluation && options.FuncCapacity == 0 {
 		fmt.Fprintf(os.Stderr, "Since evaluation is enabled, please specify the capacity of function instance with option \"-funcap\".\n")
-		os.Exit(0);
+		os.Exit(0)
 	}
 }

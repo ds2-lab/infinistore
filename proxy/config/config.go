@@ -13,7 +13,7 @@ const LambdaMaxDeployments = 400
 // Mode of cluster.
 const StaticCluster = "static"
 const WindowCluster = "window"
-const Cluster = StaticCluster
+const Cluster = WindowCluster
 
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
 // For window cluster, this must be at least D+P

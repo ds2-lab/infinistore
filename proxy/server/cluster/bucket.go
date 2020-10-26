@@ -3,8 +3,9 @@ package cluster
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"sync"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -23,22 +24,22 @@ var (
 
 // A bucket is a view of a group
 type Bucket struct {
-	id          int
+	id int
 
 	// group management
 	group       *Group
 	instances   []*lambdastore.Instance
 	start       DefaultGroupIndex
 	end         DefaultGroupIndex
-	activeStart GroupIndex          // Instances end at activeStart - 1 are full.
+	activeStart GroupIndex // Instances end at activeStart - 1 are full.
 
 	//state
 	state int
 
 	// utilities
-	log         logger.ILogger
-	ready       sync.WaitGroup
-	mu          sync.RWMutex
+	log   logger.ILogger
+	ready sync.WaitGroup
+	mu    sync.RWMutex
 }
 
 type BucketIndex struct {
@@ -48,9 +49,9 @@ type BucketIndex struct {
 
 func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 	bucket = &Bucket{
-		id:    id,
-		group: group,
-		log:   global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
+		id:        id,
+		group:     group,
+		log:       global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
 		instances: make([]*lambdastore.Instance, num),
 	}
 
@@ -71,10 +72,9 @@ func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 	for i := from; i < end; i = i.Next() {
 		node := pool.GetForGroup(b.group, &BucketIndex{
 			DefaultGroupIndex: i,
-			BucketId: b.id,
+			BucketId:          b.id,
 		})
-		b.instances = append(b.instances, node)
-		b.log.Debug("[Adding lambda instance %v]", node.Name())
+		b.instances[i] = node
 
 		// Begin handle requests
 		go node.HandleRequests()
@@ -87,7 +87,7 @@ func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 		// 	b.ready.Done()
 		// }()
 	}
-	b.log.Debug("num: %d, start: %s, end: %s", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
+	b.log.Debug("%d nodes added: %s ~ %s", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
 }
 
 func (b *Bucket) waitReady() {
@@ -97,7 +97,7 @@ func (b *Bucket) waitReady() {
 
 func (b *Bucket) shouldScale(gins *GroupInstance, num int) bool {
 	b.mu.RLock()
-	scale := b.end.Idx() - gins.Idx() <= num
+	scale := b.end.Idx()-gins.Idx() <= num
 	b.mu.RUnlock()
 	return scale
 }
@@ -136,12 +136,12 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if activeNum > b.end.Idx() - b.activeStart.Idx()  {
-		return b.instances[b.activeStart.Idx() - b.start.Idx():]
+	if activeNum > b.end.Idx()-b.activeStart.Idx() {
+		return b.instances[b.activeStart.Idx()-b.start.Idx():]
 	}
 	// Keep using latests
 	// TODO: Or we should return all available.
-	return b.instances[len(b.instances) - activeNum:]
+	return b.instances[len(b.instances)-activeNum:]
 }
 
 // types.ClusterStatus implementation
