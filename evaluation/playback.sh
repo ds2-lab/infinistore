@@ -61,6 +61,6 @@ else
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 
-	# echo "Transfering logs from CloudWatch to S3: $START - $END ..."
-	# cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
+	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
+	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
 fi
