@@ -38,6 +38,13 @@ func init() {
 }
 
 func main() {
+	var dash *dashboard.Dashboard
+	defer func() {
+		if dash != nil {
+			dash.Close()
+		}
+	}()
+	
 	var done sync.WaitGroup
 	checkUsage(options)
 	if options.Debug {
@@ -78,10 +85,9 @@ func main() {
 	// Register signals
 	sig := make(chan os.Signal, 1)
 	// Start Dashboard
-	var dash *dashboard.Dashboard
+	// var dash *dashboard.Dashboard
 	if !options.NoDashboard {
 		dash = dashboard.NewDashboard()
-		defer dash.Close()
 		go func() {
 			dash.Start()
 			sig <- syscall.SIGINT

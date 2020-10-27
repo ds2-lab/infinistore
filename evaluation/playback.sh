@@ -18,6 +18,7 @@ function perform(){
 	PARITYNUM=$4
 	SCALE=$5
 	COMPACT=$6
+	DASHBOARD=$7
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
@@ -30,7 +31,7 @@ function perform(){
 	cat /tmp/infinicache.pid
 	#        set
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $DASHBOARD
 	kill -2 `cat /tmp/infinicache.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/infinicache.pid ]
