@@ -3,6 +3,7 @@ package views
 import (
 	"image"
 	"math"
+	"log"
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/drawille"
@@ -77,7 +78,12 @@ func (v *ClusterView) update() {
 func (v *ClusterView) updateInstance(idx int, ins types.InstanceStats) {
 	row := idx / v.Cols
 	col := idx % v.Cols
-	v.SetPoint(v.mapPoint(image.Pt(col, row)), v.getColorByInstance(ins))
+	mapped := v.mapPoint(image.Pt(col, row))
+	// Ignore points out of boundary
+	if mapped.X < 0 || mapped.Y < 0 {
+		return
+	}
+	v.SetPoint(mapped, v.getColorByInstance(ins))
 }
 
 func (v *ClusterView) updateMapper(len int) {
