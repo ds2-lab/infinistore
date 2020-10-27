@@ -11,7 +11,6 @@ import (
 	"path"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
@@ -28,6 +27,10 @@ import (
 var (
 	options = &global.Options
 	log     = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
+	sig     = make(chan os.Signal, 1)
+	dash    *dashboard.Dashboard
+	logFile *os.File
+	panicErr interface{}
 )
 
 func init() {
@@ -38,13 +41,8 @@ func init() {
 }
 
 func main() {
-	var dash *dashboard.Dashboard
-	defer func() {
-		if dash != nil {
-			dash.Close()
-		}
-	}()
-	
+	defer finalize(false) // We need to call finalize in every goroutine.
+
 	var done sync.WaitGroup
 	checkUsage(options)
 	if options.Debug {
@@ -52,12 +50,11 @@ func main() {
 	}
 	log.Color = !options.NoColor
 	if options.LogFile != "" {
-		logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
-		// logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			syslog.Panic(err)
+		logFile, panicErr = os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		// logFile, panicErr = os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if panicErr != nil {
+			panic(panicErr)
 		}
-		defer logFile.Close()
 
 		syslog.SetOutput(logFile)
 	}
@@ -71,24 +68,20 @@ func main() {
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
-		os.Exit(1)
 		return
 	}
 	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
 		log.Error("Failed to listen lambdas: %v", err)
-		os.Exit(1)
 		return
 	}
 	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
 
-	// Register signals
-	sig := make(chan os.Signal, 1)
 	// Start Dashboard
-	// var dash *dashboard.Dashboard
 	if !options.NoDashboard {
 		dash = dashboard.NewDashboard()
 		go func() {
+			defer finalize(false)
 			dash.Start()
 			sig <- syscall.SIGINT
 		}()
@@ -132,7 +125,10 @@ func main() {
 	}()
 
 	// initiate lambda store proxy
-	go prxy.Serve(lambdaLis)
+	go func() {
+		defer finalize(true)
+		prxy.Serve(lambdaLis)
+	}()
 	prxy.WaitReady()
 	if dash != nil {
 		dash.ClusterView.Update()
@@ -162,10 +158,6 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
-	if dash != nil {
-		dash.Update()
-		time.Sleep(time.Second)
-	}
 }
 
 func checkUsage(options *global.CommandlineOptions) {
@@ -207,5 +199,27 @@ func checkUsage(options *global.CommandlineOptions) {
 	if options.Evaluation && options.FuncCapacity == 0 {
 		fmt.Fprintf(os.Stderr, "Since evaluation is enabled, please specify the capacity of function instance with option \"-funcap\".\n")
 		os.Exit(0)
+	}
+}
+
+func finalize(fix bool) {
+	// Dashboard must be closed in any circumstance.
+	if dash != nil {
+		dash.Close()
+		dash = nil
+	}
+
+	// If fixable, try close server normally.
+	if fix {
+		if err := recover(); err != nil {
+			log.Error("%v", err)
+			return
+		}
+	}
+	
+	// Rest will be cleared from main routine.
+	if logFile != nil {
+		logFile.Close()
+		logFile = nil
 	}
 }

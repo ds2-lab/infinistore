@@ -22,7 +22,7 @@ function perform(){
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
-	start_proxy $PREPROXY &
+	start_proxy $PREPROXY $DASHBOARD
   # Wait for proxy is ready
 	while [ ! -f /tmp/infinicache.pid ]
 	do
@@ -31,7 +31,7 @@ function perform(){
 	cat /tmp/infinicache.pid
 	#        set
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $DASHBOARD
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT 
 	kill -2 `cat /tmp/infinicache.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/infinicache.pid ]
@@ -57,7 +57,7 @@ else
 	mkdir -p $PWD/$ENTRY
 
 	START=`date +"%Y-%m-%d %H:%M:%S"`
-	perform $1 $2 $3 $4 $5 $6
+	perform $1 $2 $3 $4 $5 $6 $7
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 
