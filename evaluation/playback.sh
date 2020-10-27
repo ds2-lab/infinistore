@@ -18,6 +18,7 @@ function perform(){
 	PARITYNUM=$4
 	SCALE=$5
 	COMPACT=$6
+	DASHBOARD=$7
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
@@ -30,7 +31,7 @@ function perform(){
 	cat /tmp/infinicache.pid
 	#        set
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $DASHBOARD
 	kill -2 `cat /tmp/infinicache.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/infinicache.pid ]
@@ -60,6 +61,6 @@ else
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 
-	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
-	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
+	# echo "Transfering logs from CloudWatch to S3: $START - $END ..."
+	# cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
 fi

@@ -10,23 +10,25 @@ build: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
-	go build -o bin/redbench ${GOPATH}/src/github.com/wangaoone/redbench/
+	go build -o bin/redbench github.com/wangaoone/redbench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
-build-simulator:
-	go build ${GOPATH}/src/github.com/wangaoone/redbench/simulator/playback/
-	mv playback ${GOPATH}/src/github.com/wangaoone/redbench/simulator/playback/
+build-simulator: prepare
+	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
-dryrun: build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 -compact dryrun
+dryrun: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 -compact dryrun
 
-simulate: build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 -compact 1>./log 2>&1 &
+simulate: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 -compact 1>./log 2>&1 &
 
-playback: build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 1>./log 2>&1 &
+simulate-with-dashboard: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 -compact -enable-dashboard
+
+playback: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 1>./log 2>&1 &
 
 start-server:
 	./server.sh 1>./log 2>&1 &

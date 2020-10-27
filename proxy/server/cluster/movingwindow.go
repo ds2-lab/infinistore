@@ -17,14 +17,18 @@ import (
 )
 
 var (
-	ActiveDuration     = 10 // min
-	ExpireDuration     = 20 //min
+	ActiveDuration     = 60 // min
+	ExpireDuration     = 120 //min
 	ActiveBucketsNum   = ActiveDuration / config.BucketDuration
 	ExpireBucketsNum   = ExpireDuration / config.BucketDuration
-	NumBackupInstances = config.BackupsPerInstance * config.NumLambdaClusters
-
-	NumInitialClusters = config.NumLambdaClusters * 4
+	NumInitialClusters = config.NumLambdaClusters * 3
 )
+
+func init() {
+	if NumInitialClusters > config.LambdaMaxDeployments {
+		NumInitialClusters = config.LambdaMaxDeployments
+	}
+}
 
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
