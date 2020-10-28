@@ -46,6 +46,9 @@ type Response interface {
 	// Mark an attempt to flush response, return attempts left.
 	markAttempt() int
 
+	// Abandon the response
+	abandon(error)
+
 	// Close the response.
 	close()
 }
@@ -56,6 +59,7 @@ type BaseResponse struct {
 	attempted int
 	err       error
 	done      sync.WaitGroup
+	doneOnce  sync.Once
 	inst      Response
 	preparer  Preparer
 	ctx       context.Context
@@ -172,8 +176,15 @@ func (r *BaseResponse) markAttempt() int {
 	return r.Attempts - r.attempted
 }
 
+func (r *BaseResponse) abandon(err error) {
+	r.err = err
+	r.close()
+}
+
 func (r *BaseResponse) close() {
-	r.done.Done()
+	if r.link != nil {
+		r.doneOnce.Do(r.done.Done)
+	}
 }
 
 type SimpleResponse struct {

@@ -17,11 +17,11 @@ import (
 )
 
 var (
-	ActiveDuration     = 60 // min
+	ActiveDuration     = 60  // min
 	ExpireDuration     = 120 //min
 	ActiveBucketsNum   = ActiveDuration / config.BucketDuration
 	ExpireBucketsNum   = ExpireDuration / config.BucketDuration
-	NumInitialClusters = config.NumLambdaClusters * 3
+	NumInitialClusters = config.NumLambdaClusters * 2
 )
 
 func init() {

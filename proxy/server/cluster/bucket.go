@@ -52,7 +52,7 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		id:        id,
 		group:     group,
 		log:       global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
-		instances: make([]*lambdastore.Instance, num),
+		instances: make([]*lambdastore.Instance, 0, num),
 	}
 
 	// expand
@@ -74,7 +74,7 @@ func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 			DefaultGroupIndex: i,
 			BucketId:          b.id,
 		})
-		b.instances[i] = node
+		b.instances = append(b.instances, node)
 
 		// Begin handle requests
 		go node.HandleRequests()
@@ -116,6 +116,9 @@ func (b *Bucket) scale(num int) (gall []*GroupInstance, err error) {
 	if err != nil {
 		return nil, err
 	}
+	scaled := make([]*lambdastore.Instance, len(b.instances), len(b.instances)+num)
+	copy(scaled, b.instances)
+	b.instances = scaled
 	b.initInstance(from, b.end)
 	return b.group.SubGroup(from, b.end), nil
 }

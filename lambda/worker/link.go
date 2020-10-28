@@ -82,7 +82,10 @@ func (ln *Link) AddResponses(rsp interface{}) error {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	if ln.Client == nil {
+	if atomic.LoadInt32(&ln.once) == LinkUninitialized {
+		rsp.(Response).abandon(ErrWorkerClosed)
+		return ErrWorkerClosed
+	} else if ln.Client == nil {
 		ln.buff <- rsp
 	} else if err := ln.Client.AddResponses(rsp); err != nil {
 		ln.buff <- rsp
@@ -95,9 +98,23 @@ func (ln *Link) Close() {
 	defer ln.mu.Unlock()
 
 	if ln.Client != nil {
-		ln.Client.Conn().Close()
+		conn := ln.Client.Conn()
+		// Don't use conn.Close(), it will stuck and wait.
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+		}
+		conn.Close()
 		ln.Client.Close()
 		ln.Client = nil
+	}
+	// Drain responses
+	if len(ln.buff) > 0 {
+		for rsp := range ln.buff {
+			rsp.(Response).abandon(ErrWorkerClosed)
+			if len(ln.buff) == 0 {
+				break
+			}
+		}
 	}
 	atomic.StoreInt32(&ln.once, LinkUninitialized)
 }

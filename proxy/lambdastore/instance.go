@@ -372,8 +372,8 @@ func (ins *Instance) IsRecovering() bool {
 func (ins *Instance) ReserveBacking() bool {
 	ins.doneBacking.Add(1) // Avoid being expired.
 	success := atomic.LoadUint32(&ins.recovering) == 0 &&
-		atomic.LoadUint32(&ins.phase) != PHASE_EXPIRED
-	atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
+		atomic.LoadUint32(&ins.phase) != PHASE_EXPIRED &&
+		atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED)
 	if !success {
 		ins.doneBacking.Done()
 	}
@@ -724,7 +724,10 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		Backups: config.BackupsPerInstance,
 		Status:  status,
 	}
-	if opt.WarmUp {
+	// CMD_PING is used for preflight requests. CMD_WARMUP is used for keeping node warmed, which involves no further action.
+	// While requests do not use CMD_PING, CMD_PING request is used to piggy-back messages in the cases like starting backing.
+	// In such case, no further action is required. So we use CMD_WARMUP to invoke node when requests command is CMD_PING.
+	if opt.WarmUp || opt.Command.String() == protocol.CMD_PING {
 		event.Cmd = protocol.CMD_WARMUP
 	}
 	payload, err := json.Marshal(event)

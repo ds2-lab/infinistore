@@ -59,6 +59,8 @@ func (l *DefaultPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, Met
 	instance.ChunkCounter += 1                     // TODO: Use atomic operation
 	size := instance.IncreaseSize(meta.ChunkSize)
 	instance.KeyMap = append(instance.KeyMap, key) // TODO: Use atomic operation
+	l.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
+									instance.Id(), size, instance.Meta.Capacity, chunkId, key, meta.ChunkSize)
 
 	// Check if scaling is reqired.
 	// TODO: It is the responsibility of the cluster to handle duplicated events.

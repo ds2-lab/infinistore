@@ -119,7 +119,7 @@ func (wrk *Worker) Close(opts ...bool) {
 		wrk.readyToClose.Wait()
 		atomic.StoreInt32(&wrk.closed, WorkerClosed)
 	} else if !atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosed) {
-		// Closed
+		// Closing or closed
 		return
 	}
 
@@ -157,6 +157,7 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 
 	if wrk.isClosedLocked() {
 		wrk.mu.RUnlock()
+		rsp.abandon(ErrWorkerClosed)
 		return ErrWorkerClosed
 	}
 
@@ -304,8 +305,20 @@ func (wrk *Worker) serve(link *Link, proxyAddr string, opts *WorkerOptions, star
 func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp := r.(Response)
 
+	if wrk.IsClosed() {
+		wrk.log.Warn("Abort flushing response(%s): %v", rsp.Command(), ErrWorkerClosed)
+		rsp.abandon(ErrWorkerClosed)
+		return
+	}
+
 	err := rsp.flush(w)
 	if err != nil {
+		if wrk.IsClosed() {
+			wrk.log.Warn("Error on flush response(%s), abandon attempts because the worker is closed: %v", rsp.Command(), ErrWorkerClosed)
+			rsp.close()
+			return
+		}
+
 		left := rsp.markAttempt()
 		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left)))
 		if left > 0 {
