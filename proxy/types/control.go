@@ -15,8 +15,8 @@ type Control struct {
 	Id         uint64
 	Payload    []byte
 	*Request
-	conn       Conn
-	Callback   ControlCallback
+	conn     Conn
+	Callback ControlCallback
 }
 
 func (req *Control) String() string {
@@ -55,7 +55,7 @@ func (ctrl *Control) PrepareForRecover(conn Conn) {
 
 func (ctrl *Control) Flush(timeout time.Duration) (err error) {
 	if ctrl.conn == nil {
-		return errors.New("Connection for control not set.")
+		return errors.New("connection for control not set")
 	}
 	conn := ctrl.conn
 	ctrl.conn = nil
