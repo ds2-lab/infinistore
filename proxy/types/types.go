@@ -2,13 +2,14 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo/resp"
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
-var ErrNoSpareDeployment = errors.New("No spare deployment")
+var ErrNoSpareDeployment = errors.New("no spare deployment")
 
 type Id struct {
 	ConnId   int

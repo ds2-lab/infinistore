@@ -2,23 +2,24 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
+
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 type ProxyResponse struct {
 	Response interface{}
-	Request *Request
+	Request  *Request
 }
 
 type Response struct {
-	Id   Id
-	Cmd  string
-	Size int64
-	Body []byte
+	Id         Id
+	Cmd        string
+	Size       int64
+	Body       []byte
 	BodyStream resp.AllReadCloser
 
-	w    resp.ResponseWriter
+	w resp.ResponseWriter
 }
 
 func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {
@@ -44,7 +45,7 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter) {
 
 func (rsp *Response) Flush() error {
 	if rsp.w == nil {
-		return errors.New("Writer for response not set.")
+		return errors.New("writer for response not set")
 	}
 	w := rsp.w
 	rsp.w = nil

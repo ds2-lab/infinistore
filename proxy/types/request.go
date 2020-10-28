@@ -26,6 +26,7 @@ type Request struct {
 	Cmd            string
 	Key            string
 	RetCommand     string
+	BodySize       int64
 	Body           []byte
 	BodyStream     resp.AllReadCloser
 	Client         *redeo.Client
@@ -53,8 +54,12 @@ func (req *Request) Retriable() bool {
 func (req *Request) Size() int64 {
 	if req.BodyStream != nil {
 		return req.BodyStream.Len()
-	} else {
+	} else if req.Body != nil {
 		return int64(len(req.Body))
+	} else if req.BodySize > 0 {
+		return req.BodySize
+	} else {
+		return 0
 	}
 }
 
@@ -99,12 +104,13 @@ func (req *Request) PrepareForRecover(conn Conn) {
 	conn.Writer().WriteBulkString("") // Keep consistent with GET
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(req.RetCommand)
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
 	req.conn = conn
 }
 
 func (req *Request) Flush(timeout time.Duration) error {
 	if req.conn == nil {
-		return errors.New("Connection for request not set.")
+		return errors.New("connection for request not set")
 	}
 	conn := req.conn
 	req.conn = nil

@@ -590,6 +590,25 @@ func main() {
 		chunkId := c.Arg(2).String()
 		key := c.Arg(3).String()
 		retCmd := c.Arg(4).String()
+		sizeArg := c.Arg(5)
+		if sizeArg == nil {
+			errRsp.Error = errors.New("size must be set")
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
+
+		size, szErr := sizeArg.Int()
+		if szErr != nil {
+			errRsp.Error = szErr
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
 
 		if Persist == nil {
 			errRsp.Error = errors.New("recover is not supported")
@@ -601,7 +620,7 @@ func main() {
 		}
 
 		// Recover.
-		ret = Persist.SetRecovery(key, chunkId)
+		ret = Persist.SetRecovery(key, chunkId, uint64(size))
 		if ret.Error() != nil {
 			errRsp.Error = ret.Error()
 			Server.AddResponses(errRsp, client)

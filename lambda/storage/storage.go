@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"regexp"
 	"runtime"
 	"sort"
@@ -22,7 +21,6 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/aws"
 	awsRequest "github.com/aws/aws-sdk-go/aws/request"
-	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/cespare/xxhash"
@@ -33,6 +31,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 
+	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
@@ -95,7 +94,7 @@ type Storage struct {
 	s3bucket        string
 	s3bucketDefault string
 	s3prefix        string
-	awsSession      *awsSession.Session
+	s3Downloader    *mys3.Downloader
 }
 
 func New(id uint64, persistent bool) *Storage {
@@ -257,24 +256,24 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 	return s.setImpl(key, chunkId, val, nil)
 }
 
-func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
+func (s *Storage) SetRecovery(key string, chunkId string, size uint64) *types.OpRet {
 	_, _, err := s.Get(key)
 	if err.Error() == nil {
 		return err
 	}
+
 	bucket := s.getBucket(key)
-	object := &s3.GetObjectInput{
-		Bucket: s.bucket(&bucket),
-		Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key)),
-	}
-	writer := new(aws.WriteAtBuffer)
-	downloader := s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
-		// Timeout for read straggler.
-		d.RequestOptions = []awsRequest.Option{
-			awsRequest.WithResponseReadTimeout(types.AWSServiceTimeout),
-		}
-	})
-	if _, err := downloader.Download(writer, object); err != nil {
+	writer := aws.NewWriteAtBuffer(make([]byte, size))
+
+	downloader := s.getS3Downloader()
+	ctx := aws.BackgroundContext()
+	ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
+	if err := downloader.Download(ctx, func(input *mys3.BatchDownloadObject) {
+		input.Object.Bucket = s.bucket(&bucket)
+		input.Object.Key = aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key))
+		input.Size = size
+		input.Writer = writer
+	}); err != nil {
 		return types.OpError(err)
 	}
 
@@ -869,7 +868,7 @@ func (s *Storage) doSnapshot(lineage *types.LineageTerm, uploader *s3manager.Upl
 
 func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta, chanErr chan error) {
 	// Initialize s3 api
-	downloader := s.getS3Downloader(Concurrency)
+	downloader := s.getS3Downloader()
 
 	// Recover lineage
 	start := time.Now()
@@ -921,7 +920,7 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	close(chanErr)
 }
 
-func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader S3Downloader) (int, []*types.LineageTerm, int, error) {
+func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Meta, downloader *mys3.Downloader) (int, []*types.LineageTerm, int, error) {
 	// If hash not match, invalidate lineage.
 	if meta.Term == lineage.Term && meta.Hash != lineage.Hash {
 		lineage.Term = 1
@@ -943,7 +942,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 
 	// Setup receivers
 	terms := meta.Term - baseTerm
-	inputs := make(chan *S3BatchDownloadObject, IntMin(int(terms)*LineageRecoveryContenders, len(downloader)))
+	inputs := make(chan *mys3.BatchDownloadObject, IntMin(int(terms)*LineageRecoveryContenders, downloader.Concurrency))
 	receivedFlags := make([]bool, terms)
 	receivedTerms := make([]*types.LineageTerm, 0, terms)
 	chanNotify := make(chan interface{}, len(inputs))
@@ -956,7 +955,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	// Setup input for snapshot downloading.
 	if snapshot {
 		i := 0
-		input := &S3BatchDownloadObject{}
+		input := &mys3.BatchDownloadObject{}
 		input.Object = &s3.GetObjectInput{
 			Bucket: aws.String(s.s3bucketDefault),
 			Key:    aws.String(fmt.Sprintf(SNAPSHOT_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm+1)), // meta.SnapshotTerm
@@ -974,7 +973,7 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 	go func(from int) {
 		for from < int(terms) {
 			i := from
-			input := &S3BatchDownloadObject{}
+			input := &mys3.BatchDownloadObject{}
 			input.Object = &s3.GetObjectInput{
 				Bucket: aws.String(s.s3bucketDefault),
 				Key:    aws.String(fmt.Sprintf(LINEAGE_KEY, s.s3prefix, s.functionName(meta.Id), baseTerm+uint64(from)+1)),
@@ -1007,15 +1006,15 @@ func (s *Storage) doRecoverLineage(lineage *types.LineageTerm, meta *protocol.Me
 		case err := <-chanError:
 			return receivedBytes, receivedTerms, receivedOps, err
 		case input := <-chanNotify:
-			i := *(input.(*S3BatchDownloadObject).Meta.(*int))
+			i := *(input.(*mys3.BatchDownloadObject).Meta.(*int))
 			// Because of contenders, only the first one is recorded.
-			if input.(*S3BatchDownloadObject).Error != nil || receivedFlags[i] {
+			if input.(*mys3.BatchDownloadObject).Error != nil || receivedFlags[i] {
 				break
 			}
 
 			receivedFlags[i] = true
 			for received < int(terms) && receivedFlags[received] {
-				raw := input.(*S3BatchDownloadObject).Writer.(*aws.WriteAtBuffer).Bytes()
+				raw := input.(*mys3.BatchDownloadObject).Bytes()
 				if len(raw) == 0 {
 					// Something wrong, reset receivedFlags and wait for error
 					receivedFlags[received] = false
@@ -1220,23 +1219,15 @@ func (s *Storage) doReplayLineage(meta *types.LineageMeta, terms []*types.Lineag
 	return tbds
 }
 
-func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader) (int, error) {
+func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.Downloader) (int, error) {
 	// Setup receivers
-	inputs := make(chan *S3BatchDownloadObject, len(downloader))
-	chanNotify := make(chan interface{}, len(downloader))
+	inputs := make(chan *mys3.BatchDownloadObject, downloader.Concurrency)
+	chanNotify := make(chan interface{}, downloader.Concurrency)
 	chanError := make(chan error, 1)
 	var succeed uint32
 	var requested uint32
 	var received uint32
 	var receivedBytes int
-
-	pool := &sync.Pool{
-		New: func() interface{} {
-			return &S3BatchDownloadObject{
-				Object: &s3.GetObjectInput{},
-			}
-		},
-	}
 
 	// Setup inputs for terms downloading.
 	more := true
@@ -1252,34 +1243,18 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			key := aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key))
 			tbds[i].Body = make([]byte, tbds[i].Size) // Pre-allocate fixed sized buffer.
 
-			if tbds[i].Size <= downloader.GetDownloadPartSize() {
-				input := pool.Get().(*S3BatchDownloadObject)
+			if num, err := downloader.Schedule(inputs, func(input *mys3.BatchDownloadObject) {
 				input.Object.Bucket = bucket
 				input.Object.Key = key
 				input.Object.Range = nil
+				input.Size = tbds[i].Size
 				input.Writer = aws.NewWriteAtBuffer(tbds[i].Body) // Don't use new(aws.WriteAtBuffer), will OOM.
 				input.After = s.getReadyNotifier(input, chanNotify)
 				input.Meta = tbds[i]
-				atomic.AddUint32(&requested, 1)
-				inputs <- input
+			}); err != nil {
+				s.log.Warn("%v", err)
 			} else {
-				offset := uint64(0)
-				parts := math.Ceil(float64(tbds[i].Size) / float64(downloader.GetDownloadPartSize()))
-				partSize := uint64(math.Ceil(float64(tbds[i].Size) / parts))
-				for offset < tbds[i].Size {
-					end := offset + Uint64Min(partSize, tbds[i].Size-offset)
-					input := pool.Get().(*S3BatchDownloadObject)
-					input.Object.Bucket = bucket
-					input.Object.Key = key
-					input.Object.Range = aws.String(fmt.Sprintf("bytes=%d-%d", offset, end-1))
-					input.Writer = aws.NewWriteAtBuffer(tbds[i].Body[offset:end])
-					input.After = s.getReadyNotifier(input, chanNotify)
-					input.Meta = tbds[i]
-					atomic.AddUint32(&requested, 1)
-					inputs <- input
-
-					offset = end
-				}
+				atomic.AddUint32(&requested, uint32(num))
 			}
 		}
 		close(inputs)
@@ -1305,10 +1280,9 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader S3Downloader)
 			return receivedBytes, err
 		case input := <-chanNotify:
 			received++
-			dobj := input.(*S3BatchDownloadObject)
-			bytes := len(dobj.Writer.(*aws.WriteAtBuffer).Bytes())
+			dobj := input.(*mys3.BatchDownloadObject)
 			tbd := dobj.Meta.(*types.Chunk)
-			receivedBytes += bytes
+			receivedBytes += len(dobj.Bytes())
 			available := atomic.AddUint64(&tbd.Available, uint64(dobj.Downloaded))
 			if available == tbd.Size {
 				succeed++
@@ -1370,110 +1344,16 @@ func (S *Storage) functionName(id uint64) string {
 	return fmt.Sprintf("%s%d", FunctionPrefix, id)
 }
 
-// S3 Downloader Optimization
-// Because the minimum concurrent download unit for aws download api is 5M,
-// this optimization will effectively lower this limit for batch downloading
-type S3Downloader []*s3manager.Downloader
-
-// Customized version of s3manager.BatchDownloadObject
-type S3BatchDownloadObject struct {
-	Object     *s3.GetObjectInput
-	Writer     io.WriterAt
-	After      func() error
-	Meta       interface{}
-	Downloaded int64
-	Error      error
-}
-
-func (s *Storage) getS3Downloader(concurrency int) S3Downloader {
-	// This is essential to minimize download memory consumption.
-	bufferProvider := s3manager.NewPooledBufferedWriterReadFromProvider(1 * 1024 * 1024)
-
-	downloader := make([]*s3manager.Downloader, concurrency)
-	// Initialize downloaders for small object
-	for i := 0; i < len(downloader); i++ {
-		downloader[i] = s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
-			d.Concurrency = 1
-			d.BufferProvider = bufferProvider
-			// Timeout for read straggler.
+func (s *Storage) getS3Downloader() *mys3.Downloader {
+	if s.s3Downloader == nil {
+		s.s3Downloader = mys3.NewDownloader(types.AWSSession(), func(d *mys3.Downloader) {
+			d.Concurrency = Concurrency
 			d.RequestOptions = []awsRequest.Option{
 				awsRequest.WithResponseReadTimeout(types.AWSServiceTimeout),
 			}
 		})
 	}
-	return downloader
-}
-
-func (d S3Downloader) GetDownloadPartSize() uint64 {
-	if len(d) > 0 {
-		return uint64(d[0].PartSize)
-	} else {
-		return uint64(s3manager.DefaultDownloadPartSize)
-	}
-}
-
-func (d S3Downloader) DownloadWithIterator(ctx aws.Context, iter chan *S3BatchDownloadObject) error {
-	var wg sync.WaitGroup
-	var errs []s3manager.Error
-	chanErr := make(chan s3manager.Error, len(d))
-
-	// Launch object downloaders
-	for i := 0; i < len(d); i++ {
-		wg.Add(1)
-		go d.Download(ctx, d[i], iter, chanErr, &wg)
-	}
-
-	// Collect errors
-	go func() {
-		for err := range chanErr {
-			errs = append(errs, err)
-		}
-		wg.Done()
-	}()
-
-	wg.Wait()
-
-	// Wait for chanErr
-	wg.Add(1)
-	close(chanErr)
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return s3manager.NewBatchError("BatchedDownloadIncomplete", "some objects have failed to download.", errs)
-	}
-	return nil
-}
-
-func (d S3Downloader) Download(ctx aws.Context, downloader *s3manager.Downloader, ch chan *S3BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	// log := ctx.Value(&ContextKeyLog).(logger.ILogger)
-	for object := range ch {
-		// if object.Object.Range != nil {
-		// 	log.Debug("Downloading: %s(%s)...", *object.Object.Key, *object.Object.Range)
-		// } else {
-		// 	log.Debug("Downloading: %s...", *object.Object.Key)
-		// }
-
-		if object.Downloaded, object.Error = downloader.Download(object.Writer, object.Object); object.Error != nil {
-			// log.Warn("%v", object.Error)
-			errs <- s3manager.Error{OrigErr: object.Error, Bucket: object.Object.Bucket, Key: object.Object.Key}
-		}
-
-		// if object.Object.Range != nil {
-		// 	log.Debug("Finished: %s(%s)", *object.Object.Key, *object.Object.Range)
-		// } else {
-		// 	log.Debug("Finished: %s", *object.Object.Key)
-		// }
-
-		if object.After == nil {
-			continue
-		}
-
-		if object.Error = object.After(); object.Error != nil {
-			errs <- s3manager.Error{OrigErr: object.Error, Bucket: object.Object.Bucket, Key: object.Object.Key}
-		}
-	}
+	return s.s3Downloader
 }
 
 func IntMin(a int, b int) int {

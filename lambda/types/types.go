@@ -20,8 +20,8 @@ const (
 )
 
 var (
-	ErrProxyClosing = errors.New("Proxy closed.")
-	ErrNotFound     = errors.New("Key not found")
+	ErrProxyClosing = errors.New("proxy closed")
+	ErrNotFound     = errors.New("key not found")
 )
 
 type Storage interface {
@@ -38,7 +38,7 @@ type Storage interface {
 
 type PersistentStorage interface {
 	Storage
-	SetRecovery(string, string) *OpRet
+	SetRecovery(string, string, uint64) *OpRet
 }
 
 // For storage

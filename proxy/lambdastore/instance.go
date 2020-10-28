@@ -1047,6 +1047,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				target := IM.Relocate(req.Info, chunkId)
 				req.InsId = target.Id()
 				req.Changes = req.Changes | types.CHANGE_PLACEMENT
+				ins.log.Debug("Instance reclaimed, relocated %v to %d.", req.Key, req.InsId)
 				ins.rerouteRequestWithTarget(req, target)
 				// counter := global.ReqCoordinator.Load(req.Id.ReqId).(*global.RequestCounter)
 				// if counter == nil {
