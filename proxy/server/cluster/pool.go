@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/cornelk/hashmap"
@@ -22,8 +21,8 @@ var (
 )
 
 type Pool struct {
-	backend    chan *lambdastore.Deployment
-	actives    *hashmap.HashMap
+	backend chan *lambdastore.Deployment
+	actives *hashmap.HashMap
 }
 
 // numCluster = small number, numDeployment = large number
@@ -72,7 +71,7 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment
 func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) {
 	got, exists := s.actives.Get(insId)
 	if !exists {
-		return nil, errors.New(fmt.Sprintf("Instance %d not found.", insId))
+		return nil, fmt.Errorf("instance %d not found", insId)
 	}
 
 	ins := got.(*GroupInstance)
@@ -85,12 +84,12 @@ func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) 
 
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
 	s.actives.Del(dp.Id())
-	switch dp.(type) {
+	switch backend := dp.(type) {
 	case *lambdastore.Deployment:
-		s.backend <- dp.(*lambdastore.Deployment)
+		s.backend <- backend
 	case *lambdastore.Instance:
-		dp.(*lambdastore.Instance).Close()
-		s.backend <- dp.(*lambdastore.Instance).Deployment
+		backend.Close()
+		s.backend <- backend.Deployment
 	}
 }
 

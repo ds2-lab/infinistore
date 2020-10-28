@@ -251,7 +251,7 @@ func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
 func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCloser) *types.OpRet {
 	val, err := valReader.ReadAll()
 	if err != nil {
-		return types.OpError(errors.New(fmt.Sprintf("Error on read stream: %v", err)))
+		return types.OpError(fmt.Errorf("error on read stream: %v", err))
 	}
 
 	return s.setImpl(key, chunkId, val, nil)
@@ -268,7 +268,12 @@ func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
 		Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key)),
 	}
 	writer := new(aws.WriteAtBuffer)
-	downloader := s3manager.NewDownloader(types.AWSSession())
+	downloader := s3manager.NewDownloader(types.AWSSession(), func(d *s3manager.Downloader) {
+		// Timeout for read straggler.
+		d.RequestOptions = []awsRequest.Option{
+			awsRequest.WithResponseReadTimeout(types.AWSServiceTimeout),
+		}
+	})
 	if _, err := downloader.Download(writer, object); err != nil {
 		return types.OpError(err)
 	}

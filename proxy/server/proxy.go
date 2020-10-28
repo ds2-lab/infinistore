@@ -172,15 +172,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
-	instance, exists := p.cluster.Instance(uint64(lambdaDest))
-	if !exists {
-		// TODO: Need relocation
-	}
-
 	chunkKey := meta.ChunkKey(int(dChunkId))
-	// Send request to lambda channel
-	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
-
 	req := &types.Request{
 		Id:             types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaDest),
@@ -190,10 +182,36 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		CollectorEntry: collectorEntry,
 		Info:           meta,
 	}
+
+	// Validate the status of the instance
+	instance, exists := p.cluster.Instance(uint64(lambdaDest))
+	if exists {
+		p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
+	} else {
+		// Relocate
+		instance = p.cluster.Relocate(meta, int(dChunkId))
+		if instance == nil {
+			p.log.Warn("Invalid instance(%d). Failed to relocate %. This is unlikely, please check the cluster implementation.", lambdaDest, chunkKey)
+			w.AppendNil()
+			w.Flush()
+			return
+		}
+
+		// Update fields
+		req.InsId = instance.Id()
+		req.Cmd = protocol.CMD_RECOVER
+		req.RetCommand = protocol.CMD_GET
+		meta.Placement[int(dChunkId)] = int(instance.Id()) // Because old instance is invalidated, no hard to update it now.
+
+		p.log.Debug("Invalid instance(%d). Requesting to relocate and recover %s: %d", lambdaDest, chunkKey, instance.Id())
+	}
+
+	// Update counter
 	counter.Requests[dChunkId] = req
 
-	// Unlikely, just to be safe
+	// Send request to lambda channel
 	if counter.IsFulfilled() || instance.IsReclaimed() {
+		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
 		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
@@ -247,6 +265,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			if wrapper.Request.Changes&types.CHANGE_PLACEMENT > 0 {
 				meta := wrapper.Request.Info.(*metastore.Meta)
 				meta.Placement[rsp.Id.Chunk()] = int(wrapper.Request.InsId)
+				p.log.Debug("Relocated %v to %d.", wrapper.Request.Key, wrapper.Request.InsId)
 			}
 		}
 
@@ -258,7 +277,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 				return
 			}
 			recoverReqId := uuid.New().String()
-			p.log.Debug("selected instance id is %v", instance.Id())
+			p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), instance.Id())
 
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
@@ -307,4 +326,8 @@ func (p *Proxy) dropEvicted(meta *metastore.Meta) {
 		} // Or it has been expired.
 	}
 	p.log.Warn("Evict %s", meta.Key)
+}
+
+func (p *Proxy) getPlacementFromRequest(req *types.Request) int {
+	return req.Info.(*metastore.Meta).Placement[req.Id.Chunk()]
 }

@@ -3,7 +3,6 @@ package views
 import (
 	"image"
 	"math"
-	"log"
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/drawille"

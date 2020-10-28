@@ -56,6 +56,10 @@ func (m *Meta) ChunkKey(chunkId int) string {
 	return fmt.Sprintf("%d@%s", chunkId, m.Key)
 }
 
+func (m *Meta) GetPlace(chunkId int) int {
+	return m.Placement[chunkId]
+}
+
 type Placement []int
 
 func initPlacement(p Placement, sz int) Placement {

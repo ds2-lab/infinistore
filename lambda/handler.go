@@ -13,12 +13,14 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
+
 	//	"github.com/wangaoone/s3gof3r"
 
 	"math/rand"
 	"net/url"
 	"os"
 	"runtime"
+
 	// "runtime/pprof"
 	"strconv"
 	"sync"
@@ -403,7 +405,7 @@ func main() {
 			w.AppendBulkString(rsp.Cmd)
 		}, client)
 		if err := rsp.Flush(); err != nil {
-			log.Error("Error on data::flush: %v", err)
+			log.Error("Error on test::flush: %v", err)
 		}
 	})
 
@@ -609,6 +611,8 @@ func main() {
 			return
 		}
 
+		log.Debug("Success to recover from persistent store, Key:%s, ChunkID: %s", key, chunkId)
+
 		// Immediate get, unlikely to error, don't overwrite ret.
 		var stream resp.AllReadCloser
 		if retCmd == protocol.CMD_GET {
@@ -726,7 +730,9 @@ func main() {
 			w.AppendBulkString("OK")
 		}, client)
 
-		rsp.Flush()
+		if err := rsp.Flush(); err != nil {
+			log.Error("Error on data::flush: %v", err)
+		}
 
 		log.Debug("data complete")
 		Server.Close()
@@ -793,6 +799,7 @@ func main() {
 				if !consistent {
 					skip = false
 					_, chanErr := Lineage.Recover(meta)
+					session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
 					go func() {
 						waitForRecovery(chanErr)
 						session.Timeout.DoneBusy(c.Name)
@@ -803,7 +810,8 @@ func main() {
 			}
 
 			if skip {
-				session.Timeout.DoneBusy(c.Name)
+				// No more request expected for a ping with payload (backup ping).
+				session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, c.Name)
 			}
 		}
 	})
@@ -1065,10 +1073,14 @@ func main() {
 					}
 				}
 
-				cutConnection := func(idx int) net.Conn {
+				cutConnection := func(idx int, permanent bool) net.Conn {
 					old := shortcut.Conns[idx]
 					shortcut.Conns[idx] = mock.NewConn()
-					old.Close()
+					if permanent {
+						old.Server.Close()
+					} else {
+						old.Close()
+					}
 
 					return shortcut.Conns[idx].Server
 				}
@@ -1093,66 +1105,110 @@ func main() {
 						readPong(ctrlClient.Reader)
 					}
 
-					interupted := false
-					for i := 0; i < 5; i++ {
+					// // Control link interruption test
+					//
+					// interupted := false
+					// for i := 0; i < 2; i++ {
+					// 	start := time.Now()
+					// 	if !interupted {
+					// 		writePing(ctrlClient.Writer, nil)
+					// 	}
+					// 	readPong(ctrlClient.Reader)
+					// 	log.Info("HeartBeat latency %v", time.Since(start))
+
+					// 	start = time.Now()
+					// 	writeTest(ctrlClient.Writer)
+					// 	readTest(ctrlClient.Reader)
+					// 	log.Info("Test latency %v", time.Since(start))
+
+					// 	// Simulate network interruption. First one must interrupt.
+					// 	interupted = i == 0 || rand.Int()%2 == 0
+					// 	if interupted {
+					// 		ctrlClient = worker.NewClient(cutConnection(0, false))
+					// 	}
+					// }
+
+					// // Consume left pongs
+					// if interupted {
+					// 	readPong(ctrlClient.Reader)
+					// }
+
+					// Data link interruption test
+					// Simulate network interruption. First one must interrupt.
+					dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					interupted := true
+					for i := 0; i < 2; i++ {
 						start := time.Now()
-						if !interupted {
-							writePing(ctrlClient.Writer, nil)
-						}
+						writePing(ctrlClient.Writer, nil)
 						readPong(ctrlClient.Reader)
 						log.Info("HeartBeat latency %v", time.Since(start))
 
 						start = time.Now()
-						writeTest(ctrlClient.Writer)
-						readTest(ctrlClient.Reader)
+						writeTest(dataClient.Writer)
+						if interupted {
+							dataClient = worker.NewClient(cutConnection(1, false))
+							readPong(dataClient.Reader)
+						}
+						readTest(dataClient.Reader)
 						log.Info("Test latency %v", time.Since(start))
 
-						time.Sleep(1 * time.Second)
-
-						// Simulate network interruption.
 						interupted = rand.Int()%2 == 0
-						if interupted {
-							ctrlClient = worker.NewClient(cutConnection(0))
-						}
 					}
 
-					// Consume left pongs
-					if interupted {
-						readPong(ctrlClient.Reader)
-					}
+					// // Data link close test
+					// // Simulate network interruption. First one must interrupt.
+					// dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					// interupted := false
+					// for i := 0; i < 2; i++ {
+					// 	start := time.Now()
+					// 	writePing(ctrlClient.Writer, nil)
+					// 	readPong(ctrlClient.Reader)
+					// 	log.Info("HeartBeat latency %v", time.Since(start))
+
+					// 	start = time.Now()
+					// 	writeTest(dataClient.Writer)
+					// 	if interupted {
+					// 		cutConnection(1, true) // To trigger close event, we may need to change error handling in worker
+					// 		break
+					// 	}
+					// 	readTest(dataClient.Reader)
+					// 	log.Info("Test latency %v", time.Since(start))
+
+					// 	interupted = true
+					// }
 
 					<-ended
 
 					// Second Invocation
-					log.Info("Second Invocation")
-					input.Cmd = "ping"
-					// input.Status[0] = protocol.Meta{
-					// 	1, 3, 1178, 110, "8ecfe3b5ccf81b28fcb008ebec3d38b1507a52a186a920542f602f4a964d7eba", 3, 1178, 358, "",
+					// log.Info("Second Invocation")
+					// input.Cmd = "ping"
+					// // input.Status[0] = protocol.Meta{
+					// // 	1, 3, 1178, 110, "8ecfe3b5ccf81b28fcb008ebec3d38b1507a52a186a920542f602f4a964d7eba", 3, 1178, 358, "",
+					// // }
+					// invokes <- &input
+					// // ctrlClient = worker.NewClient(cutConnection(0))
+					// // cutConnection(1)
+					// // consumeDataPongs(shortcut.Conns[1:]...)
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+					// // // Do nothing
+					// // // ready <- struct{}{}
+					// ctrlClient.Writer.WriteCmd(protocol.CMD_DATA)
+					// ctrlClient.Writer.Flush()
+
+					// // Simulate disconnection between request and response.
+					// ctrlClient = worker.NewClient(cutConnection(0, false))
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// // data
+					// // OK
+					// for line := 2; line > 0; line-- {
+					// 	str, _ := ctrlClient.Reader.ReadBulkString()
+					// 	fmt.Println(str)
 					// }
-					invokes <- &input
-					// ctrlClient = worker.NewClient(cutConnection(0))
-					// cutConnection(1)
-					// consumeDataPongs(shortcut.Conns[1:]...)
-					readPong(ctrlClient.Reader)
-					log.Info("Ctrl PONG received.")
-					// // Do nothing
-					// // ready <- struct{}{}
-					ctrlClient.Writer.WriteCmd(protocol.CMD_DATA)
-					ctrlClient.Writer.Flush()
 
-					// Simulate disconnection between request and response.
-					ctrlClient = worker.NewClient(cutConnection(0))
-					readPong(ctrlClient.Reader)
-					log.Info("Ctrl PONG received.")
-
-					// data
-					// OK
-					for line := 2; line > 0; line-- {
-						str, _ := ctrlClient.Reader.ReadBulkString()
-						fmt.Println(str)
-					}
-
-					<-ended
+					// <-ended
 
 					// End of invocations
 					close(invokes)
