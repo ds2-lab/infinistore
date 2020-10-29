@@ -64,9 +64,8 @@ func (req *Request) Size() int64 {
 }
 
 func (req *Request) PrepareForSet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteMultiBulkSize(5)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
@@ -77,19 +76,17 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteMultiBulkSize(4)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	conn.Writer().WriteBulkString(req.Id.ReqId)
-	conn.Writer().WriteBulkString("")
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	req.conn = conn
 }
 
 func (req *Request) PrepareForDel(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteMultiBulkSize(4)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
@@ -99,9 +96,8 @@ func (req *Request) PrepareForDel(conn Conn) {
 func (req *Request) PrepareForRecover(conn Conn) {
 	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString("") // Obsoleted. ConnId.
 	conn.Writer().WriteBulkString(req.Id.ReqId)
-	conn.Writer().WriteBulkString("") // Keep consistent with GET
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(req.RetCommand)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))

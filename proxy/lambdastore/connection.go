@@ -367,7 +367,6 @@ func (conn *Connection) getHandler(start time.Time) {
 	conn.log.Debug("GET from lambda.")
 
 	// Exhaust all values to keep protocol aligned.
-	connId, _ := conn.r.ReadBulkString()
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
 	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
@@ -381,7 +380,6 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	rsp := &types.Response{Cmd: "get"}
-	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
 	chunk, _ := strconv.Atoi(chunkId)
@@ -438,8 +436,6 @@ func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET from lambda.")
 
 	rsp := &types.Response{Cmd: "set", Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
-	connId, _ := conn.r.ReadBulkString()
-	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
@@ -455,8 +451,6 @@ func (conn *Connection) delHandler() {
 
 	rsp := &types.Response{Cmd: "del"}
 
-	connId, _ := conn.r.ReadBulkString()
-	rsp.Id.ConnId, _ = strconv.Atoi(connId)
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
@@ -490,9 +484,8 @@ func (conn *Connection) bye() {
 func (conn *Connection) recoverHandler() {
 	conn.log.Debug("RECOVER from lambda.")
 
-	_, _ = conn.r.ReadBulkString() // connId
 	reqId, _ := conn.r.ReadBulkString()
-	_, _ = conn.r.ReadBulkString() // chunkId
+	conn.r.ReadBulkString() // chunkId
 
 	ctrl := global.ReqCoordinator.Load(reqId)
 	if ctrl == nil {

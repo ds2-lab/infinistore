@@ -1041,10 +1041,10 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				// Options here: use option 1
 				// 1. Recover to prevail node and reroute to the node.
 				// 2. Return 404 (current implementation)
+				target := IM.Relocate(req.Info, req.Id.Chunk())
+
 				req.Cmd = protocol.CMD_RECOVER
 				req.RetCommand = protocol.CMD_GET
-				chunkId := req.Id.Chunk()
-				target := IM.Relocate(req.Info, chunkId)
 				req.InsId = target.Id()
 				req.Changes = req.Changes | types.CHANGE_PLACEMENT
 				ins.log.Debug("Instance reclaimed, relocated %v to %d.", req.Key, req.InsId)
