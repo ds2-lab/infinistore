@@ -180,6 +180,7 @@ func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
 		}
 	} else {
 		// Recovering, wait to be notified.
+		// s.log.Debug("Waiting for the available of %s, availability: %d of %d", chunk.Key, atomic.LoadUint64(&chunk.Available), chunk.Size)
 		chunk.Notifier.Wait()
 		return chunk.Id, chunk.Access(), types.OpSuccess()
 	}
@@ -1244,6 +1245,11 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.Downloa
 			tbds[i].Body = make([]byte, tbds[i].Size) // Pre-allocate fixed sized buffer.
 
 			if num, err := downloader.Schedule(inputs, func(input *mys3.BatchDownloadObject) {
+				// Update notifier if request is splitted.
+				if input.Object.Key != nil {
+					input.After = s.getReadyNotifier(input, chanNotify)
+					return
+				}
 				input.Object.Bucket = bucket
 				input.Object.Key = key
 				input.Object.Range = nil
@@ -1255,6 +1261,7 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.Downloa
 				s.log.Warn("%v", err)
 			} else {
 				atomic.AddUint32(&requested, uint32(num))
+				// s.log.Debug("Scheduled %s(%d)", *key, num)
 			}
 		}
 		close(inputs)
@@ -1284,10 +1291,16 @@ func (s *Storage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.Downloa
 			tbd := dobj.Meta.(*types.Chunk)
 			receivedBytes += len(dobj.Bytes())
 			available := atomic.AddUint64(&tbd.Available, uint64(dobj.Downloaded))
+			// objectRange := ""
+			// if dobj.Object.Range != nil {
+			// 	objectRange = *dobj.Object.Range
+			// }
+			// s.log.Debug("Update object availability %s(%s): %d of %d", tbd.Key, objectRange, available, tbd.Size)
 			if available == tbd.Size {
 				succeed++
 				tbd.Notifier.Done()
 			}
+			downloader.Done(dobj)
 			// s.log.Info("Object: %s, size: %d, available: %d", *dobj.Object.Key, tbd.Size, available)
 			// s.log.Info("Requested: %d, Received: %d, Succeed: %d", requested, received, succeed)
 		}

@@ -98,7 +98,7 @@ func (d *Downloader) Schedule(iter chan *BatchDownloadObject, builder func(*Batc
 		return 0, err
 	}
 
-	return d.schedule(iter, input)
+	return d.schedule(iter, input, builder)
 }
 
 func (d *Downloader) Done(input *BatchDownloadObject) {
@@ -107,6 +107,8 @@ func (d *Downloader) Done(input *BatchDownloadObject) {
 
 func (d *Downloader) build(builder func(*BatchDownloadObject)) (*BatchDownloadObject, error) {
 	input := pool.Get().(*BatchDownloadObject)
+	input.Object.Bucket = nil
+	input.Object.Key = nil
 	input.Object.Range = nil
 	input.Size = 0
 	input.Writer = nil
@@ -126,7 +128,7 @@ func (d *Downloader) build(builder func(*BatchDownloadObject)) (*BatchDownloadOb
 	return input, nil
 }
 
-func (d *Downloader) schedule(iter chan *BatchDownloadObject, input *BatchDownloadObject) (int, error) {
+func (d *Downloader) schedule(iter chan *BatchDownloadObject, input *BatchDownloadObject, builder func(*BatchDownloadObject)) (int, error) {
 	if input.Size <= d.GetDownloadPartSize() {
 		iter <- input
 		return 1, nil
@@ -143,6 +145,7 @@ func (d *Downloader) schedule(iter chan *BatchDownloadObject, input *BatchDownlo
 			part.Writer = aws.NewWriteAtBuffer(input.Bytes()[offset:end])
 			part.After = input.After
 			part.Meta = input.Meta
+			builder(part)
 			iter <- part
 
 			offset = end
@@ -161,7 +164,7 @@ func (d *Downloader) Download(ctx aws.Context, builder func(*BatchDownloadObject
 
 	parts := int(math.Ceil(float64(input.Size) / float64(d.GetDownloadPartSize())))
 	iter := make(chan *BatchDownloadObject, parts)
-	d.schedule(iter, input)
+	d.schedule(iter, input, builder)
 	close(iter)
 
 	backends := d.backends
@@ -222,7 +225,6 @@ func (d *Downloader) download(ctx aws.Context, downloader *s3manager.Downloader,
 			// log.Warn("%v", object.Error)
 			errs <- s3manager.Error{OrigErr: object.Error, Bucket: object.Object.Bucket, Key: object.Object.Key}
 		}
-
 		// if object.Object.Range != nil {
 		// 	log.Debug("Finished: %s(%s)", *object.Object.Key, *object.Object.Range)
 		// } else {
