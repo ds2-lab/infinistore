@@ -105,7 +105,11 @@ func (wrk *Worker) StartOrResume(proxyAddr string, args ...*WorkerOptions) (isSt
 	return
 }
 
-func (wrk *Worker) Close(opts ...bool) {
+func (wrk *Worker) Close() {
+	wrk.CloseWithOptions(false)
+}
+
+func (wrk *Worker) CloseWithOptions(opts ...bool) {
 	graceful := false
 	if len(opts) > 0 {
 		graceful = opts[0]

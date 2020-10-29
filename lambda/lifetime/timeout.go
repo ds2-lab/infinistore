@@ -1,6 +1,7 @@
 package lifetime
 
 import (
+	"errors"
 	"math"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,8 @@ const STREAMING_TIMEOUT_FACTOR = 10
 var (
 	TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
 	TICK_ERROR        = TICK_10_ERROR
+
+	ErrTimeout = errors.New("timeout")
 )
 
 func init() {
@@ -43,6 +46,32 @@ func init() {
 		TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
 		TICK_ERROR = TICK_10_ERROR
 	}
+}
+
+func TimeoutAfter(f func(), timeout time.Duration) error {
+	_, err := TimeoutAfterWithReturn(func() (interface{}, error) {
+		f()
+		return nil, nil
+	}, timeout)
+	return err
+}
+
+func TimeoutAfterWithReturn(f func() (interface{}, error), timeout time.Duration) (rsp interface{}, err error) {
+	timer := time.NewTimer(timeout)
+	responeded := make(chan struct{})
+	go func() {
+		rsp, err = f()
+		responeded <- struct{}{}
+	}()
+	select {
+	case <-timer.C:
+		err = ErrTimeout
+	case <-responeded:
+		if !timer.Stop() {
+			<-timer.C
+		}
+	}
+	return
 }
 
 func GetStreamingDeadline(size int64) time.Time {

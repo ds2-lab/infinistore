@@ -423,7 +423,7 @@ func main() {
 		defer session.Timeout.DoneBusyWithReset(extension, c.Name)
 
 		t := time.Now()
-		log.Debug("In GET handler(link:%d)", client.ID())
+		log.Debug("In GET handler(link:%d)", worker.LinkFromClient(client).ID())
 
 		reqId := c.Arg(0).String()
 		// Skip: chunkId := c.Arg(1).String()
@@ -485,7 +485,7 @@ func main() {
 		}
 
 		t := time.Now()
-		log.Debug("In SET handler(link:%d)", client.ID())
+		log.Debug("In SET handler(link:%d)", worker.LinkFromClient(client).ID())
 
 		var reqId, chunkId string
 		var finalize func(*types.OpRet, bool, ...time.Duration)
@@ -579,7 +579,7 @@ func main() {
 		}()
 
 		t := time.Now()
-		log.Debug("In RECOVER handler(link:%d)", client.ID())
+		log.Debug("In RECOVER handler(link:%d)", worker.LinkFromClient(client).ID())
 
 		errRsp := &worker.ErrorResponse{}
 		reqId := c.Arg(0).String()
@@ -747,7 +747,9 @@ func main() {
 		}
 
 		log.Debug("data complete")
-		Server.Close()
+		if err := lambdaLife.TimeoutAfter(Server.Close, worker.RetrialDelayStartFrom); err != nil {
+			log.Error("Timeout on closing the worker.")
+		}
 		Lifetime.Rest()
 
 		// Reset store
@@ -894,7 +896,7 @@ func main() {
 		// 1. The replica will connect to the proxy and relay concurrently.
 		// 2.a The proxy will disconnect the ctrl and data link in the worker, yet the redeo server in worker is still serving.
 		// 2.b The redeo server continue serves the connection from the replica through the relay.
-		Server.Close(true)
+		Server.CloseWithOptions(true)
 
 		// Signal migrator is ready and start migration. The migration will only begin if:
 		// 1. The replica is connected (handled in mhello)
@@ -1066,14 +1068,14 @@ func main() {
 					log.Debug("pong flag: %d", flag)
 				}
 
-				writeTest := func(writer *resp.RequestWriter) {
-					writer.WriteCmd(protocol.CMD_TEST)
-					writer.Flush()
-				}
+				// writeTest := func(writer *resp.RequestWriter) {
+				// 	writer.WriteCmd(protocol.CMD_TEST)
+				// 	writer.Flush()
+				// }
 
-				readTest := func(reader resp.ResponseReader) {
-					reader.ReadBulkString() // test
-				}
+				// readTest := func(reader resp.ResponseReader) {
+				// 	reader.ReadBulkString() // test
+				// }
 
 				consumeDataPongs := func(conns ...*mock.Conn) {
 					for _, conn := range conns {
@@ -1085,17 +1087,17 @@ func main() {
 					}
 				}
 
-				cutConnection := func(idx int, permanent bool) net.Conn {
-					old := shortcut.Conns[idx]
-					shortcut.Conns[idx] = mock.NewConn()
-					if permanent {
-						old.Server.Close()
-					} else {
-						old.Close()
-					}
+				// cutConnection := func(idx int, permanent bool) net.Conn {
+				// 	old := shortcut.Conns[idx]
+				// 	shortcut.Conns[idx] = mock.NewConn()
+				// 	if permanent {
+				// 		old.Server.Close()
+				// 	} else {
+				// 		old.Close()
+				// 	}
 
-					return shortcut.Conns[idx].Server
-				}
+				// 	return shortcut.Conns[idx].Server
+				// }
 
 				alldone.Add(1)
 				// Proxy simulator
@@ -1145,27 +1147,27 @@ func main() {
 					// 	readPong(ctrlClient.Reader)
 					// }
 
-					// Data link interruption test
-					// Simulate network interruption. First one must interrupt.
-					dataClient := worker.NewClient(shortcut.Conns[1].Server)
-					interupted := true
-					for i := 0; i < 2; i++ {
-						start := time.Now()
-						writePing(ctrlClient.Writer, nil)
-						readPong(ctrlClient.Reader)
-						log.Info("HeartBeat latency %v", time.Since(start))
+					// // Data link interruption test
+					// // Simulate network interruption. First one must interrupt.
+					// dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					// interupted := true
+					// for i := 0; i < 2; i++ {
+					// 	start := time.Now()
+					// 	writePing(ctrlClient.Writer, nil)
+					// 	readPong(ctrlClient.Reader)
+					// 	log.Info("HeartBeat latency %v", time.Since(start))
 
-						start = time.Now()
-						writeTest(dataClient.Writer)
-						if interupted {
-							dataClient = worker.NewClient(cutConnection(1, false))
-							readPong(dataClient.Reader)
-						}
-						readTest(dataClient.Reader)
-						log.Info("Test latency %v", time.Since(start))
+					// 	start = time.Now()
+					// 	writeTest(dataClient.Writer)
+					// 	if interupted {
+					// 		dataClient = worker.NewClient(cutConnection(1, false))
+					// 		readPong(dataClient.Reader)
+					// 	}
+					// 	readTest(dataClient.Reader)
+					// 	log.Info("Test latency %v", time.Since(start))
 
-						interupted = rand.Int()%2 == 0
-					}
+					// 	interupted = rand.Int()%2 == 0
+					// }
 
 					// // Data link close test
 					// // Simulate network interruption. First one must interrupt.
@@ -1189,14 +1191,29 @@ func main() {
 					// 	interupted = true
 					// }
 
+					// Get on recovering test
+					time.Sleep(time.Second)
+					dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					dataClient.Writer.WriteMultiBulkSize(4)
+					dataClient.Writer.WriteBulkString(protocol.CMD_GET)
+					dataClient.Writer.WriteBulkString("dummy request id")
+					dataClient.Writer.WriteBulkString("1")
+					dataClient.Writer.WriteBulkString("obj-10")
+					dataClient.Writer.Flush()
+
+					dataClient.Reader.ReadBulkString() // cmd
+					dataClient.Reader.ReadBulkString() // reqid
+					dataClient.Reader.ReadBulkString() // chunk id
+					dataClient.Reader.ReadBulkString() // stream
+
 					<-ended
 
-					// Second Invocation
+					// // Second Invocation
 					// log.Info("Second Invocation")
 					// input.Cmd = "ping"
-					// // input.Status[0] = protocol.Meta{
-					// // 	1, 3, 1178, 110, "8ecfe3b5ccf81b28fcb008ebec3d38b1507a52a186a920542f602f4a964d7eba", 3, 1178, 358, "",
-					// // }
+					// input.Status[0] = protocol.Meta{
+					// 	1, 3, 1178, 110, "8ecfe3b5ccf81b28fcb008ebec3d38b1507a52a186a920542f602f4a964d7eba", 3, 1178, 358, "",
+					// }
 					// invokes <- &input
 					// // ctrlClient = worker.NewClient(cutConnection(0))
 					// // cutConnection(1)
@@ -1205,20 +1222,34 @@ func main() {
 					// log.Info("Ctrl PONG received.")
 					// // // Do nothing
 					// // // ready <- struct{}{}
-					// ctrlClient.Writer.WriteCmd(protocol.CMD_DATA)
-					// ctrlClient.Writer.Flush()
+					// // ctrlClient.Writer.WriteCmd(protocol.CMD_DATA)
+					// // ctrlClient.Writer.Flush()
 
-					// // Simulate disconnection between request and response.
-					// ctrlClient = worker.NewClient(cutConnection(0, false))
-					// readPong(ctrlClient.Reader)
-					// log.Info("Ctrl PONG received.")
+					// // // Simulate disconnection between request and response.
+					// // ctrlClient = worker.NewClient(cutConnection(0, false))
+					// // readPong(ctrlClient.Reader)
+					// // log.Info("Ctrl PONG received.")
 
-					// // data
-					// // OK
-					// for line := 2; line > 0; line-- {
-					// 	str, _ := ctrlClient.Reader.ReadBulkString()
-					// 	fmt.Println(str)
-					// }
+					// // // data
+					// // // OK
+					// // for line := 2; line > 0; line-- {
+					// // 	str, _ := ctrlClient.Reader.ReadBulkString()
+					// // 	fmt.Println(str)
+					// // }
+
+					// // // Get on recovering test
+					// // dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					// // dataClient.Writer.WriteMultiBulkSize(4)
+					// // dataClient.Writer.WriteBulkString(protocol.CMD_GET)
+					// // dataClient.Writer.WriteBulkString("dummy request id")
+					// // dataClient.Writer.WriteBulkString("1")
+					// // dataClient.Writer.WriteBulkString("obj-9")
+					// // dataClient.Writer.Flush()
+
+					// // dataClient.Reader.ReadBulkString() // cmd
+					// // dataClient.Reader.ReadBulkString() // reqid
+					// // dataClient.Reader.ReadBulkString() // chunk id
+					// // dataClient.Reader.ReadBulkString() // stream
 
 					// <-ended
 
