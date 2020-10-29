@@ -125,7 +125,7 @@ func (conn *Connection) Close() error {
 
 func (conn *Connection) close() {
 	if conn.instance != nil {
-		conn.instance.flagClosed(conn)
+		conn.instance.FlagClosed(conn)
 	}
 	conn.Close()
 	conn.bye()
@@ -343,7 +343,7 @@ func (conn *Connection) pongHandler() {
 		return
 	}
 
-	conn, err = instance.tryFlagValidated(conn, sid, flags)
+	conn, err = instance.TryFlagValidated(conn, sid, flags)
 	if err == nil || err == ErrNotCtrlLink || err == ErrInstanceValidated {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
