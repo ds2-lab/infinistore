@@ -34,7 +34,8 @@ const (
 
 	// Start status
 	INSTANCE_UNSTARTED = 0
-	INSTANCE_STARTED   = 1
+	INSTANCE_RUNNING   = 1
+	INSTANCE_CLOSED    = 2
 
 	// Connection status
 	// Activate: Sleeping -> Activating -> Active
@@ -119,9 +120,9 @@ type Instance struct {
 	dataLink          *Connection
 	chanCmd           chan types.Command
 	chanPriorCmd      chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	started           uint32
-	awake             uint32
-	phase             uint32
+	status            uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
+	awakeness         uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
+	phase             uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
 	chanValidated     chan struct{}
 	lastValidationOpt *ValidateOption
 	lastValidated     *Connection
@@ -161,7 +162,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 			Capacity: global.Options.GetInstanceCapacity(),
 			size:     config.InstanceOverhead,
 		}, // Term start with 1 to avoid uninitialized term ambigulous.
-		awake:         INSTANCE_SLEEPING,
+		awakeness:     INSTANCE_SLEEPING,
 		chanCmd:       make(chan types.Command, 1),
 		chanPriorCmd:  make(chan types.Command, 1),
 		chanValidated: chanValidated, // Initialize with a closed channel.
@@ -185,7 +186,7 @@ func (ins *Instance) String() string {
 }
 
 func (ins *Instance) Status() uint64 {
-	// 0x000F  started
+	// 0x000F  status
 	// 0x00F0  connection
 	// 0x0F00  backing
 	var backing uint64
@@ -196,8 +197,8 @@ func (ins *Instance) Status() uint64 {
 		backing += INSTANCE_BACKING
 	}
 	// 0xF000  lifecycle
-	return uint64(atomic.LoadUint32(&ins.started)) +
-		(uint64(atomic.LoadUint32(&ins.awake)) << 4) +
+	return uint64(atomic.LoadUint32(&ins.status)) +
+		(uint64(atomic.LoadUint32(&ins.awakeness)) << 4) +
 		(backing << 8) +
 		(uint64(atomic.LoadUint32(&ins.phase)) << 12)
 }
@@ -207,11 +208,11 @@ func (ins *Instance) Description() string {
 }
 
 func (ins *Instance) StatusDescription() string {
-	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+	if atomic.LoadUint32(&ins.status) == INSTANCE_UNSTARTED {
 		return DESCRIPTION_UNSTARTED
 	}
 
-	switch atomic.LoadUint32(&ins.awake) {
+	switch atomic.LoadUint32(&ins.awakeness) {
 	case INSTANCE_SLEEPING:
 		return DESCRIPTION_SLEEPING
 	case INSTANCE_ACTIVATING:
@@ -290,7 +291,7 @@ func (ins *Instance) HandleRequests() {
 		case <-ins.coolTimer.C:
 			// Warmup will not work until first call.
 			// Double check, for it could timeout before a previous request got handled.
-			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.status) == INSTANCE_UNSTARTED {
 				ins.resetCoolTimer()
 			} else {
 				// Force warm up.
@@ -502,6 +503,7 @@ func (ins *Instance) Close() {
 
 	ins.log.Debug("[%v]Closing...", ins)
 	close(ins.closed)
+	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
 	if !ins.coolTimer.Stop() {
 		select {
 		case <-ins.coolTimer.C:
@@ -518,7 +520,7 @@ func (ins *Instance) Close() {
 		ins.dataLink.Close()
 		ins.dataLink = nil
 	}
-	atomic.StoreUint32(&ins.awake, INSTANCE_SLEEPING)
+	atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 	ins.flagValidatedLocked(nil)
 	ins.log.Info("[%v]Closed", ins)
 }
@@ -552,6 +554,13 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 	ins.mu.Lock()
 	ins.lastValidationOpt = opt
 
+	// Closed safe: The only closed check that in the mutex.
+	// See comments started with "Closed safe: " below for more detail.
+	if ins.isClosedLocked() {
+		ins.mu.Unlock()
+		return nil
+	}
+
 	select {
 	case <-ins.chanValidated:
 		// Not validating. Validate...
@@ -563,22 +572,29 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 		// for::attemps
 		for {
 			ins.log.Debug("Validating...")
+			// Try invoking the lambda node.
+			// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
 			triggered := ins.tryTriggerLambda(opt)
 			if triggered {
 				// Waiting to be validated
 				return ins.validated()
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				// Instance is warm, skip unnecssary warming up.
-				return ins.flagValidated(ins.ctrlLink) // Skip any check in the "flagValidated".
+				return ins.FlagValidated(ins.ctrlLink) // Skip any check in the "FlagValidated".
 			}
 
-			// Ping is issued to ensure active
-			if opt.Command != nil && opt.Command.String() == protocol.CMD_PING {
-				ins.log.Debug("Ping with payload")
-				ins.ctrlLink.Ping(opt.Command.(*types.Control).Payload)
-			} else {
-				ins.ctrlLink.Ping(DefaultPingPayload)
-			}
+			// If instance is active, PING is issued to ensure active
+			// Closed safe: On closing, ctrlLink will be nil. By keep a local copy and check it is not nil, it is safe to make PING request.
+			//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
+			ctrl := ins.ctrlLink
+			if ctrl != nil {
+				if opt.Command != nil && opt.Command.String() == protocol.CMD_PING {
+					ins.log.Debug("Ping with payload")
+					ctrl.Ping(opt.Command.(*types.Control).Payload)
+				} else {
+					ctrl.Ping(DefaultPingPayload)
+				}
+			} // Ctrl can be nil if disconnected, simply wait for timeout and retry
 
 			// Start timeout, ping may get stucked anytime.
 			// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
@@ -591,6 +607,8 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 			}
 			timer.Reset(connectTimeout)
 
+			// Wait for timeout or validation get concluded
+			// Closed safe: On closing, validation will be concluded.
 			select {
 			case <-timer.C:
 				// Recycle timer for the connection may be validated anytime.
@@ -618,13 +636,13 @@ func (ins *Instance) validate(opt *ValidateOption) *Connection {
 
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	ins.log.Debug("[%v]Try activate lambda.", ins)
-	switch atomic.LoadUint32(&ins.awake) {
+	switch atomic.LoadUint32(&ins.awakeness) {
 	case INSTANCE_ACTIVATING:
 		// Cases:
 		// On validating, lambda deactivated and reactivating. Then validating timeouts and retries.
 		return true
 	case INSTANCE_SLEEPING:
-		if !atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_SLEEPING, INSTANCE_ACTIVATING) {
+		if !atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_SLEEPING, INSTANCE_ACTIVATING) {
 			return false
 		} // Continue to activate
 	default:
@@ -644,11 +662,11 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	ins.triggerLambdaLocked(opt)
 	for {
-		if atomic.LoadUint32(&ins.awake) == INSTANCE_MAYBE {
+		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 			return
 		} else if !ins.IsValidating() {
 			// Don't overwrite the MAYBE status.
-			if atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
+			if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
 				ins.log.Debug("[%v]Status updated.", ins)
 			} else {
 				ins.log.Error("[%v]Unexpected status.", ins)
@@ -660,7 +678,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			// 1. Pong is delayed and lambda is returned without requesting for recovery, or the lambda will wait for the ending of the recovery.
 			ins.mu.Lock()
 			// Does not affect the MAYBE status.
-			atomic.StoreUint32(&ins.awake, INSTANCE_SLEEPING)
+			atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 			ins.flagValidatedLocked(nil) // No need to return a validated connection.
 			ins.mu.Unlock()
 
@@ -668,7 +686,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			return
 		} else {
 			// Validating, retrigger.
-			atomic.StoreUint32(&ins.awake, INSTANCE_ACTIVATING)
+			atomic.StoreUint32(&ins.awakeness, INSTANCE_ACTIVATING)
 
 			ins.log.Info("[%v]Reactivateing...", ins)
 			ins.triggerLambdaLocked(opt)
@@ -761,7 +779,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
 			if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
-				if atomic.LoadUint32(&ins.awake) == INSTANCE_MAYBE {
+				if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 					uptodate = false
 				} else {
 					ins.Meta.Stale = false
@@ -782,7 +800,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 
 // Flag the instance as validated by specified connection.
 // This also validate the connection belonging to the instance by setting instance field of the connection.
-func (ins *Instance) tryFlagValidated(conn *Connection, sid string, flags int64) (*Connection, error) {
+func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64) (*Connection, error) {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
@@ -792,7 +810,7 @@ func (ins *Instance) tryFlagValidated(conn *Connection, sid string, flags int64)
 	// Identified unhandled cases:
 	// 1. Lambda is sleeping
 	// Explain: Pong is likely delayed due quick exection of the lambda, possibly for "warmup" requests only.
-	// Solution: Continue to save connection with no further changes to the "awake" and the "validating" status.
+	// Solution: Continue to save connection with no further changes to the "awakeness" and the "validating" status.
 	//           Noted this function will not update status of sleeping lambda.
 
 	if !conn.control {
@@ -841,15 +859,15 @@ func (ins *Instance) tryFlagValidated(conn *Connection, sid string, flags int64)
 		// There are three cases for link switch:
 		// 1. Old node get reclaimed
 		// 2. Reconnection
-		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_ACTIVATING, INSTANCE_ACTIVE)
+		atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVATING, INSTANCE_ACTIVE)
 		// 3. Migration, which we have no way to know its status. (Forget it now)
 		// TODO: Fix migration handling later.
-		// atomic.StoreUint32(&ins.awake, INSTANCE_MAYBE)
+		// atomic.StoreUint32(&ins.awakeness, INSTANCE_MAYBE)
 		ins.log.Debug("[%v]Control link updated.", ins)
 	} else {
 		// New session for saved connection, simply call startSession and update status.
 		ins.startSession(sid)
-		atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_ACTIVATING, INSTANCE_ACTIVE)
+		atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVATING, INSTANCE_ACTIVE)
 	}
 
 	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
@@ -871,7 +889,7 @@ func (ins *Instance) tryFlagValidated(conn *Connection, sid string, flags int64)
 	}
 }
 
-func (ins *Instance) flagValidated(conn *Connection) *Connection {
+func (ins *Instance) FlagValidated(conn *Connection) *Connection {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
@@ -906,27 +924,30 @@ func (ins *Instance) bye(conn *Connection) {
 		return
 	}
 
-	if atomic.CompareAndSwapUint32(&ins.awake, INSTANCE_MAYBE, INSTANCE_SLEEPING) {
+	if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_MAYBE, INSTANCE_SLEEPING) {
 		ins.log.Info("[%v]Bye from unmanaged instance, flag as sleeping.", ins)
 	} else {
 		ins.log.Debug("[%v]Bye ignored, waiting for return of synchronous invocation.", ins)
 	}
 }
 
-func (ins *Instance) flagClosed(conn *Connection) {
+// FlagClosed Notify instance that a connection is closed.
+func (ins *Instance) FlagClosed(conn *Connection) {
+	// We care control link only.
 	if ins.ctrlLink != conn {
-		// We don't care any rogue request
 		return
 	}
 
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
+	// Double check in the mutex block.
 	if ins.ctrlLink != conn {
-		// We don't care any rogue request
 		return
 	}
 
+	// For now, all we can do is setting control link to nil to avoid it being used.
+	// If node is active, it will be reconnected later.
 	ins.ctrlLink = nil
 }
 
@@ -1138,6 +1159,12 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 }
 
 func (ins *Instance) isClosedLocked() bool {
+	// This is more efficient.
+	if atomic.LoadUint32(&ins.status) == INSTANCE_CLOSED {
+		return true
+	}
+
+	// This is more accurate.
 	select {
 	case <-ins.closed:
 		// already closed
@@ -1154,7 +1181,7 @@ func (ins *Instance) warmUp() {
 }
 
 func (ins *Instance) flagWarmed() {
-	atomic.StoreUint32(&ins.started, INSTANCE_STARTED)
+	atomic.StoreUint32(&ins.status, INSTANCE_RUNNING)
 	if global.IsWarmupWithFixedInterval() || ins.IsReclaimed() {
 		return
 	}
@@ -1173,7 +1200,7 @@ func (ins *Instance) resetCoolTimer() {
 }
 
 func (ins *Instance) CollectData() {
-	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+	if atomic.LoadUint32(&ins.status) == INSTANCE_UNSTARTED {
 		return
 	}
 
@@ -1182,7 +1209,7 @@ func (ins *Instance) CollectData() {
 }
 
 func (ins *Instance) FlagDataCollected(ok string) {
-	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+	if atomic.LoadUint32(&ins.status) == INSTANCE_UNSTARTED {
 		return
 	}
 
