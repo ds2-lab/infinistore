@@ -20,7 +20,7 @@ func NewEncoder(dataShards int, parityShards int, ecMaxGoroutine int) reedsolomo
 
 	enc, err := reedsolomon.New(dataShards, parityShards, reedsolomon.WithMaxGoroutines(ecMaxGoroutine))
 	if err != nil {
-		log.Error("newEncoder err", err)
+		log.Error("Failed to create reedsolomon ec instance: %v", err)
 		return nil
 	}
 	return enc

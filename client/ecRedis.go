@@ -25,7 +25,7 @@ var (
 		Color:  false,
 	}
 	// ErrUnexpectedResponse Unexplected response
-	ErrUnexpectedResponse = errors.New("Unexpected response")
+	ErrUnexpectedResponse = errors.New("unexpected response")
 )
 
 func init() {
@@ -71,9 +71,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	}
 	index := random(numClusters, c.Shards)
 	if dryrun > 0 && placements != nil {
-		for i, ret := range index {
-			placements[i] = ret
-		}
+		copy(placements, index)
 		return stats.ReqId, true
 	}
 	//addr, ok := c.getHost(key)
@@ -386,7 +384,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 			c.setError(ret, addr, i, err)
 			return
 		}
-		log.Debug("Not found chunk %d", prompt, i)
+		log.Debug("Not found: chunk %d", i)
 		ret.Set(i, nil)
 		return
 	}
@@ -463,7 +461,7 @@ func (c *Client) encode(obj []byte) ([][]byte, error) {
 		return nil, err
 	}
 	ok, err := c.EC.Verify(shards)
-	if ok == false {
+	if !ok {
 		log.Warn("Failed to verify encoding: %v", err)
 		return nil, err
 	}

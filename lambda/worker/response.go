@@ -200,7 +200,6 @@ type ObjectResponse struct {
 	BaseResponse
 
 	Cmd        string
-	ConnId     string
 	ReqId      string
 	ChunkId    string
 	Val        string
@@ -210,7 +209,6 @@ type ObjectResponse struct {
 
 func (r *ObjectResponse) Prepare() {
 	r.AppendBulkString(r.Cmd)
-	r.AppendBulkString(r.ConnId)
 	r.AppendBulkString(r.ReqId)
 	r.AppendBulkString(r.ChunkId)
 	if len(r.Val) > 0 {

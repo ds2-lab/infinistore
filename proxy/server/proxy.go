@@ -86,7 +86,6 @@ func (p *Proxy) Release() {
 // HandleSet "set chunk" handler
 func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
-	connId := int(client.ID())
 
 	// Get args
 	key, _ := c.NextArg().String()
@@ -136,7 +135,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
 	instance, _ := p.cluster.Instance(uint64(lambdaDest))
 	instance.C() <- &types.Request{
-		Id:             types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
+		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaDest),
 		Cmd:            protocol.CMD_SET,
 		Key:            chunkKey,
@@ -145,7 +144,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		CollectorEntry: collectEntry,
 		Info:           meta,
 	}
-	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
+	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is ", reqId, ", chunkId is ", chunkId, ", lambdaStore Id is", lambdaId)
 	temp, _ := p.placer.Get(key, int(dChunkId))
 	p.log.Debug("get test placement is %v", temp.Placement)
 }
@@ -153,7 +152,6 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 // HandleGet "get chunk" handler
 func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
-	connId := int(client.ID())
 	key := c.Arg(0).String()
 	reqId := c.Arg(1).String()
 	dChunkId, _ := c.Arg(2).Int()
@@ -174,7 +172,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := &types.Request{
-		Id:             types.Id{ConnId: connId, ReqId: reqId, ChunkId: chunkId},
+		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaDest),
 		Cmd:            protocol.CMD_GET,
 		BodySize:       meta.ChunkSize,
@@ -202,7 +200,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		req.InsId = instance.Id()
 		req.Cmd = protocol.CMD_RECOVER
 		req.RetCommand = protocol.CMD_GET
-		meta.Placement[int(dChunkId)] = int(instance.Id()) // Because old instance is invalidated, no hard to update it now.
+		req.Changes = types.CHANGE_PLACEMENT
 
 		p.log.Debug("Invalid instance(%d). Requesting to relocate and recover %s: %d", lambdaDest, chunkKey, instance.Id())
 	}
@@ -283,13 +281,14 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
 				Request: &types.Request{
-					Id:         types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
+					Id:         types.Id{ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
 					InsId:      instance.Id(),
 					Cmd:        protocol.CMD_RECOVER,
 					RetCommand: protocol.CMD_RECOVER,
 					BodySize:   wrapper.Request.BodySize,
 					Key:        wrapper.Request.Key,
 					Info:       wrapper.Request.Info,
+					Changes:    types.CHANGE_PLACEMENT,
 				},
 				Callback: p.handleRecoverCallback,
 			}
@@ -320,7 +319,7 @@ func (p *Proxy) dropEvicted(meta *metastore.Meta) {
 		instance, exists := p.cluster.Instance(uint64(lambdaId))
 		if exists {
 			instance.C() <- &types.Request{
-				Id:    types.Id{ConnId: 0, ReqId: reqId, ChunkId: strconv.Itoa(i)},
+				Id:    types.Id{ReqId: reqId, ChunkId: strconv.Itoa(i)},
 				InsId: uint64(lambdaId),
 				Cmd:   protocol.CMD_DEL,
 				Key:   meta.ChunkKey(i),

@@ -5,8 +5,10 @@ import (
 	"net"
 
 	"github.com/buraksezer/consistent"
+	mock "github.com/jordwest/mock-conn"
 	"github.com/klauspost/reedsolomon"
 	"github.com/mason-leap-lab/redeo/resp"
+
 	// cuckoo "github.com/seiflotfy/cuckoofilter"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -20,7 +22,7 @@ type Client struct {
 	ParityShards int
 	Shards       int
 
-	conns    map[string][]*clientConn
+	conns map[string][]*clientConn
 	// mappingTable map[string]*cuckoo.Filter
 	logEntry logEntry
 }
@@ -28,8 +30,8 @@ type Client struct {
 // NewClient Create a client instance.
 func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
 	return &Client{
-		conns:        make(map[string][]*clientConn),
-		EC:           NewEncoder(dataShards, parityShards, ecMaxGoroutine),
+		conns: make(map[string][]*clientConn),
+		EC:    NewEncoder(dataShards, parityShards, ecMaxGoroutine),
 		// mappingTable: make(map[string]*cuckoo.Filter),
 		DataShards:   dataShards,
 		ParityShards: parityShards,
@@ -123,12 +125,12 @@ func (c *Client) connectShortcut(address string, n int) ([]*clientConn, error) {
 
 func (c *Client) disconnect(address string, i int) {
 	if c.conns[address][i] != nil {
-		c.conns[address][i].Close()
-		c.conns[address][i] = nil
+		c.conns[address][i] = c.conns[address][i].Close() // Noted a shortcut will not be closed.
 	}
 }
 
 func (c *Client) validate(address string, i int) (err error) {
+	// Because shortcut can not be closed, we don't consider it here.
 	if c.conns[address][i] == nil {
 		var conn net.Conn
 		conn, err = net.Dial("tcp", address)
@@ -140,21 +142,30 @@ func (c *Client) validate(address string, i int) (err error) {
 }
 
 type clientConn struct {
-	conn net.Conn
-	W    *resp.RequestWriter
-	R    resp.ResponseReader
+	conn     net.Conn
+	shortcut bool
+	W        *resp.RequestWriter
+	R        resp.ResponseReader
 }
 
 func newClientConn(cn net.Conn) *clientConn {
+	_, shortcut := cn.(*mock.End)
 	return &clientConn{
-		conn: cn,
-		W:    resp.NewRequestWriter(cn),
-		R:    resp.NewResponseReader(cn),
+		conn:     cn,
+		shortcut: shortcut,
+		W:        resp.NewRequestWriter(cn),
+		R:        resp.NewResponseReader(cn),
 	}
 }
 
-func (c *clientConn) Close() {
+// Close close connection and return value for reset
+func (c *clientConn) Close() *clientConn {
+	// No need to close shortcut. It is supposed to be usable always.
+	if c.shortcut {
+		return c
+	}
 	c.conn.Close()
+	return nil
 }
 
 type clientMember string

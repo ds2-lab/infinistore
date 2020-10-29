@@ -425,9 +425,9 @@ func main() {
 		t := time.Now()
 		log.Debug("In GET handler(link:%d)", client.ID())
 
-		connId := c.Arg(0).String()
-		reqId := c.Arg(1).String()
-		key := c.Arg(3).String()
+		reqId := c.Arg(0).String()
+		// Skip: chunkId := c.Arg(1).String()
+		key := c.Arg(2).String()
 
 		chunkId, stream, ret := Store.GetStream(key)
 		if stream != nil {
@@ -439,7 +439,6 @@ func main() {
 			// construct lambda store response
 			response := &worker.ObjectResponse{
 				Cmd:        c.Name,
-				ConnId:     connId,
 				ReqId:      reqId,
 				ChunkId:    chunkId,
 				BodyStream: stream,
@@ -505,7 +504,6 @@ func main() {
 		}
 
 		errRsp := &worker.ErrorResponse{}
-		connId, _ := c.NextArg().String()
 		reqId, _ = c.NextArg().String()
 		chunkId, _ = c.NextArg().String()
 		key, _ := c.NextArg().String()
@@ -541,7 +539,6 @@ func main() {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{
 			Cmd:     c.Name,
-			ConnId:  connId,
 			ReqId:   reqId,
 			ChunkId: chunkId,
 		}
@@ -585,12 +582,11 @@ func main() {
 		log.Debug("In RECOVER handler(link:%d)", client.ID())
 
 		errRsp := &worker.ErrorResponse{}
-		connId := c.Arg(0).String()
-		reqId := c.Arg(1).String()
-		chunkId := c.Arg(2).String()
-		key := c.Arg(3).String()
-		retCmd := c.Arg(4).String()
-		sizeArg := c.Arg(5)
+		reqId := c.Arg(0).String()
+		chunkId := c.Arg(1).String()
+		key := c.Arg(2).String()
+		retCmd := c.Arg(3).String()
+		sizeArg := c.Arg(4)
 		if sizeArg == nil {
 			errRsp.Error = errors.New("size must be set")
 			Server.AddResponses(errRsp, client)
@@ -645,7 +641,6 @@ func main() {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{
 			Cmd:        retCmd,
-			ConnId:     connId,
 			ReqId:      reqId,
 			ChunkId:    chunkId,
 			BodyStream: stream,
@@ -692,17 +687,15 @@ func main() {
 		//t := time.Now()
 		log.Debug("In Del Handler")
 
-		connId := c.Arg(0).String()
-		reqId := c.Arg(1).String()
-		chunkId := c.Arg(2).String()
-		key := c.Arg(3).String()
+		reqId := c.Arg(0).String()
+		chunkId := c.Arg(1).String()
+		key := c.Arg(2).String()
 
 		ret = Store.Del(key, chunkId)
 		if ret.Error() == nil {
 			// write Key, clientId, chunkId, body back to proxy
 			response := &worker.ObjectResponse{
 				Cmd:     c.Name,
-				ConnId:  connId,
 				ReqId:   reqId,
 				ChunkId: chunkId,
 			}

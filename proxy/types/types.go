@@ -12,7 +12,6 @@ import (
 var ErrNoSpareDeployment = errors.New("no spare deployment")
 
 type Id struct {
-	ConnId   int
 	ReqId    string
 	ChunkId  string
 	oldChunk *string

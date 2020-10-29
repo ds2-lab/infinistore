@@ -2,19 +2,20 @@ package types
 
 import (
 	"fmt"
-	"github.com/cornelk/hashmap"
 	"regexp"
+
+	"github.com/cornelk/hashmap"
 	mock "github.com/jordwest/mock-conn"
 )
 
 var (
 	// Shortcut Registry for build-in shortcut connections.
-	Shortcut    *shortcut
+	Shortcut *shortcut
 
 	// Concurency Estimate concurrency required.
 	Concurrency = 100
 
-	shortcutAddress = "shortcut:%d:%s"
+	shortcutAddress    = "shortcut:%d:%s"
 	shortcutRecognizer = regexp.MustCompile(`^shortcut:[0-9]+:(.+)$`)
 )
 
@@ -54,12 +55,21 @@ func (s *shortcut) Validate(address string) (string, bool) {
 	}
 }
 
-func (s *shortcut) Dial(address string) ([]*mock.Conn, bool)  {
+func (s *shortcut) GetConn(address string) (*ShortcutConn, bool) {
 	conn, existed := s.ports.Get(address)
 	if !existed {
 		return nil, false
 	} else {
-		return conn.(*ShortcutConn).Conns, true
+		return conn.(*ShortcutConn), true
+	}
+}
+
+func (s *shortcut) Dial(address string) ([]*mock.Conn, bool) {
+	conn, existed := s.ports.Get(address)
+	if !existed {
+		return nil, false
+	} else {
+		return conn.(*ShortcutConn).Validate().Conns, true
 	}
 }
 
@@ -74,9 +84,45 @@ type ShortcutConn struct {
 }
 
 func NewShortcutConn(n int) *ShortcutConn {
-	conn := &ShortcutConn{ Conns: make([]*mock.Conn, n) }
+	conn := &ShortcutConn{Conns: make([]*mock.Conn, n)}
 	for i := 0; i < n; i++ {
 		conn.Conns[i] = mock.NewConn()
 	}
 	return conn
+}
+
+func (cn *ShortcutConn) Close(idxes ...int) {
+	if len(idxes) == 0 {
+		for i, conn := range cn.Conns {
+			cn.close(i, conn)
+		}
+	} else {
+		for _, i := range idxes {
+			cn.close(i, cn.Conns[i])
+		}
+	}
+}
+
+func (cn *ShortcutConn) close(i int, conn *mock.Conn) {
+	conn.Close()
+	cn.Conns[i] = nil
+}
+
+func (cn *ShortcutConn) Validate(idxes ...int) *ShortcutConn {
+	if len(idxes) == 0 {
+		for i, conn := range cn.Conns {
+			cn.validate(i, conn)
+		}
+	} else {
+		for _, i := range idxes {
+			cn.validate(i, cn.Conns[i])
+		}
+	}
+	return cn
+}
+
+func (cn *ShortcutConn) validate(i int, conn *mock.Conn) {
+	if conn == nil {
+		cn.Conns[i] = mock.NewConn()
+	}
 }
