@@ -48,6 +48,10 @@ func (s *Pool) NumAvailable() int {
 	return len(s.backend)
 }
 
+func (s *Pool) NumActives() int {
+	return s.actives.Len()
+}
+
 // Get a instance at ith position for the group.
 // There is no border check for the index, which means the group should solely responsible
 // for the validity of the index, and the index can be a virtual one.

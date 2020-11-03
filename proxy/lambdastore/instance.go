@@ -525,10 +525,7 @@ func (ins *Instance) closeLocked() {
 	close(ins.closed)
 	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
 	if !ins.coolTimer.Stop() {
-		select {
-		case <-ins.coolTimer.C:
-		default:
-		}
+		<-ins.coolTimer.C
 	}
 	// Close all links
 	// TODO: Due to reconnection from lambda side, we may just leave links to be closed by the lambda.
@@ -1189,10 +1186,7 @@ func (ins *Instance) flagWarmed() {
 
 func (ins *Instance) resetCoolTimer() {
 	if !ins.coolTimer.Stop() {
-		select {
-		case <-ins.coolTimer.C:
-		default:
-		}
+		<-ins.coolTimer.C
 	}
 	if !ins.IsClosed() && !ins.IsReclaimed() {
 		ins.coolTimer.Reset(ins.coolTimeout)

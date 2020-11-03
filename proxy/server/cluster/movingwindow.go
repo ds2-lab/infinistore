@@ -46,6 +46,8 @@ type MovingWindow struct {
 
 	mu   sync.RWMutex
 	done chan struct{}
+
+	numActives int
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
@@ -78,6 +80,7 @@ func (mw *MovingWindow) Start() error {
 
 	// append to bucket list & append current bucket group to proxy group
 	mw.buckets = append(mw.buckets, bucket)
+	mw.numActives += len(bucket.instances)
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end), bucket)
@@ -224,10 +227,16 @@ func (mw *MovingWindow) findBucket(expireCount int) *Bucket {
 func (mw *MovingWindow) Daemon() {
 	idx := 1
 	timer := time.NewTimer(time.Duration(config.BucketDuration) * time.Minute)
+	statTimer := time.NewTimer(1 * time.Second)
 	for {
 		select {
 		case <-mw.done:
-			timer.Stop()
+			if !timer.Stop() {
+				<-timer.C
+			}
+			if !statTimer.Stop() {
+				<-statTimer.C
+			}
 			return
 		// scaling out in bucket
 		case ins := <-mw.scaler:
@@ -249,6 +258,7 @@ func (mw *MovingWindow) Daemon() {
 			} else {
 				// append to bucket list & append current bucket group to proxy group
 				mw.buckets = append(mw.buckets, bucket)
+				mw.numActives += len(bucket.instances)
 				mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end), bucket)
 
 				// update cursor, point to active bucket
@@ -266,7 +276,19 @@ func (mw *MovingWindow) Daemon() {
 			mw.mu.Unlock()
 
 			// reset ticker
+			if !timer.Stop() {
+				<-timer.C
+			}
 			timer.Reset(time.Duration(config.BucketDuration) * time.Minute)
+		case ts := <-statTimer.C:
+			total := pool.NumActives()
+			collector.Collect(collector.LogCluster, "cluster", ts.UnixNano(), total, mw.numActives, total-mw.numActives)
+
+			// reset ticker
+			if !statTimer.Stop() {
+				<-statTimer.C
+			}
+			statTimer.Reset(1 * time.Second)
 		}
 	}
 }
@@ -298,14 +320,15 @@ func (mw *MovingWindow) degrade(bucket *Bucket) {
 	for _, ins := range bucket.instances {
 		ins.Degrade()
 	}
+	mw.numActives -= len(bucket.instances)
+	bucket.state = BUCKET_COLD
+	bucket.log.Debug("Degraded")
 }
 
 func (mw *MovingWindow) DegradeCheck() {
 	degradeBucket := mw.getDegradingInstanceLocked()
 	if degradeBucket != nil {
 		mw.degrade(degradeBucket)
-		degradeBucket.state = BUCKET_COLD
-		degradeBucket.log.Debug("Degraded")
 	}
 }
 
@@ -421,6 +444,7 @@ func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
 		mw.log.Error("Failed to scale: %v", err)
 		return
 	}
+	mw.numActives += config.NumLambdaClusters
 
 	mw.assignBackupLocked(newGins, bucket)
 	mw.log.Debug("Scaled")
