@@ -23,6 +23,7 @@ var (
 	LogLambda          nanolog.Handle = 10004
 	LogValidate        nanolog.Handle = 10005
 	LogEndtoEnd        nanolog.Handle = 20000
+	LogCluster         nanolog.Handle = 10
 	ErrUnexpectedEntry                = errors.New("unexpected log entry")
 
 	logMu        sync.Mutex
@@ -42,6 +43,8 @@ func init() {
 	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
 	// cmd, status, bytes, start, duration
 	LogEndtoEnd = nanolog.AddLogger("%s,%s,%i64,%i64,%i64")
+	// type, time, total, actives, degraded
+	LogCluster = nanolog.AddLogger("%s,%i64,%i,%i,%i")
 }
 
 func Create(prefix string) {
