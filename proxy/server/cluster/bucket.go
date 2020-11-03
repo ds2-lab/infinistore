@@ -29,9 +29,9 @@ type Bucket struct {
 	// group management
 	group       *Group
 	instances   []*lambdastore.Instance
-	start       DefaultGroupIndex
-	end         DefaultGroupIndex
-	activeStart GroupIndex // Instances end at activeStart - 1 are full.
+	start       DefaultGroupIndex // Start logic index of backend group
+	end         DefaultGroupIndex // End logic index of backend group
+	activeStart GroupIndex        // Instances end at activeStart - 1 are full.
 
 	//state
 	state int
@@ -48,6 +48,10 @@ type BucketIndex struct {
 }
 
 func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
+	if pool.NumAvailable() < num {
+		return nil, ErrInsufficientDeployments
+	}
+
 	bucket = &Bucket{
 		id:        id,
 		group:     group,
@@ -139,8 +143,8 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if activeNum > b.end.Idx()-b.activeStart.Idx() {
-		return b.instances[b.activeStart.Idx()-b.start.Idx():]
+	if activeNum > len(b.instances) {
+		return b.instances
 	}
 	// Keep using latests
 	// TODO: Or we should return all available.

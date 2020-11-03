@@ -4,27 +4,21 @@ import (
 	"fmt"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Deployment struct {
-	name    string
-	id      uint64
-	replica bool
-	log     logger.ILogger
+	name string // Name of the function deployment, which will not change
+	id   uint64 // ID of the instance
+	log  logger.ILogger
 
 	Block int
 }
 
-func NewDeployment(name string, id uint64, replica bool) *Deployment {
-	if !replica {
-		name = fmt.Sprintf("%s%d", name, id)
-	}
+func NewDeployment(name string, id uint64) *Deployment {
 	return &Deployment{
-		name:    name,
-		id:      id,
-		replica: replica,
-		log:     logger.NilLogger,
+		name: fmt.Sprintf("%s%d", name, id),
+		id:   id,
+		log:  logger.NilLogger,
 	}
 }
 
@@ -34,22 +28,4 @@ func (d *Deployment) Name() string {
 
 func (d *Deployment) Id() uint64 {
 	return d.id
-}
-
-func (d *Deployment) Reset(new types.LambdaDeployment, old types.LambdaDeployment) {
-	if old != nil {
-		old.Reset(d, nil)
-	}
-
-	d.name = new.Name()
-	d.id = new.Id()
-	switch d.log.(type) {
-	case *logger.ColorLogger:
-		log := d.log.(*logger.ColorLogger)
-		d.log = &logger.ColorLogger{
-			Prefix: fmt.Sprintf("%s ", d.name),
-			Level:  log.GetLevel(),
-			Color:  log.Color,
-		}
-	}
 }

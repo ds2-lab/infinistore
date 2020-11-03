@@ -17,10 +17,6 @@ import (
 )
 
 var (
-	ActiveDuration     = 60  // min
-	ExpireDuration     = 120 //min
-	ActiveBucketsNum   = ActiveDuration / config.BucketDuration
-	ExpireBucketsNum   = ExpireDuration / config.BucketDuration
 	NumInitialClusters = config.NumLambdaClusters * 2
 )
 
@@ -40,12 +36,13 @@ type MovingWindow struct {
 	interval int
 	num      int // number of hot bucket 1 hour time window = 6 num * 10 min
 	buckets  []*Bucket
+	buff     []*Bucket
 
 	cursor    *Bucket
 	startTime time.Time
 
-	scaler       chan *lambdastore.Instance
-	scaleCounter int32
+	scaler chan *lambdastore.Instance
+	// scaleCounter int32
 
 	mu   sync.RWMutex
 	done chan struct{}
@@ -55,15 +52,16 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 	cluster := &MovingWindow{
 		log:       global.GetLogger("MovingWindow: "),
 		group:     NewGroup(0),
-		num:       ActiveBucketsNum,
+		num:       config.NumActiveBuckets,
 		window:    window,
 		interval:  interval,
-		buckets:   make([]*Bucket, 0, ExpireBucketsNum+1),
+		buckets:   make([]*Bucket, 0, config.NumAvailableBuckets+2), // Reserve space for new bucket and last expired bucket
+		buff:      make([]*Bucket, 0, config.NumAvailableBuckets+2),
 		startTime: time.Now(),
 
 		// for scaling out
-		scaler:       make(chan *lambdastore.Instance, config.NumLambdaClusters),
-		scaleCounter: 0,
+		scaler: make(chan *lambdastore.Instance, config.NumLambdaClusters),
+		// scaleCounter: 0,
 
 		done: make(chan struct{}),
 	}
@@ -130,10 +128,11 @@ func (mw *MovingWindow) Close() {
 	}
 
 	close(mw.done)
-	for i, node := range mw.group.all {
-		pool.Recycle(node.LambdaDeployment)
+	for i, gins := range mw.group.all {
+		gins.Instance().Close()
 		mw.group.all[i] = nil
 	}
+
 	pool.Clear(mw.group)
 }
 
@@ -180,13 +179,18 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int) (*lambdastore
 	bucketId := gins.idx.(*BucketIndex).BucketId
 	// Relocate if the chunk has not been touched within active window,
 	// or opportunisitcally has not been touched for a while.
-	if mw.GetCurrentBucket().id-bucketId >= ActiveBucketsNum {
+	if mw.GetCurrentBucket().id-bucketId >= config.NumActiveBuckets {
 		return mw.Relocate(meta, chunkId), true
-	} else if mw.rand() == 1 && mw.GetCurrentBucket().id-bucketId >= ActiveBucketsNum/config.ActiveReplica {
+	} else if mw.rand() == 1 && mw.GetCurrentBucket().id-bucketId >= config.NumActiveBuckets/config.ActiveReplica {
 		return mw.Relocate(meta, chunkId), true
 	}
 
 	return nil, false
+}
+
+func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
+	pool.Recycle(ins)
+	return nil
 }
 
 // metastore.InstanceManger implementation
@@ -235,19 +239,13 @@ func (mw *MovingWindow) Daemon() {
 			//if mw.avgSize(currentBucket) < 1000 {
 			//	break
 			//}
-
-			// Expire old buckets first to free functions
-			mw.ExpireCheck()
-
-			// Degrade instances beyond active window.
-			mw.DegradeCheck()
-
-			// Start new bucket to fill active window.
 			mw.mu.Lock()
 
+			// Start new bucket to fill active window.
 			bucket, err := newBucket(idx, mw.group, config.NumLambdaClusters)
 			if err != nil {
 				mw.log.Error("Failed to initate new bucket: %v", err)
+				continue // No degradation or expiration if no new bucket is allocated.
 			} else {
 				// append to bucket list & append current bucket group to proxy group
 				mw.buckets = append(mw.buckets, bucket)
@@ -258,6 +256,12 @@ func (mw *MovingWindow) Daemon() {
 				mw.log.Debug("Rotation finished, latest bucket is %d", bucket.id)
 				idx++
 			}
+
+			// Degrade instances beyond active window.
+			mw.DegradeCheck()
+
+			// Expire old buckets first to free functions
+			mw.ExpireCheck()
 
 			mw.mu.Unlock()
 
@@ -283,10 +287,10 @@ func (mw *MovingWindow) getInstanceId(id int, from int) int {
 
 // Bucket degrading
 func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
-	if len(mw.buckets) <= ActiveBucketsNum {
+	if len(mw.buckets) <= config.NumActiveBuckets {
 		return nil
 	} else {
-		return mw.buckets[len(mw.buckets)-ActiveBucketsNum-1]
+		return mw.buckets[len(mw.buckets)-config.NumActiveBuckets-1]
 	}
 }
 
@@ -301,30 +305,42 @@ func (mw *MovingWindow) DegradeCheck() {
 	if degradeBucket != nil {
 		mw.degrade(degradeBucket)
 		degradeBucket.state = BUCKET_COLD
-	}
-}
-
-// Bucket expiration
-func (mw *MovingWindow) getExpiringInstanceLocked() *Bucket {
-	if len(mw.buckets) <= ExpireBucketsNum {
-		return nil
-	} else {
-		return mw.buckets[len(mw.buckets)-ExpireBucketsNum-1]
+		degradeBucket.log.Debug("Degraded")
 	}
 }
 
 func (mw *MovingWindow) expire(bucket *Bucket) {
+	// Expire instances
 	for _, ins := range bucket.instances {
 		ins.Expire()
 	}
 }
 
 func (mw *MovingWindow) ExpireCheck() {
-	expireBucket := mw.getExpiringInstanceLocked()
-	if expireBucket != nil {
-		mw.expire(expireBucket)
-		expireBucket.state = BUCKET_EXPIRE
+	if len(mw.buckets) <= config.NumAvailableBuckets {
+		return
 	}
+
+	expiringBuckets := mw.buckets[:len(mw.buckets)-config.NumAvailableBuckets]
+	numExpiringInstances := 0
+	for _, bucket := range expiringBuckets {
+		if bucket.state == BUCKET_EXPIRE {
+			continue
+		}
+		mw.expire(bucket)
+		bucket.state = BUCKET_EXPIRE
+		numExpiringInstances += len(bucket.instances)
+		bucket.log.Debug("Expired %d instances", len(bucket.instances))
+		mw.log.Debug("%d in total to expire", numExpiringInstances)
+	}
+
+	// Update buckets: leave one expired bucket
+	if len(mw.buckets) > config.NumAvailableBuckets+1 {
+		copy(mw.buff[:config.NumAvailableBuckets+1], mw.buckets[len(mw.buckets)-config.NumAvailableBuckets-1:])
+		mw.buckets, mw.buff = mw.buff[:config.NumAvailableBuckets+1], mw.buckets
+	}
+	// Notify the group
+	mw.group.Expire(numExpiringInstances)
 }
 
 func (mw *MovingWindow) getActiveInstanceForChunk(meta *metastore.Meta, chunkId int) *lambdastore.Instance {
@@ -340,11 +356,11 @@ func (mw *MovingWindow) rand() int {
 // only assign backup for new node in bucket
 func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance, current *Bucket) {
 	// When current bucket leaves active window, there backups should not have been expired.
-	bucketRange := ExpireBucketsNum - ActiveBucketsNum
-	if bucketRange > len(mw.buckets)-1 {
-		bucketRange = len(mw.buckets) - 1
+	bucketRange := config.NumAvailableBuckets
+	if bucketRange > len(mw.buckets) {
+		bucketRange = len(mw.buckets)
 	}
-	startBucket := mw.buckets[current.id-bucketRange]
+	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
 
 	all := mw.group.SubGroup(startBucket.start, current.end)
 	for _, gins := range gall {

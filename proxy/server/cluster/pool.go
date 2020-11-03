@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cornelk/hashmap"
@@ -18,6 +19,8 @@ const IN_DEPLOYMENT_MIGRATION = true
 
 var (
 	pool *Pool
+
+	ErrInsufficientDeployments = errors.New("insufficient lambda deployments")
 )
 
 type Pool struct {
@@ -32,7 +35,7 @@ func NewPool(numCluster int, numDeployment int) *Pool {
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
-		s.backend <- lambdastore.NewDeployment(config.LambdaPrefix, uint64(i), false)
+		s.backend <- lambdastore.NewDeployment(config.LambdaPrefix, uint64(i))
 	}
 	return s
 }
@@ -41,12 +44,16 @@ func newPool() *Pool {
 	return NewPool(config.NumLambdaClusters, config.LambdaMaxDeployments)
 }
 
+func (s *Pool) NumAvailable() int {
+	return len(s.backend)
+}
+
 // Get a instance at ith position for the group.
 // There is no border check for the index, which means the group should solely responsible
 // for the validity of the index, and the index can be a virtual one.
 // This operation will be blocked if no more deployment available
 func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *lambdastore.Instance {
-	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend))
+	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
 	s.actives.Set(ins.Id(), ins)
 	g.Set(ins)
 	return ins.LambdaDeployment.(*lambdastore.Instance)
@@ -88,7 +95,6 @@ func (s *Pool) Recycle(dp types.LambdaDeployment) {
 	case *lambdastore.Deployment:
 		s.backend <- backend
 	case *lambdastore.Instance:
-		backend.Close()
 		s.backend <- backend.Deployment
 	}
 }
@@ -107,17 +113,7 @@ func (s *Pool) Instance(id uint64) (*lambdastore.Instance, bool) {
 	if !exists {
 		return nil, exists
 	}
-
-	ins := got.(*GroupInstance)
-	validated := ins.group.Validate(ins)
-	if validated != ins {
-		// Update actives
-		s.actives.Set(validated.Id(), validated)
-		// Update so ins can be recycled
-		s.actives.Set(ins.Id(), ins)
-		s.Recycle(ins.LambdaDeployment)
-	}
-	return validated.LambdaDeployment.(*lambdastore.Instance), exists
+	return got.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance), exists
 }
 
 func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
@@ -133,14 +129,14 @@ func (s *Pool) Clear(g *Group) {
 	for item := range s.actives.Iter() {
 		ins := item.Value.(*GroupInstance)
 		if ins.group == g {
-			s.Recycle(ins.LambdaDeployment)
+			ins.LambdaDeployment.(*lambdastore.Instance).Close()
 		}
 	}
 }
 
 func (s *Pool) ClearAll() {
 	for item := range s.actives.Iter() {
-		s.Recycle(item.Value.(*GroupInstance).LambdaDeployment)
+		item.Value.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance).Close()
 	}
 }
 
@@ -165,7 +161,6 @@ func init() {
 	pool = newPool()
 
 	global.Migrator = pool
-
 }
 
 func CleanUpPool() {

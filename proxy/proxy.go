@@ -21,15 +21,14 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/server"
-	"github.com/mason-leap-lab/infinicache/proxy/server/cluster"
 )
 
 var (
-	options = &global.Options
-	log     = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
-	sig     = make(chan os.Signal, 1)
-	dash    *dashboard.Dashboard
-	logFile *os.File
+	options  = &global.Options
+	log      = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
+	sig      = make(chan os.Signal, 1)
+	dash     *dashboard.Dashboard
+	logFile  *os.File
 	panicErr interface{}
 )
 
@@ -94,7 +93,7 @@ func main() {
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
-		dash.ConfigCluster(prxy.GetStatsProvider(), cluster.ExpireBucketsNum)
+		dash.ConfigCluster(prxy.GetStatsProvider(), config.NumAvailableBuckets+1) // Show all unexpired instances + 1 expired bucket.
 	}
 
 	// config server
@@ -111,11 +110,11 @@ func main() {
 
 		collector.Stop()
 
-		// // Close server
+		// Close server
 		log.Info("Closing server...")
 		srv.Close(clientLis)
 
-		// // Collect data
+		// Collect data
 		log.Info("Collecting data...")
 		prxy.CollectData()
 
@@ -144,6 +143,7 @@ func main() {
 
 	// Start serving (blocking)
 	err = srv.ServeAsync(clientLis)
+	log.Debug("Server returned: %v", err)
 	if err != nil {
 		select {
 		case <-sig:
@@ -193,7 +193,7 @@ func checkUsage(options *global.CommandlineOptions) {
 		if options.LogFile == "" {
 			options.LogFile = "log"
 		}
-		options.NoColor = true
+		// options.NoColor = true
 	}
 
 	if options.Evaluation && options.FuncCapacity == 0 {
@@ -216,9 +216,10 @@ func finalize(fix bool) {
 			return
 		}
 	}
-	
+
 	// Rest will be cleared from main routine.
 	if logFile != nil {
+		syslog.SetOutput(os.Stdout)
 		logFile.Close()
 		logFile = nil
 	}

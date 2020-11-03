@@ -39,10 +39,10 @@ const DefaultInstanceCapacity = 3008 * 1000000 // MB
 const InstanceOverhead = 100 * 1000000 // MB
 
 // Threshold Scaling out avg instance size threshold
-const Threshold = 0.8                  // Don't set beyond 0.8
+const Threshold = 0.8 // Don't set beyond 0.8
 
 // Maximum chunk per instance
-const ChunkThreshold = 125000          // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
+const ChunkThreshold = 125000 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = "" // Leave it empty if using VPC.
@@ -56,6 +56,13 @@ const BackupsPerInstance = 36 // (InstanceCapacity - InstanceOverhead) / Recover
 
 // Each bucket's active duration
 const BucketDuration = 10 // min
+
+// Number of buckets that warmup every InstanceWarmTimeout
+const NumActiveBuckets = 60
+
+// Number of buckets before expiring
+// Buckets beyond NumActiveBuckets but within ExpireBucketsNum will get degraded warmup: InstanceDegradeWarmTimeout
+const NumAvailableBuckets = 180
 
 // Async migrate control
 const ActiveReplica = 2 //min
