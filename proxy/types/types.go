@@ -41,7 +41,6 @@ type Command interface {
 type LambdaDeployment interface {
 	Name() string
 	Id() uint64
-	Reset(new LambdaDeployment, old LambdaDeployment)
 }
 
 type MigrationScheduler interface {

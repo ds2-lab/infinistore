@@ -93,6 +93,14 @@ func (req *Request) PrepareForDel(conn Conn) {
 	req.conn = conn
 }
 
+func (req *Request) ToRecover(toInsId uint64) *Request {
+	req.InsId = toInsId
+	req.Cmd = protocol.CMD_RECOVER
+	req.RetCommand = protocol.CMD_GET
+	req.Changes = req.Changes & CHANGE_PLACEMENT
+	return req
+}
+
 func (req *Request) PrepareForRecover(conn Conn) {
 	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)

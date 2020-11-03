@@ -2,7 +2,6 @@ package views
 
 import (
 	"image"
-	"math"
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/drawille"
@@ -27,7 +26,7 @@ func NewClusterView(title string) *ClusterView {
 	view := &ClusterView{
 		Canvas: ui.NewCanvas(),
 		origin: image.Pt(0, 0),
-		mapper: image.Pt(1, 1),
+		mapper: image.Pt(2, 4),
 	}
 	view.Title = title
 	return view
@@ -37,7 +36,7 @@ func NewClusterComponent() *ClusterView {
 	view := &ClusterView{
 		Canvas: ui.NewCanvas(),
 		origin: image.Pt(0, 0),
-		mapper: image.Pt(1, 1),
+		mapper: image.Pt(2, 4),
 	}
 	view.Border = false
 	return view
@@ -97,15 +96,15 @@ func (v *ClusterView) updateMapper(len int) {
 	}
 	v.origin.X = v.Inner.Min.X * 2 // + v.mapper.X
 
-	rows := int(math.Ceil(float64(len) / float64(v.Cols)))
-	v.mapper.Y = (v.Inner.Max.Y - v.Inner.Min.Y + 1) * 4 / (rows + 1)
-	if v.mapper.Y > v.mapper.X {
-		v.mapper.Y = v.mapper.X
-	}
-	if v.mapper.Y < 4 {
-		v.mapper.Y = 4 // minimum recognizable interval
-	}
-	v.origin.Y = v.Inner.Max.Y * 4 - 2 // reverse
+	// rows := int(math.Ceil(float64(len) / float64(v.Cols)))
+	// v.mapper.Y = (v.Inner.Max.Y - v.Inner.Min.Y + 1) * 4 / (rows + 1)
+	// if v.mapper.Y > v.mapper.X {
+	// 	v.mapper.Y = v.mapper.X
+	// }
+	// if v.mapper.Y < 4 {
+	// 	v.mapper.Y = 4 // minimum recognizable interval
+	// }
+	v.origin.Y = v.Inner.Max.Y*4 - 2 // reverse
 	// log.Printf("Demension %v to %v: %v\n", v.Inner.Max, v.Inner.Min, v.mapper)
 
 	v.mapbase = len
@@ -123,18 +122,24 @@ func (v *ClusterView) getColorByInstance(ins types.InstanceStats) ui.Color {
 	}
 	status := ins.Status()
 
-	// unstarted
-	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
-		return ui.ColorWhite
-	} else if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing & lambdastore.INSTANCE_RECOVERING > 0 {
+	// if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
+	// 	// Unstarted
+	// 	return ui.ColorWhite
+	// } else
+	if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing&lambdastore.INSTANCE_RECOVERING > 0 {
+		// Recovering
 		return ui.ColorCyan
-	} else if backing & lambdastore.INSTANCE_BACKING > 0 {
+	} else if backing&lambdastore.INSTANCE_BACKING > 0 {
+		// Backing
 		return ui.ColorBlue
 	} else if phase := (status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 12); phase == lambdastore.PHASE_ACTIVE {
+		// Active
 		return ui.ColorGreen
 	} else if phase == lambdastore.PHASE_BACKING_ONLY {
+		// Backing only
 		return ui.ColorYellow
-	} else if phase == lambdastore.PHASE_RECLAIMED {
+	} else if phase >= lambdastore.PHASE_RECLAIMED {
+		// Expired or reclaimed
 		return ui.ColorRed
 	} else {
 		return ui.ColorMagenta
@@ -147,8 +152,8 @@ func (v *ClusterView) Draw(buf *ui.Buffer) {
 	for point, cell := range v.Canvas.Canvas.GetCells() {
 		if point.In(v.Rectangle) {
 			convertedCell := ui.Cell{
-				// cell.Rune,
-				ui.DOT,
+				// cell.Rune, see https://github.com/gizak/termui/blob/master/v3/symbols.go for options.
+				'▣', // or ui.DOT
 				// ui.IRREGULAR_BLOCKS[12],
 				ui.Style{
 					ui.Color(cell.Color),

@@ -165,7 +165,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			if err != nil {
 				return Lineage.Status().ProtocolStatus(), err
 			} else if !consistent {
-				if input.IsBackingOnly() && i > 0 {
+				if input.IsBackingOnly() && i == 0 {
 					// In backing only mode, we will not try to recover main repository.
 					// And any data loss will be regarded as signs of reclaimation.
 					flags |= protocol.PONG_RECLAIMED
