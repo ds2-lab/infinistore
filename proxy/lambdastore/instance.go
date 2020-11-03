@@ -679,7 +679,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	for {
 		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 			return
-		} else if !ins.validated.IsResolved() {
+		} else if ins.validated.IsResolved() {
 			// Don't overwrite the MAYBE status.
 			if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
 				ins.log.Debug("[%v]Status updated.", ins)
