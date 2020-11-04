@@ -212,22 +212,18 @@ func (mw *MovingWindow) Trigger(event int, args ...interface{}) {
 			mw.log.Warn("Invalid parameters for EventInsufficientStorage, (*lambdastore.Instance) expected")
 			return
 		}
-		mw.scaler <- ins
+		// Will not block here
+		select {
+		case mw.scaler <- ins:
+		default:
+		}
 	}
-}
-
-func (mw *MovingWindow) findBucket(expireCount int) *Bucket {
-	old := mw.GetCurrentBucket().id - expireCount
-	if old < 0 {
-		return mw.buckets[0]
-	}
-	return mw.buckets[old]
 }
 
 func (mw *MovingWindow) Daemon() {
 	idx := 1
 	timer := time.NewTimer(time.Duration(config.BucketDuration) * time.Minute)
-	statTimer := time.NewTimer(1 * time.Second)
+	statTimer := time.NewTimer(1 * time.Minute) // I tried 1 second and it failed to respond to scaling. 1 minute is ok.
 	for {
 		select {
 		case <-mw.done:
@@ -276,35 +272,19 @@ func (mw *MovingWindow) Daemon() {
 			mw.mu.Unlock()
 
 			// reset ticker
-			if !timer.Stop() {
-				<-timer.C
-			}
 			timer.Reset(time.Duration(config.BucketDuration) * time.Minute)
 		case ts := <-statTimer.C:
 			total := pool.NumActives()
 			collector.Collect(collector.LogCluster, "cluster", ts.UnixNano(), total, mw.numActives, total-mw.numActives)
 
 			// reset ticker
-			if !statTimer.Stop() {
-				<-statTimer.C
-			}
-			statTimer.Reset(1 * time.Second)
+			statTimer.Reset(1 * time.Minute)
 		}
 	}
 }
 
-func (mw *MovingWindow) getAllBuckets() []*Bucket {
-	return mw.buckets
-}
-
 func (mw *MovingWindow) GetCurrentBucket() *Bucket {
 	return mw.buckets[len(mw.buckets)-1]
-}
-
-func (mw *MovingWindow) getInstanceId(id int, from int) int {
-	//idx := mw.GetCurrentBucket().from + id
-	idx := id + from
-	return idx
 }
 
 // Bucket degrading
@@ -437,6 +417,8 @@ func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
 	if !mw.testScaledLocked(gins, bucket) {
 		return
 	}
+
+	mw.log.Debug("Scaleing...")
 
 	// Scale
 	newGins, err := bucket.scale(config.NumLambdaClusters)
