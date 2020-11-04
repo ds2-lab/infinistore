@@ -31,13 +31,17 @@ function perform(){
 	cat /tmp/infinicache.pid
 	#        set
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT 
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $OUTPUT
 	kill -2 `cat /tmp/infinicache.pid`
   # Wait for proxy cleaned up
   while [ -f /tmp/infinicache.pid ]
 	do
 		sleep 1s
 	done
+
+	if [ -f $PWD/proxy.log ] ; then
+		mv $PWD/proxy.log $PWD/$(ENTRY)_proxy.log
+	fi
 }
 
 function dry_perform(){
@@ -61,6 +65,7 @@ else
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 
+	
 	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
 	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
 fi

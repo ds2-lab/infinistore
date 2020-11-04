@@ -40,7 +40,7 @@ function start_proxy() {
     PREFIX=$1
     DASHBOARD=$2
     if [ "$DASHBOARD" != "" ] ; then
-        read -p "Run GOMAXPROCS=36 $BINDIR/proxy -debug -prefix=$PREFIX $DASHBOARD . Then, press any key to continue."
+        echo "Run: GOMAXPROCS=36 $BINDIR/proxy -debug -prefix=$PREFIX -log=proxy.log $DASHBOARD"
     else
         GOMAXPROCS=36 $BINDIR/proxy -debug -prefix=$PREFIX $DASHBOARD &
     fi
@@ -67,7 +67,12 @@ function playback() {
     CLUSTER=$4
     FILE=$5
     COMPACT=$6
-    $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    OUTPUT=$7
+    if [ "$OUTPUT" != "" ] ; then
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE 1>$OUTPUT 2>&1
+    else
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    fi
 }
 
 function dryrun() {
