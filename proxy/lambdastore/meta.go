@@ -67,9 +67,13 @@ func (m *Meta) DecreaseSize(dec int64) uint64 {
 	return atomic.AddUint64(&m.size, ^uint64(dec-1))
 }
 
-func (m *Meta) FromProtocolMeta(meta *protocol.Meta) bool {
+func (m *Meta) FromProtocolMeta(meta *protocol.Meta) (bool, error) {
 	if meta.Term < m.Term {
-		return false
+		if meta.Term == 1 {
+			return false, ErrInstanceReclaimed
+		} else {
+			return false, nil
+		}
 	}
 
 	m.Term = meta.Term
@@ -79,7 +83,7 @@ func (m *Meta) FromProtocolMeta(meta *protocol.Meta) bool {
 	m.SnapshotTerm = meta.SnapshotTerm
 	m.SnapshotUpdates = meta.SnapshotUpdates
 	m.SnapshotSize = meta.SnapshotSize
-	return true
+	return true, nil
 }
 
 func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {

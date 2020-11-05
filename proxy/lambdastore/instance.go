@@ -687,11 +687,26 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 }
 
 func (ins *Instance) triggerLambda(opt *ValidateOption) {
-	ins.triggerLambdaLocked(opt)
+	err := ins.triggerLambdaLocked(opt)
 	for {
 		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 			return
-		} else if ins.validated.IsResolved() {
+		} 
+		
+		if err != nil && err == ErrInstanceReclaimed {
+			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
+			ins.log.Info("Reclaimed")
+
+			// We can close the instance if it is not backing any instance.
+			if !ins.IsBacking(true) {
+				ins.closeLocked()
+				return
+			} 
+			
+			// Continue to waiting for being validated
+		}
+		
+		if ins.validated.IsResolved() {
 			// Don't overwrite the MAYBE status.
 			if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
 				ins.log.Debug("[%v]Status updated.", ins)
@@ -716,12 +731,12 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_ACTIVATING)
 
 			ins.log.Info("[%v]Reactivateing...", ins)
-			ins.triggerLambdaLocked(opt)
+			err = ins.triggerLambdaLocked(opt)
 		}
 	}
 }
 
-func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
+func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) error {
 	if ins.Meta.Stale {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
@@ -774,6 +789,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	// In such case, no further action is required. So we use CMD_WARMUP to invoke node when requests command is CMD_PING.
 	if opt.WarmUp || opt.Command.String() == protocol.CMD_PING {
 		event.Cmd = protocol.CMD_WARMUP
+		opt.WarmUp = true
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -803,8 +819,12 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		} else if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
 		} else if len(outputStatus) > 0 {
-			uptodate := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
-			if uptodate {
+			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
+			if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
+				// Reclaimed
+				ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
+				return err
+			} else if uptodate {
 				// If the node was invoked by other than the proxy, it could be stale.
 				if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 					uptodate = false
@@ -823,6 +843,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	} else if event.IsPersistencyEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
+	return nil
 }
 
 // Flag the instance as validated by specified connection.
