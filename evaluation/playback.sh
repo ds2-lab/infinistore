@@ -20,6 +20,11 @@ function perform(){
 	COMPACT=$6
 	DASHBOARD=$7
 
+	if [ "$COMPACT" == "-enable-dashboard" ] ; then
+		DASHBOARD=$COMPACT
+		COMPACT=
+	fi
+
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
 	start_proxy $PREPROXY $DASHBOARD
