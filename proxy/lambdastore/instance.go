@@ -192,7 +192,7 @@ func (ins *Instance) Status() uint64 {
 	if ins.IsRecovering() {
 		backing += INSTANCE_RECOVERING
 	}
-	if ins.IsBacking() {
+	if ins.IsBacking(true) {
 		backing += INSTANCE_BACKING
 	}
 	// 0xF000  lifecycle
@@ -432,8 +432,12 @@ func (ins *Instance) StopBacking(bakIns *Instance) {
 	}
 }
 
-func (ins *Instance) IsBacking() bool {
-	return atomic.LoadUint32(&ins.backing) != BACKING_DISABLED
+func (ins *Instance) IsBacking(includingPrepare bool) bool {
+	if includingPrepare {
+		return atomic.LoadUint32(&ins.backing) != BACKING_DISABLED
+	} else {
+		return atomic.LoadUint32(&ins.backing) == BACKING_ENABLED
+	}
 }
 
 // TODO: Add sid support, proxy now need sid to connect.
@@ -482,7 +486,7 @@ func (ins *Instance) Expire() {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	if !ins.IsBacking() {
+	if !ins.IsBacking(true) {
 		ins.closeLocked()
 	}
 }
@@ -522,7 +526,11 @@ func (ins *Instance) closeLocked() {
 	}
 
 	ins.log.Debug("[%v]Closing...", ins)
-	close(ins.closed)
+	select {
+	case <-ins.closed:
+	default:
+		close(ins.closed)
+	}
 	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
 	if !ins.coolTimer.Stop() {
 		// For parallel access, use select.
@@ -726,7 +734,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 	}
 
 	var status protocol.Status
-	if !ins.IsBacking() {
+	if !ins.IsBacking(false) {
 		// Main store only
 		status = protocol.Status{*ins.Meta.ToProtocolMeta(ins.Id())}
 		status[0].Tip = tips.Encode()
@@ -902,7 +910,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 		ins.log.Info("Reclaimed")
 		// We can close the instance if it is not backing any instance.
-		if !ins.IsBacking() {
+		if !ins.IsBacking(true) {
 			ins.closeLocked()
 			return conn, nil
 		}
