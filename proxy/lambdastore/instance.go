@@ -324,26 +324,30 @@ func (ins *Instance) startRecoveryLocked() int {
 	// Reserve available backups
 	changes := ins.backups.Reserve(nil)
 
-	// Start backups.
-	var msg strings.Builder
-	for i := 0; i < ins.backups.Len(); i++ {
-		msg.WriteString(" ")
-		backup, ok := ins.backups.StartByIndex(i, ins)
-		if ok {
-			msg.WriteString(strconv.FormatUint(backup.Id(), 10))
-		} else {
-			msg.WriteString("N/A")
+	// Prepare log printer for debugging
+	logFunc := logger.NewFunc(func() string {
+		var msg strings.Builder
+		for i := 0; i < ins.backups.Len(); i++ {
+			msg.WriteString(" ")
+			backup, ok := ins.backups.StartByIndex(i, ins)
+			if ok {
+				msg.WriteString(strconv.FormatUint(backup.Id(), 10))
+			} else {
+				msg.WriteString("N/A")
+			}
 		}
-	}
+		return msg.String()
+	})
 
+	// Start backups.
 	available := ins.backups.Availables()
 	atomic.StoreUint32(&ins.recovering, uint32(available))
 	if available > ins.backups.Len()/2 {
-		ins.log.Debug("Parallel recovery started with %d backup instances:%s, changes: %d", available, msg.String(), changes)
+		ins.log.Debug("Parallel recovery started with %d backup instances:%v, changes: %d", available, logFunc, changes)
 	} else if available == 0 {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
-		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%s, changes: %d", available, msg.String(), changes)
+		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%v, changes: %d", available, logFunc, changes)
 	}
 
 	return available
@@ -528,6 +532,7 @@ func (ins *Instance) closeLocked() {
 	ins.log.Debug("[%v]Closing...", ins)
 	select {
 	case <-ins.closed:
+		return
 	default:
 		close(ins.closed)
 	}
@@ -691,21 +696,21 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	for {
 		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 			return
-		} 
-		
+		}
+
 		if err != nil && err == ErrInstanceReclaimed {
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 			ins.log.Info("Reclaimed")
 
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
-				ins.closeLocked()
+				ins.Close()
 				return
-			} 
-			
+			}
+
 			// Continue to waiting for being validated
 		}
-		
+
 		if ins.validated.IsResolved() {
 			// Don't overwrite the MAYBE status.
 			if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
@@ -1209,7 +1214,8 @@ func (ins *Instance) warmUp() {
 }
 
 func (ins *Instance) flagWarmed() {
-	atomic.StoreUint32(&ins.status, INSTANCE_RUNNING)
+	// Only switch if instance unstarted.
+	atomic.CompareAndSwapUint32(&ins.status, INSTANCE_UNSTARTED, INSTANCE_RUNNING)
 	if global.IsWarmupWithFixedInterval() || ins.IsReclaimed() {
 		return
 	}

@@ -94,6 +94,13 @@ func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) 
 }
 
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
+	// There is no atomic delete that can detect the existence of the key. Using two phase deletion here.
+	if active, ok := s.actives.Get(dp.Id()); !ok {
+		return
+	} else if !s.actives.Cas(dp.Id(), active, nil) {
+		return
+	}
+
 	s.actives.Del(dp.Id())
 	switch backend := dp.(type) {
 	case *lambdastore.Deployment:

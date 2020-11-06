@@ -16,6 +16,7 @@ var (
 
 type Group struct {
 	all     []*GroupInstance
+	buff    []*GroupInstance
 	idxBase int // The base for logic index. The base will increase every time "expire" is called.
 	mu      sync.RWMutex
 }
@@ -60,18 +61,24 @@ func NewGroup(num int) *Group {
 }
 
 func (g *Group) Len() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
 	return len(g.all)
 }
 
 func (g *Group) StartIndex() DefaultGroupIndex {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
 	return DefaultGroupIndex(g.idxBase)
 }
 
 func (g *Group) EndIndex() DefaultGroupIndex {
 	g.mu.RLock()
-	end := g.idxBase + len(g.all)
-	g.mu.RUnlock()
-	return DefaultGroupIndex(end)
+	defer g.mu.RUnlock()
+
+	return DefaultGroupIndex(g.idxBase + len(g.all))
 }
 
 func (g *Group) Expand(n int) (DefaultGroupIndex, error) {
@@ -79,12 +86,11 @@ func (g *Group) Expand(n int) (DefaultGroupIndex, error) {
 		return DefaultGroupIndex(g.idxBase + len(g.all)), ErrInsufficientDeployments
 	}
 
-	g.mu.RLock()
-	g.all = g.all[0 : len(g.all)+n]
-	end := g.idxBase + len(g.all)
-	g.mu.RUnlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
-	return DefaultGroupIndex(end), nil
+	g.all = g.all[0 : len(g.all)+n]
+	return DefaultGroupIndex(g.idxBase + len(g.all)), nil
 }
 
 func (g *Group) Expire(n int) error {
@@ -93,12 +99,14 @@ func (g *Group) Expire(n int) error {
 	}
 
 	// Force bin packing
-	all := make([]*GroupInstance, config.LambdaMaxDeployments)
 	g.mu.Lock()
-	all = all[:len(g.all)-n]
-	copy(all, g.all[n:len(g.all)])
+	if g.buff == nil {
+		g.buff = make([]*GroupInstance, cap(g.all))
+	}
+	g.buff = g.buff[:len(g.all)-n]
+	copy(g.buff, g.all[n:len(g.all)])
 	g.idxBase += n
-	g.all = all
+	g.all, g.buff = g.buff, g.all
 	g.mu.Unlock()
 
 	log.Printf("expired %d of %d instances, new base %d, left %d\n", n, len(g.all)+n, g.idxBase, len(g.all))
