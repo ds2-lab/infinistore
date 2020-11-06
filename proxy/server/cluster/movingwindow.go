@@ -180,11 +180,12 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int) (*lambdastore
 	}
 
 	bucketId := gins.idx.(*BucketIndex).BucketId
+	diffBuckets := mw.GetCurrentBucket().id - bucketId // Call "GetCurrentBucket" once only for better concurrency.
 	// Relocate if the chunk has not been touched within active window,
 	// or opportunisitcally has not been touched for a while.
-	if mw.GetCurrentBucket().id-bucketId >= config.NumActiveBuckets {
+	if diffBuckets >= config.NumActiveBuckets {
 		return mw.Relocate(meta, chunkId), true
-	} else if mw.rand() == 1 && mw.GetCurrentBucket().id-bucketId >= config.NumActiveBuckets/config.ActiveReplica {
+	} else if mw.rand() == 1 && diffBuckets >= config.NumActiveBuckets/config.ActiveReplica {
 		return mw.Relocate(meta, chunkId), true
 	}
 
@@ -284,6 +285,13 @@ func (mw *MovingWindow) Daemon() {
 }
 
 func (mw *MovingWindow) GetCurrentBucket() *Bucket {
+	mw.mu.RLock()
+	defer mw.mu.RUnlock()
+
+	return mw.getCurrentBucketLocked()
+}
+
+func (mw *MovingWindow) getCurrentBucketLocked() *Bucket {
 	return mw.buckets[len(mw.buckets)-1]
 }
 
@@ -404,8 +412,10 @@ func (mw *MovingWindow) InstanceSum(stats int) int {
 
 func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
 	// Test
+	// It is safe to call getCurrentBucketLocked() because the only place that may change buckets are in Daemon,
+	// which is the same place that can call doScale() and is exclusive.
 	gins, ok := pool.InstanceIndex(ins.Id())
-	if !ok || !mw.testScaledLocked(gins, mw.GetCurrentBucket()) {
+	if !ok || !mw.testScaledLocked(gins, mw.getCurrentBucketLocked()) {
 		return
 	}
 
@@ -413,7 +423,7 @@ func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
 	defer mw.mu.Unlock()
 
 	// Test again
-	bucket := mw.GetCurrentBucket()
+	bucket := mw.getCurrentBucketLocked()
 	if !mw.testScaledLocked(gins, bucket) {
 		return
 	}

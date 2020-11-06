@@ -156,7 +156,7 @@ func (req *Request) MarkReturned() {
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {
-	return req.Cmd == rsp.Cmd &&
+	return (req.Cmd == rsp.Cmd || req.RetCommand == rsp.Cmd) &&
 		req.Id.ReqId == rsp.Id.ReqId &&
 		req.Id.ChunkId == rsp.Id.ChunkId
 }

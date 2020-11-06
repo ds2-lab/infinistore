@@ -3,6 +3,8 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -91,7 +93,22 @@ func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 		// 	b.ready.Done()
 		// }()
 	}
-	b.log.Debug("%d nodes added: %s ~ %s", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
+
+	// Build log message
+	if global.Options.Debug {
+		b.log.Debug("%d nodes added:%v", len(b.instances), logger.NewFunc(func() string {
+			var msg strings.Builder
+			for _, ins := range b.instances {
+				msg.WriteString(" ")
+				msg.WriteString(ins.Name())
+				msg.WriteString("-")
+				msg.WriteString(strconv.FormatUint(ins.Id(), 10))
+			}
+			return msg.String()
+		}))
+	} else {
+		b.log.Info("%d nodes added: %d ~ %d", len(b.instances), b.instances[0].Id(), b.instances[len(b.instances)-1].Id())
+	}
 }
 
 func (b *Bucket) waitReady() {
@@ -144,7 +161,7 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	defer b.mu.RUnlock()
 
 	if activeNum > len(b.instances) {
-		return b.instances
+		return b.instances[:len(b.instances)] // Force to create a new slice mapping to avoid the length being changed.
 	}
 	// Keep using latests
 	// TODO: Or we should return all available.
