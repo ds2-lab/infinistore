@@ -33,6 +33,7 @@ var (
 )
 
 func init() {
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	global.Log = log
 	if config.ServerPublicIp != "" {
 		global.ServerIp = config.ServerPublicIp
@@ -84,8 +85,6 @@ func main() {
 			dash.Start()
 			sig <- syscall.SIGINT
 		}()
-	} else {
-		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	}
 
 	// initial proxy server
