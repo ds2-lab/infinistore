@@ -113,9 +113,10 @@ func main() {
 		log.Info("Closing server...")
 		srv.Close(clientLis)
 
+		// Uncomment me: on long running microbenchmarking.
 		// Collect data
-		log.Info("Collecting data...")
-		prxy.CollectData()
+		// log.Info("Collecting data...")
+		// prxy.CollectData()
 
 		prxy.Close(lambdaLis)
 		redis.Close()
