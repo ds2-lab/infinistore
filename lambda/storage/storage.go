@@ -387,7 +387,7 @@ func (s *Storage) ConfigS3Lineage(bucket string, prefix string) types.Lineage {
 func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	if meta.Backup {
-		if s.backupMeta == nil || s.backupMeta.BackupId != meta.BackupId || s.backupMeta.BackupTotal != meta.BackupTotal {
+		if s.backupMeta == nil || s.backupMeta.Id != meta.Id || s.backupMeta.BackupId != meta.BackupId || s.backupMeta.BackupTotal != meta.BackupTotal {
 			meta.Consistent = false
 			return meta.Consistent, nil
 		}
@@ -687,10 +687,7 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
 			s.log.Debug("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
 			// Clean obsolete backups
-			for keyValue := range s.backup.Iter() {
-				s.repo.Del(keyValue.Key)
-				s.backup.Del(keyValue.Key)
-			}
+			s.ClearBackup()
 		}
 	}
 
@@ -701,6 +698,15 @@ func (s *Storage) Recover(meta *types.LineageMeta) (bool, chan error) {
 
 	// Fast recovery if the node is not backup and significant enough.
 	return !meta.Backup && s.diffrank.IsSignificant(meta.DiffRank), chanErr
+}
+
+func (s *Storage) ClearBackup() {
+	for keyValue := range s.backup.Iter() {
+		chunk := keyValue.Value.(*types.Chunk)
+		chunk.Body = nil
+		s.repo.Del(keyValue.Key)
+		s.backup.Del(keyValue.Key)
+	}
 }
 
 func (s *Storage) doCommit(opt *types.CommitOption) {
