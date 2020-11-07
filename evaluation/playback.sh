@@ -8,6 +8,7 @@ PWD=`dirname $0`
 DATE=`date "+%Y%m%d%H%M"`
 ENTRY="/data/$DATE"
 NODE_PREFIX="Store1VPCNode"
+PID=/tmp/infinicache.pid
 
 source $PWD/util.sh
 
@@ -37,11 +38,19 @@ function perform(){
 	#        set
 	sleep 1s
 	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $OUTPUT
-	kill -2 `cat /tmp/infinicache.pid`
+	kill -2 `cat $PID`
   # Wait for proxy cleaned up
+	TIMEOUT=60
   while [ -f /tmp/infinicache.pid ]
 	do
 		sleep 1s
+		((TIMEOUT=TIMEOUT-1))
+		if [ "$TIMEOUT" == "0" ] ; then
+			# Force kill
+			kill -9 `cat $PID`
+			rm $PID
+			break
+		fi
 	done
 
 	if [ -f $PWD/proxy.log ] ; then
