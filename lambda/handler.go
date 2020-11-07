@@ -956,7 +956,7 @@ func main() {
 
 		var input protocol.InputEvent
 		input.Sid = "dummysid"
-		input.Status = make(protocol.Status, 1)
+		input.Status = make(protocol.Status, 1, 2)
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
 		// })
@@ -1001,11 +1001,11 @@ func main() {
 		// if *cpuprofile != "" {
 		// 	f, err := os.Create(*cpuprofile)
 		// 	if err != nil {
-		// 		log.Error("could not create CPU profile: ", err)
+		// 		log.Error("could not create CPU profile: %v", err)
 		// 	}
 		// 	defer f.Close() // error handling omitted for example
 		// 	if err := pprof.StartCPUProfile(f); err != nil {
-		// 		log.Error("could not start CPU profile: ", err)
+		// 		log.Error("could not start CPU profile: %v", err)
 		// 	}
 		// 	defer pprof.StopCPUProfile()
 		// }
@@ -1119,6 +1119,8 @@ func main() {
 						readPong(ctrlClient.Reader)
 					}
 
+					<-ended
+
 					// // Control link interruption test
 					//
 					// interupted := false
@@ -1192,21 +1194,21 @@ func main() {
 					// }
 
 					// Get on recovering test
-					time.Sleep(time.Second)
-					dataClient := worker.NewClient(shortcut.Conns[1].Server)
-					dataClient.Writer.WriteMultiBulkSize(4)
-					dataClient.Writer.WriteBulkString(protocol.CMD_GET)
-					dataClient.Writer.WriteBulkString("dummy request id")
-					dataClient.Writer.WriteBulkString("1")
-					dataClient.Writer.WriteBulkString("obj-10")
-					dataClient.Writer.Flush()
+					// time.Sleep(time.Second)
+					// dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					// dataClient.Writer.WriteMultiBulkSize(4)
+					// dataClient.Writer.WriteBulkString(protocol.CMD_GET)
+					// dataClient.Writer.WriteBulkString("dummy request id")
+					// dataClient.Writer.WriteBulkString("1")
+					// dataClient.Writer.WriteBulkString("obj-10")
+					// dataClient.Writer.Flush()
 
-					dataClient.Reader.ReadBulkString() // cmd
-					dataClient.Reader.ReadBulkString() // reqid
-					dataClient.Reader.ReadBulkString() // chunk id
-					dataClient.Reader.ReadBulkString() // stream
+					// dataClient.Reader.ReadBulkString() // cmd
+					// dataClient.Reader.ReadBulkString() // reqid
+					// dataClient.Reader.ReadBulkString() // chunk id
+					// dataClient.Reader.ReadBulkString() // stream
 
-					<-ended
+					// <-ended
 
 					// // Second Invocation
 					// log.Info("Second Invocation")
@@ -1252,6 +1254,95 @@ func main() {
 					// // dataClient.Reader.ReadBulkString() // stream
 
 					// <-ended
+
+					// // Backup switching memory leak test
+					// // 1 Backup
+					// log.Info("Backup 2")
+					// input.Cmd = "ping"
+					// input.Status = protocol.Status{
+					// 	input.Status[0],
+					// 	protocol.Meta{
+					// 		2, 2, 553, 50, "cd04184c7e969140666a1a27dc253538b654b3c05628c307d41f2b3749eb4e21", 2, 553, 263, "bak=0&baks=1",
+					// 	},
+					// }
+					// invokes <- &input
+
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// <-ended
+
+					// log.Info("Store size: %d", Store.Len())
+
+					// log.Info("Backup 3")
+					// input.Cmd = "ping"
+					// input.Status = protocol.Status{
+					// 	input.Status[0],
+					// 	protocol.Meta{
+					// 		3, 2, 545, 50, "dcfde038dc254250531da9a38315ddfaa9c42b7b91023fd76a0b68140b386a57", 2, 545, 255, "bak=0&baks=1",
+					// 	},
+					// }
+					// invokes <- &input
+
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// <-ended
+
+					// log.Info("Store size: %d", Store.Len())
+
+					// log.Info("Backup 4")
+					// input.Cmd = "ping"
+					// input.Status = protocol.Status{
+					// 	input.Status[0],
+					// 	protocol.Meta{
+					// 		4, 2, 550, 50, "a4b380736d3a37cccbfb7b8512355430915d4809e813c83c6ac427134c846da0", 2, 550, 254, "bak=0&baks=1",
+					// 	},
+					// }
+					// invokes <- &input
+
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// <-ended
+
+					// log.Info("Store size: %d", Store.Len())
+
+					// log.Info("Backup 5")
+					// input.Cmd = "ping"
+					// input.Status = protocol.Status{
+					// 	input.Status[0],
+					// 	protocol.Meta{
+					// 		4, 2, 541, 50, "58f0b21ecdb37a048f73a48e333c3f92e006e14808550684a1583c77e628ef86", 2, 541, 253, "bak=0&baks=1",
+					// 	},
+					// }
+					// invokes <- &input
+
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// <-ended
+
+					// log.Info("Store size: %d", Store.Len())
+
+					// log.Info("Backup 6")
+					// input.Cmd = "ping"
+					// input.Status = protocol.Status{
+					// 	input.Status[0],
+					// 	protocol.Meta{
+					// 		5, 2, 542, 50, "1ba25926d17c1af95334088abe6e15f066d731d843646bbcff117d9c4be64750", 2, 542, 258, "bak=0&baks=1",
+					// 	},
+					// }
+					// invokes <- &input
+
+					// readPong(ctrlClient.Reader)
+					// log.Info("Ctrl PONG received.")
+
+					// <-ended
+
+					log.Info("Store size: %d", Store.Len())
+					Store.(*storage.Storage).ClearBackup()
+					log.Info("Store size after cleanup: %d", Store.Len())
 
 					// End of invocations
 					close(invokes)
@@ -1307,7 +1398,7 @@ func main() {
 					for i := 0; i < *numToInsert; i++ {
 						val := make([]byte, *sizeToInsert)
 						rand.Read(val)
-						if ret := Store.Set(fmt.Sprintf("obj-%d", int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
+						if ret := Store.Set(fmt.Sprintf("obj-%d-%d", input.Id, int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
 							log.Error("Error on set obj-%d: %v", i, ret.Error())
 						}
 					}
