@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cornelk/hashmap"
 	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/zhangjyr/hashmap"
 )
 
 const DEP_STATUS_POOLED = 0

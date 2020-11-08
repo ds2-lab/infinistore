@@ -9,7 +9,6 @@ require (
 	github.com/aws/aws-sdk-go v1.31.0
 	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/cespare/xxhash v1.1.0
-	github.com/cornelk/hashmap v1.0.1
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/gizak/termui/v3 v3.1.0
@@ -30,4 +29,5 @@ require (
 	github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7
 	github.com/stretchr/objx v0.2.0 // indirect
 	github.com/urfave/cli v1.22.1 // indirect
+	github.com/zhangjyr/hashmap v1.0.2
 )

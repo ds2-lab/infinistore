@@ -1,0 +1,29 @@
+{
+    "remotePath": "/home/ubuntu/go/src/github.com/mason-leap-lab/infinicache",
+    "host": "server.gmu.tianium.com",
+    "username": "ubuntu",
+    "password": "password",
+    "port": 22,
+    "secure": false,
+    "protocol": "sftp",
+    "uploadOnSave": false,
+    "passive": false,
+    "debug": false,
+    "privateKeyPath": "/Users/Tianium/.ssh/tianium",
+    "passphrase": null,
+    "agent": null,
+    "allow": [],
+    "ignore": [
+        "\\.vscode",
+        "\\.git",
+        "\\.DS_Store",
+        "evalution\\donwloaded",
+        "evaluation\\data"
+    ],
+    "generatedFiles": {
+        "extensionsToInclude": [
+            ""
+        ],
+        "path": ""
+    }
+}
