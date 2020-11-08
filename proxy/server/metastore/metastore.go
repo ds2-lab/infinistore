@@ -1,7 +1,7 @@
 package metastore
 
 import (
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 )
 
 type MetaPostProcess func(MetaDoPostProcess)

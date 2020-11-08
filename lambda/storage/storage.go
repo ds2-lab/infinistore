@@ -24,7 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/cespare/xxhash"
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	csync "github.com/mason-leap-lab/infinicache/common/sync"

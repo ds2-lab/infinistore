@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 

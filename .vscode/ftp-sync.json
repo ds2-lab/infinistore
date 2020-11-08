@@ -16,7 +16,9 @@
     "ignore": [
         "\\.vscode",
         "\\.git",
-        "\\.DS_Store"
+        "\\.DS_Store",
+        "evalution\\donwloaded",
+        "evaluation\\data"
     ],
     "generatedFiles": {
         "extensionsToInclude": [

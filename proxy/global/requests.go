@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 PWD=`dirname $0`
 DATA="~/go/src/github.com/mason-leap-lab/infinicache/evaluation/data"

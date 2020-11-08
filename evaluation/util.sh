@@ -39,10 +39,11 @@ function start_proxy() {
     echo "running proxy server"
     PREFIX=$1
     DASHBOARD=$2
+    DEBUG=
     if [ "$DASHBOARD" != "" ] ; then
-        echo "Run: GOMAXPROCS=36 $BINDIR/proxy -debug -prefix=$PREFIX -log=proxy.log $DASHBOARD"
+        echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -log=proxy.log $DASHBOARD"
     else
-        GOMAXPROCS=36 $BINDIR/proxy -debug -prefix=$PREFIX $DASHBOARD &
+        GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX $DASHBOARD &
     fi
 }
 

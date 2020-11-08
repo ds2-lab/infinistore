@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"

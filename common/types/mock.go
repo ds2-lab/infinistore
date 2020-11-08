@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/cornelk/hashmap"
+	"github.com/zhangjyr/hashmap"
 	mock "github.com/jordwest/mock-conn"
 )
 
