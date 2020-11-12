@@ -10,6 +10,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"syscall"
+	"time"
 
 	nanoReader "github.com/ScottMansfield/nanolog/reader"
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -98,18 +100,29 @@ func iterateDir(root string, filter *regexp.Regexp, collectors ...chan string) e
 func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
 	writeTitle(file, opts)
 	for df := range dataFiles {
-		prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
-
 		var err error
 		switch opts.processor {
 		case "csv":
+			prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
 			err = csvProcessor(df, file, prepend, opts)
 		case "nanolog":
+			prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
 			err = nanologProcessor(df, file, prepend, opts)
 		case "recovery":
+			prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
+			err = recoveryProcessor(df, file, prepend, opts)
+		case "workload":
+			fi, err := os.Stat(df)
+			if err != nil {
+				log.Warn("Failed to get stat of file %s: %v", df, err)
+				continue
+			}
+			stat_t := fi.Sys().(*syscall.Stat_t)
+			ct := time.Unix(int64(stat_t.Mtimespec.Sec), int64(0)) // Mac
+			// ct := time.Unix(int64(stat_t.Ctim.Sec), int64(0)) // Linux
+			prepend := ct.UTC().String()
 			err = recoveryProcessor(df, file, prepend, opts)
 		default:
-
 			log.Error("Unsupported processor: %s", opts.processor)
 			return
 		}
@@ -122,6 +135,8 @@ func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
 func writeTitle(f io.Writer, opts *Options) {
 	if opts.processor == "recovery" {
 		io.WriteString(f, "no,mem,numbackups,objsize,interval,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
+	} else if opts.processor == "workload" {
+		io.WriteString(f, "time,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
 	}
 }
 

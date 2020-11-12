@@ -71,4 +71,10 @@ tar -xzf downloaded/data/202011070320.tar.gz
 
 # Extract cluster data from proxy output
 cat downloaded/202011070320/simulate-400_proxy.csv | grep cluster, > downloaded/202011070320/cluster.csv
+
+# Extract billing info from cloudwatch log
+cloudwatch/parse.sh downloaded/log/202011070320
+cat downloaded/log/202011070320_bill.csv | grep invocation > downloaded/202011070320/bill.csv
+make build
+bin/preprocess -o downloaded/202011070320/recovery.csv -processor workload downloaded/data/202011070320
 ~~~
