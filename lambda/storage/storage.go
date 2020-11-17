@@ -24,12 +24,12 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/cespare/xxhash"
-	"github.com/zhangjyr/hashmap"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	csync "github.com/mason-leap-lab/infinicache/common/sync"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
+	"github.com/zhangjyr/hashmap"
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -743,7 +743,7 @@ func (s *Storage) doCommit(opt *types.CommitOption) {
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
 		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes+ssBytes)
 		collector.AddCommit(
-			types.OP_COMMIT, false, s.id, int(term),
+			start, types.OP_COMMIT, false, s.id, int(term),
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
 		opt.BytesUploaded += uint64(termBytes + ssBytes)
 		s.signalTracker <- opt
@@ -922,7 +922,7 @@ func (s *Storage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta,
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
 	s.log.Trace("recover,%d,%d,%d,%d", stop1, stop2, end, objectBytes)
 	collector.AddRecovery(
-		types.OP_RECOVERY, meta.Backup, meta.Meta.Id, meta.BackupId,
+		start, types.OP_RECOVERY, meta.Backup, meta.Meta.Id, meta.BackupId,
 		stop1, stop2, end, lineageBytes, objectBytes, len(tbds))
 	close(chanErr)
 }

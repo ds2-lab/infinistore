@@ -8,32 +8,33 @@ import (
 
 // For requests
 type PersistEntry struct {
-	Op             int
-	Backup         bool
-	Id             uint64
-	BackupId       int
-	DLineage       time.Duration    // Duration for lambda to handle request.
-	DObjects       time.Duration    // Duration for lambda to transmit response.
-	Duration       time.Duration    // Duration for lambda side latency.
-	BytesLineage   int
-	BytesObjects   int
-	Objects        int
-	Session        string
+	Time         time.Time
+	Op           int
+	Backup       bool
+	Id           uint64
+	BackupId     int
+	DLineage     time.Duration // Duration for lambda to handle request.
+	DObjects     time.Duration // Duration for lambda to transmit response.
+	Duration     time.Duration // Duration for lambda side latency.
+	BytesLineage int
+	BytesObjects int
+	Objects      int
+	Session      string
 }
 
-func AddRecovery(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
-	if addPersist(op, backup, id, backKey, d1, d2, d, b1, b2, o) {
+func AddRecovery(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
+	if addPersist(ts, op, backup, id, backKey, d1, d2, d, b1, b2, o) {
 		SaveWithOption(true) // Wait to be saved.
 	}
 }
 
-func AddCommit(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
-	addPersist(op, backup, id, backKey, d1, d2, d, b1, b2, 0)
+func AddCommit(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
+	addPersist(ts, op, backup, id, backKey, d1, d2, d, b1, b2, 0)
 }
 
-func addPersist(op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) bool {
-	if Enables & COLLECT_PERSIST > 0 {
-		Send(&PersistEntry{op, backup, id, backKey, d1, d2, d, b1, b2, o, Session.Id})
+func addPersist(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) bool {
+	if Enables&COLLECT_PERSIST > 0 {
+		Send(&PersistEntry{ts, op, backup, id, backKey, d1, d2, d, b1, b2, o, Session.Id})
 		return true
 	} else {
 		return false
@@ -41,6 +42,8 @@ func addPersist(op int, backup bool, id uint64, backKey int, d1, d2, d time.Dura
 }
 
 func (e *PersistEntry) WriteTo(buf *bytes.Buffer) {
+	buf.WriteString(strconv.FormatInt(e.Time.UnixNano(), 10))
+	buf.WriteRune(',')
 	buf.WriteString(strconv.Itoa(e.Op))
 	buf.WriteRune(',')
 	if e.Backup {
