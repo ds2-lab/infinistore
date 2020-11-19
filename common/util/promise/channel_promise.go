@@ -10,17 +10,21 @@ type ChannelPromise struct {
 	cond     chan struct{}
 	mu       sync.Mutex
 	timer    *time.Timer
-	resolved uint32
+	resolved int64
 
-	Options interface{}
+	options interface{}
 	val     interface{}
 	err     error
 }
 
-func ResolvedChannel() *ChannelPromise {
+func ResolvedChannel(rets ...interface{}) *ChannelPromise {
 	promise := NewChannelPromiseWithOptions(nil)
+	if promise.resolve(rets...) {
+		promise.resolved = time.Now().UnixNano()
+	} else {
+		promise.resolved = int64(1) // Differentiate with PromiseInit
+	}
 	close(promise.cond)
-	promise.resolved = PromiseResolved
 	return promise
 }
 
@@ -30,20 +34,20 @@ func NewChannelPromise() *ChannelPromise {
 
 func NewChannelPromiseWithOptions(opts interface{}) *ChannelPromise {
 	promise := &ChannelPromise{
-		Options: opts,
+		options: opts,
 	}
 	promise.cond = make(chan struct{})
 	return promise
 }
 
-func (p *ChannelPromise) Reset(opts interface{}) {
+func (p *ChannelPromise) Reset() {
 	p.ResetWithOptions(nil)
 }
 
 func (p *ChannelPromise) ResetWithOptions(opts interface{}) {
-	atomic.StoreUint32(&p.resolved, PromiseInit)
+	atomic.StoreInt64(&p.resolved, PromiseInit)
 	p.cond = make(chan struct{})
-	p.Options = opts
+	p.options = opts
 	p.val = nil
 	p.err = nil
 }
@@ -76,10 +80,19 @@ func (p *ChannelPromise) Close() {
 }
 
 func (p *ChannelPromise) IsResolved() bool {
-	return atomic.LoadUint32(&p.resolved) == PromiseResolved
+	return atomic.LoadInt64(&p.resolved) != PromiseInit
 }
 
-func (p *ChannelPromise) Resolve(rets ...interface{}) (*ChannelPromise, error) {
+func (p *ChannelPromise) ResolvedAt() time.Time {
+	ts := atomic.LoadInt64(&p.resolved)
+	if ts == PromiseInit {
+		return time.Time{}
+	} else {
+		return time.Unix(0, ts)
+	}
+}
+
+func (p *ChannelPromise) Resolve(rets ...interface{}) (Promise, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -87,23 +100,15 @@ func (p *ChannelPromise) Resolve(rets ...interface{}) (*ChannelPromise, error) {
 	case <-p.cond:
 		return p, ErrResolved
 	default:
-		switch len(rets) {
-		case 0:
-			break
-		case 1:
-			p.val = rets[0]
-		default:
-			p.val = rets[0]
-			if rets[1] == nil {
-				p.err = nil
-			} else {
-				p.err = rets[1].(error)
-			}
-		}
-		atomic.StoreUint32(&p.resolved, PromiseResolved)
+		p.resolve(rets...)
+		atomic.StoreInt64(&p.resolved, time.Now().UnixNano())
 		close(p.cond)
 	}
 	return p, nil
+}
+
+func (p *ChannelPromise) Options() interface{} {
+	return p.options
 }
 
 func (p *ChannelPromise) Value() interface{} {
@@ -144,4 +149,21 @@ func (p *ChannelPromise) Timeout() error {
 		}
 		return nil
 	}
+}
+
+func (p *ChannelPromise) resolve(rets ...interface{}) bool {
+	switch len(rets) {
+	case 0:
+		return false
+	case 1:
+		p.val = rets[0]
+	default:
+		p.val = rets[0]
+		if rets[1] == nil {
+			p.err = nil
+		} else {
+			p.err = rets[1].(error)
+		}
+	}
+	return true
 }

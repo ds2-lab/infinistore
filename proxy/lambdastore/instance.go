@@ -16,7 +16,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/zhangjyr/hashmap"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -25,6 +24,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/zhangjyr/hashmap"
 )
 
 const (
@@ -81,6 +81,7 @@ var (
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
+	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 	DefaultPingPayload    = []byte{}
@@ -95,10 +96,11 @@ var (
 	ErrDuplicatedSession = errors.New("session has started")
 	ErrNotCtrlLink       = errors.New("not control link")
 	ErrInstanceValidated = errors.New("instance has been validated by another connection")
+	ErrInstanceBusy      = errors.New("instance busy")
 )
 
 type InstanceManager interface {
-	Instance(uint64) (*Instance, bool)
+	Instance(uint64) *Instance
 	TryRelocate(interface{}, int) (*Instance, bool)
 	Relocate(interface{}, int) *Instance
 	Recycle(types.LambdaDeployment) error
@@ -127,7 +129,7 @@ type Instance struct {
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
 	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase        uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
-	validated    *promise.ChannelPromise
+	validated    promise.Promise
 	mu           sync.Mutex
 	closed       chan struct{}
 	coolTimer    *time.Timer
@@ -164,7 +166,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		awakeness:    INSTANCE_SLEEPING,
 		chanCmd:      make(chan types.Command, 1),
 		chanPriorCmd: make(chan types.Command, 1),
-		validated:    promise.ResolvedChannel(), // Initialize with a closed channel.
+		validated:    promise.Resolved(), // Initialize with a resolved promise.
 		closed:       make(chan struct{}),
 		coolTimer:    time.NewTimer(time.Duration(rand.Int63n(int64(WarmTimeout)) + int64(WarmTimeout)/2)), // Differentiate the time to start warming up.
 		coolTimeout:  WarmTimeout,
@@ -233,6 +235,10 @@ func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 }
 
 func (ins *Instance) Dispatch(cmd types.Command) error {
+	return ins.DispatchWithOptions(cmd, false)
+}
+
+func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) error {
 	if ins.IsClosed() {
 		return ErrInstanceClosed
 	}
@@ -245,8 +251,21 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 		return ErrInstanceClosed
 	}
 
-	ins.chanCmd <- cmd
+	select {
+	case ins.chanCmd <- cmd:
+	default:
+		if errorOnBusy {
+			return ErrInstanceBusy
+		} else {
+			ins.chanCmd <- cmd
+		}
+	}
+
 	return nil
+}
+
+func (ins *Instance) IsBusy() bool {
+	return len(ins.chanCmd) > 0
 }
 
 func (ins *Instance) WarmUp() {
@@ -584,7 +603,7 @@ func (ins *Instance) endSession(sid string) {
 	ins.sessions.Del(sid)
 }
 
-func castValidatedConnection(validated *promise.ChannelPromise) (*Connection, error) {
+func castValidatedConnection(validated promise.Promise) (*Connection, error) {
 	cn, err := validated.Result()
 	if cn == nil {
 		return nil, err
@@ -603,7 +622,8 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return nil, ErrInstanceClosed
 	}
 
-	if ins.validated.IsResolved() {
+	lastResolved := ins.validated.ResolvedAt()
+	if (lastResolved != time.Time{} && time.Since(lastResolved) >= ValidationTimeout) {
 		// For reclaimed instance, simply return the result of last validation.
 		if ins.IsReclaimed() {
 			return castValidatedConnection(ins.validated)
@@ -619,7 +639,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			ins.log.Debug("Validating...")
 			// Try invoking the lambda node.
 			// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
-			triggered := ins.tryTriggerLambda(ins.validated.Options.(*ValidateOption))
+			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
 			if triggered {
 				// Waiting to be validated
 				return castValidatedConnection(ins.validated)
@@ -719,7 +739,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 				ins.log.Error("[%v]Unexpected status.", ins)
 			}
 			return
-		} else if ins.validated.Options.(*ValidateOption).WarmUp { // Use ValidationOption of most recent validation to reflect up to date status.
+		} else if ins.validated.Options().(*ValidateOption).WarmUp { // Use ValidationOption of most recent validation to reflect up to date status.
 			// No retry for warming up.
 			// Possible reasons
 			// 1. Pong is delayed and lambda is returned without requesting for recovery, or the lambda will wait for the ending of the recovery.

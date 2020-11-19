@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -65,4 +66,22 @@ type GroupedClusterStats interface {
 
 type InstanceStats interface {
 	Status() uint64
+}
+
+type ScaleEvent struct {
+	Instance    interface{}
+	ScaleTarget int
+	Scaled      promise.Promise
+}
+
+func (evt *ScaleEvent) SetError(err error) {
+	if evt.Scaled != nil {
+		evt.Scaled.Resolve(nil, err)
+	}
+}
+
+func (evt *ScaleEvent) SetScaled() {
+	if evt.Scaled != nil {
+		evt.Scaled.Resolve()
+	}
 }

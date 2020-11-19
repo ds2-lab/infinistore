@@ -74,6 +74,40 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 	return
 }
 
+func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numAdded int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	nextID := b.id + 1
+
+	// Shortcut for insufficient number of spare instances
+	if b.activeStart.Idx()+num > b.end.Idx() {
+		bucket, err = newBucket(nextID, b.group, num)
+		if err == nil {
+			numAdded = num
+		}
+		return
+	}
+
+	// Compose new bucket consists of instances with spare capacity.
+	bucket = &Bucket{
+		id:          nextID,
+		group:       b.group,
+		log:         global.GetLogger(fmt.Sprintf("Bucket %d:", nextID)),
+		instances:   make([]*lambdastore.Instance, b.end.Idx()-b.activeStart.Idx()),
+		start:       DefaultGroupIndex(b.activeStart.Idx()),
+		activeStart: b.activeStart,
+		end:         b.end,
+		state:       BUCKET_ACTIVE,
+	}
+	copy(bucket.instances, b.instances[b.activeStart.Idx()-b.start.Idx():])
+
+	// Adjust current bucket
+	b.end = bucket.start
+	b.instances = bucket.instances[:b.activeStart.Idx()-b.start.Idx()]
+	return bucket, 0, nil
+}
+
 func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 	for i := from; i < end; i = i.Next() {
 		node := pool.GetForGroup(b.group, &BucketIndex{
@@ -160,12 +194,9 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if activeNum > len(b.instances) {
-		return b.instances[:len(b.instances)] // Force to create a new slice mapping to avoid the length being changed.
-	}
-	// Keep using latests
-	// TODO: Or we should return all available.
-	return b.instances[len(b.instances)-activeNum:]
+	// Return all actives
+	// Force to create a new slice mapping to avoid the length being changed.
+	return b.instances[b.activeStart.Idx()-b.start.Idx():]
 }
 
 // types.ClusterStatus implementation
