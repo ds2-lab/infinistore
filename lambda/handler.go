@@ -454,7 +454,7 @@ func main() {
 
 			dt := time.Since(t)
 			log.Debug("Get key:%s, chunk:%s, duration:%v, transmission:%v", key, chunkId, dt, d1)
-			collector.AddRequest(types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
+			collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		} else {
 			var respError *handlers.ResponseError
 			if ret.Error() == types.ErrNotFound {
@@ -468,7 +468,7 @@ func main() {
 			if err := errResponse.Flush(); err != nil {
 				log.Error("Error on flush: %v", err)
 			}
-			collector.AddRequest(types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
+			collector.AddRequest(t, types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
 		}
 	})
 
@@ -492,10 +492,10 @@ func main() {
 		finalize = func(ret *types.OpRet, wait bool, ds ...time.Duration) {
 			if ret == nil || !ret.IsDelayed() {
 				// Only if error
-				collector.AddRequest(types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
+				collector.AddRequest(t, types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
 			} else if wait {
 				ret.Wait()
-				collector.AddRequest(types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
+				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
 			} else {
 				go finalize(ret, true, ds...)
 				return
@@ -657,7 +657,7 @@ func main() {
 		dt := time.Since(t)
 		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
 		if retCmd == protocol.CMD_GET {
-			collector.AddRequest(types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
+			collector.AddRequest(t, types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		}
 	})
 

@@ -1,20 +1,21 @@
 package dashboard
 
 import (
-	ui "github.com/gizak/termui/v3"
 	"log"
 	"time"
 
+	ui "github.com/gizak/termui/v3"
+
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard/views"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type Dashboard struct {
 	*ui.Grid
-	ClusterView   *views.ClusterView
-	GroupedView   *views.GroupedClusterView
-	LogView       *views.LogView
+	ClusterView *views.ClusterView
+	GroupedView *views.GroupedClusterView
+	LogView     *views.LogView
 }
 
 func NewDashboard() *Dashboard {
@@ -23,10 +24,10 @@ func NewDashboard() *Dashboard {
 	}
 
 	dashboard := &Dashboard{
-		Grid: ui.NewGrid(),
+		Grid:        ui.NewGrid(),
 		ClusterView: views.NewClusterView(" Nodes "),
 		GroupedView: views.NewGroupedClusterView(" Nodes "),
-		LogView: views.NewLogView(" Logs ", global.Options.LogFile),
+		LogView:     views.NewLogView(" Logs ", global.Options.LogFile),
 	}
 
 	// Full screen
@@ -35,10 +36,10 @@ func NewDashboard() *Dashboard {
 
 	// Layout
 	dashboard.Grid.Set(
-		ui.NewRow(1.0/3,
+		ui.NewRow(4.0/5,
 			ui.NewCol(1.0/1, dashboard.GroupedView),
 		),
-		ui.NewRow(2.0/3,
+		ui.NewRow(1.0/5,
 			ui.NewCol(1.0/1, dashboard.LogView),
 		),
 	)

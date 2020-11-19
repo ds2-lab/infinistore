@@ -17,19 +17,23 @@ import (
 )
 
 var (
-	NumInitialClusters = config.NumLambdaClusters * 2
+	NumLambdaClusters = config.NumLambdaClusters
+	NumInitialBuffers = config.NumLambdaClusters
 )
 
 func init() {
-	if NumInitialClusters > config.LambdaMaxDeployments {
-		NumInitialClusters = config.LambdaMaxDeployments
+	if NumLambdaClusters > config.LambdaMaxDeployments {
+		NumLambdaClusters = config.LambdaMaxDeployments
+	}
+	if NumInitialBuffers+NumLambdaClusters > config.LambdaMaxDeployments {
+		NumInitialBuffers = config.LambdaMaxDeployments - NumLambdaClusters
 	}
 }
 
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
 	log    logger.ILogger
-	placer metastore.Placer
+	placer *metastore.DefaultPlacer
 	group  *Group
 
 	window   int
@@ -41,7 +45,7 @@ type MovingWindow struct {
 	cursor    *Bucket
 	startTime time.Time
 
-	scaler chan *lambdastore.Instance
+	scaler chan *types.ScaleEvent
 	// scaleCounter int32
 
 	mu   sync.RWMutex
@@ -62,7 +66,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 		startTime: time.Now(),
 
 		// for scaling out
-		scaler: make(chan *lambdastore.Instance, config.NumLambdaClusters),
+		scaler: make(chan *types.ScaleEvent, NumLambdaClusters),
 		// scaleCounter: 0,
 
 		done: make(chan struct{}),
@@ -73,7 +77,7 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 
 func (mw *MovingWindow) Start() error {
 	// init bucket
-	bucket, err := newBucket(0, mw.group, NumInitialClusters)
+	bucket, err := newBucket(0, mw.group, NumLambdaClusters+NumInitialBuffers)
 	if err != nil {
 		return err
 	}
@@ -164,12 +168,12 @@ func (mw *MovingWindow) ClusterStatsFromIterator(iter types.Iterator) (int, type
 }
 
 // lambdastore.InstanceManager implementation
-func (mw *MovingWindow) Instance(id uint64) (*lambdastore.Instance, bool) {
+func (mw *MovingWindow) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
 }
 
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int) *lambdastore.Instance {
-	return mw.getActiveInstanceForChunk(meta.(*metastore.Meta), chunkId)
+	return mw.placer.Place(meta.(*metastore.Meta), chunkId)
 }
 
 func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int) (*lambdastore.Instance, bool) {
@@ -199,7 +203,13 @@ func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
 
 // metastore.InstanceManger implementation
 func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
-	return mw.GetCurrentBucket().activeInstances(num)
+	instances := mw.GetCurrentBucket().activeInstances(num)
+	if len(instances) < num {
+		mw.doScale(&types.ScaleEvent{Instance: instances[len(instances)-1], ScaleTarget: num - len(instances)})
+		return mw.GetActiveInstances(num)
+	} else {
+		return instances
+	}
 }
 
 func (mw *MovingWindow) Trigger(event int, args ...interface{}) {
@@ -208,21 +218,20 @@ func (mw *MovingWindow) Trigger(event int, args ...interface{}) {
 			mw.log.Warn("Insufficient parameters for EventInsufficientStorage, 1 expected")
 			return
 		}
-		ins, ok := args[0].(*lambdastore.Instance)
+		evt, ok := args[0].(*types.ScaleEvent)
 		if !ok {
 			mw.log.Warn("Invalid parameters for EventInsufficientStorage, (*lambdastore.Instance) expected")
 			return
 		}
 		// Will not block here
 		select {
-		case mw.scaler <- ins:
+		case mw.scaler <- evt:
 		default:
 		}
 	}
 }
 
 func (mw *MovingWindow) Daemon() {
-	idx := 1
 	timer := time.NewTimer(time.Duration(config.BucketDuration) * time.Minute)
 	statTimer := time.NewTimer(1 * time.Minute) // I tried 1 second and it failed to respond to scaling. 1 minute is ok.
 	for {
@@ -236,8 +245,8 @@ func (mw *MovingWindow) Daemon() {
 			}
 			return
 		// scaling out in bucket
-		case ins := <-mw.scaler:
-			mw.doScale(ins)
+		case evt := <-mw.scaler:
+			mw.doScale(evt)
 		// for bucket rolling
 		case <-timer.C:
 			// TODO: Try migrate active instance to new bucket
@@ -248,20 +257,19 @@ func (mw *MovingWindow) Daemon() {
 			mw.mu.Lock()
 
 			// Start new bucket to fill active window.
-			bucket, err := newBucket(idx, mw.group, config.NumLambdaClusters)
+			bucket, added, err := mw.getCurrentBucketLocked().createNextBucket(NumLambdaClusters)
 			if err != nil {
 				mw.log.Error("Failed to initate new bucket: %v", err)
 				continue // No degradation or expiration if no new bucket is allocated.
 			} else {
 				// append to bucket list & append current bucket group to proxy group
 				mw.buckets = append(mw.buckets, bucket)
-				mw.numActives += len(bucket.instances)
-				mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end), bucket)
+				mw.numActives += added
+				mw.assignBackupLocked(mw.group.SubGroup(DefaultGroupIndex(bucket.end.Idx()-added), bucket.end), bucket)
 
 				// update cursor, point to active bucket
 				mw.cursor = bucket
 				mw.log.Debug("Rotation finished, latest bucket is %d", bucket.id)
-				idx++
 			}
 
 			// Degrade instances beyond active window.
@@ -354,10 +362,10 @@ func (mw *MovingWindow) ExpireCheck() {
 	mw.group.Expire(numExpiringInstances)
 }
 
-func (mw *MovingWindow) getActiveInstanceForChunk(meta *metastore.Meta, chunkId int) *lambdastore.Instance {
-	instances := mw.GetActiveInstances(meta.NumChunks)
-	return instances[chunkId%len(instances)]
-}
+// func (mw *MovingWindow) getActiveInstanceForChunk(meta *metastore.Meta, chunkId int) *lambdastore.Instance {
+// 	instances := mw.GetActiveInstances(meta.NumChunks)
+// 	return instances[chunkId%len(instances)]
+// }
 
 func (mw *MovingWindow) rand() int {
 	rand.Seed(time.Now().UnixNano())
@@ -410,7 +418,8 @@ func (mw *MovingWindow) InstanceSum(stats int) int {
 // 	meta.placerMeta.bucketIdx = mw.cursor.id
 // }
 
-func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
+func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
+	ins := evt.Instance.(*lambdastore.Instance)
 	// Test
 	// It is safe to call getCurrentBucketLocked() because the only place that may change buckets are in Daemon,
 	// which is the same place that can call doScale() and is exclusive.
@@ -431,25 +440,31 @@ func (mw *MovingWindow) doScale(ins *lambdastore.Instance) {
 	mw.log.Debug("Scaleing...")
 
 	// Scale
-	newGins, err := bucket.scale(config.NumLambdaClusters)
+	num := NumLambdaClusters
+	if evt.ScaleTarget > NumLambdaClusters {
+		num = ((evt.ScaleTarget-1)/NumLambdaClusters + 1) * NumLambdaClusters
+	}
+	newGins, err := bucket.scale(num)
 	if err != nil {
 		mw.log.Error("Failed to scale: %v", err)
+		evt.SetError(err)
 		return
 	}
-	mw.numActives += config.NumLambdaClusters
+	mw.numActives += num
 
 	mw.assignBackupLocked(newGins, bucket)
 	mw.log.Debug("Scaled")
 
 	// Flag inactive
 	bucket.flagInactive(gins)
+	evt.SetScaled()
 }
 
 func (mw *MovingWindow) testScaledLocked(gins *GroupInstance, bucket *Bucket) bool {
 	if gins.idx.(*BucketIndex).BucketId != bucket.id {
 		// Bucket is rotated
 		return false
-	} else if !bucket.shouldScale(gins, config.NumLambdaClusters) {
+	} else if !bucket.shouldScale(gins, NumLambdaClusters) {
 		// Already scaled, flag inactive
 		bucket.flagInactive(gins)
 		return false

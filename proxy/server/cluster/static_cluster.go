@@ -131,7 +131,7 @@ func (c *StaticCluster) Len() int {
 	return c.group.Len()
 }
 
-func (c *StaticCluster) Instance(id uint64) (*lambdastore.Instance, bool) {
+func (c *StaticCluster) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
 }
 

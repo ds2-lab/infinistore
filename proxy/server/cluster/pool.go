@@ -119,12 +119,12 @@ func (s *Pool) Deployment(id uint64) (types.LambdaDeployment, bool) {
 	}
 }
 
-func (s *Pool) Instance(id uint64) (*lambdastore.Instance, bool) {
+func (s *Pool) Instance(id uint64) *lambdastore.Instance {
 	got, exists := s.actives.Get(id)
 	if !exists {
-		return nil, exists
+		return nil
 	}
-	return got.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance), exists
+	return got.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance)
 }
 
 func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {

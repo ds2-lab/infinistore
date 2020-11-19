@@ -4,18 +4,20 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type InstanceManager interface {
-	// Request available instances with minimum number required.
+	// GetActiveInstances Request available instances with minimum number required.
 	GetActiveInstances(int) []*lambdastore.Instance
-	// Trigger event with code and parameter
+
+	// Trigger Trigger event with code and parameter
 	Trigger(int, ...interface{})
 }
 
 type Placer interface {
 	// Parameters: key, size, dChunks, pChunks, chunkId, chunkSize, lambdaId, sliceSize
-	NewMeta (string, int64, int64, int64, int64, int64, int, int) *Meta
+	NewMeta(string, int64, int64, int64, int64, int64, int, int) *Meta
 	GetOrInsert(string, *Meta) (*Meta, bool, MetaPostProcess)
 	Get(string, int) (*Meta, bool)
 }
@@ -52,22 +54,21 @@ func (l *DefaultPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, Met
 		newMeta.close()
 	}
 
-	instances := l.cluster.GetActiveInstances(len(meta.Placement))
-	instance := instances[int(chunkId) % len(instances)]
+	instance := l.Place(meta, int(chunkId))
 	meta.Placement[chunkId] = int(instance.Id())
 
-	instance.ChunkCounter += 1                     // TODO: Use atomic operation
+	instance.ChunkCounter += 1 // TODO: Use atomic operation
 	size := instance.IncreaseSize(meta.ChunkSize)
 	instance.KeyMap = append(instance.KeyMap, key) // TODO: Use atomic operation
 	l.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-									instance.Id(), size, instance.Meta.Capacity, chunkId, key, meta.ChunkSize)
+		instance.Id(), size, instance.Meta.Capacity, chunkId, key, meta.ChunkSize)
 
 	// Check if scaling is reqired.
 	// TODO: It is the responsibility of the cluster to handle duplicated events.
 	if instance.ChunkCounter >= global.Options.GetInstanceChunkThreshold() ||
 		size >= global.Options.GetInstanceThreshold() {
 		l.log.Debug("Insuffcient storage reported %d", instance.Id())
-		l.cluster.Trigger(EventInsufficientStorage, instance)
+		l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{Instance: instance})
 	}
 
 	return meta, got, nil
@@ -84,11 +85,20 @@ func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
 	return meta, ok
 }
 
-// TODO counter can be put in meta itself.
-// func (l *DefaultPlacer) Touch(meta *Meta) {
-// 	if int(atomic.AddInt32(&meta.placerMeta.counter, 1)) == meta.NumChunks {
-// 		l.log.Debug("before touch")
-// 		l.cluster.Touch(meta)
-// 		meta.placerMeta.counter = 0
-// 	}
-// }
+func (l *DefaultPlacer) Place(meta *Meta, chunkId int) *lambdastore.Instance {
+	instances := l.cluster.GetActiveInstances(len(meta.Placement))
+	var instance *lambdastore.Instance
+	var idx int
+	for idx = int(chunkId); idx < len(instances); idx += len(meta.Placement) {
+		ins := instances[idx]
+		if !ins.IsBusy() {
+			instance = ins
+			break
+		}
+	}
+	if instance == nil {
+		instances = l.cluster.GetActiveInstances(len(instances) + len(meta.Placement)) // Force scale
+		instance = instances[idx]
+	}
+	return instance
+}

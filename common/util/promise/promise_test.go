@@ -12,18 +12,7 @@ import (
 
 var (
 	ret = &struct{}{}
-	cnt = &Counter{}
 )
-
-type Counter struct {
-	i int
-}
-
-func (c *Counter) Add() {
-	for i := 0; i < 100000; i++ {
-		c.i++
-	}
-}
 
 func TestTypes(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -102,7 +91,7 @@ var _ = Describe("ChannelPromise", func() {
 			done.Done()
 		}()
 		runtime.Gosched()
-		
+
 		Expect(shouldNotTimeout(func() interface{} {
 			return promise.Timeout()
 		})).To(Equal(ErrTimeout))
@@ -154,7 +143,7 @@ var _ = Describe("ChannelPromise", func() {
 			promise.Resolve(ret, nil)
 			done.Done()
 		}()
-		
+
 		promise.SetTimeout(100 * time.Millisecond)
 		Expect(shouldNotTimeout(func() interface{} {
 			return promise.Timeout()

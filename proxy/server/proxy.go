@@ -133,7 +133,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// Send chunk to the corresponding lambda instance in group
 	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
-	instance, _ := p.cluster.Instance(uint64(lambdaDest))
+	instance := p.cluster.Instance(uint64(lambdaDest))
 	if err := instance.Dispatch(&types.Request{
 		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaDest),
@@ -187,8 +187,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// Validate the status of the instance
-	instance, exists := p.cluster.Instance(uint64(lambdaDest))
-	if exists {
+	instance := p.cluster.Instance(uint64(lambdaDest))
+	if instance != nil {
 		p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
 	} else if instance = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Invalid instance(%d).", lambdaDest)); instance == nil {
 		// Failed to relocate.
@@ -324,8 +324,7 @@ func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
 func (p *Proxy) dropEvicted(meta *metastore.Meta) {
 	reqId := uuid.New().String()
 	for i, lambdaId := range meta.Placement {
-		instance, exists := p.cluster.Instance(uint64(lambdaId))
-		if exists {
+		if instance := p.cluster.Instance(uint64(lambdaId)); instance != nil {
 			instance.Dispatch(&types.Request{
 				Id:    types.Id{ReqId: reqId, ChunkId: strconv.Itoa(i)},
 				InsId: uint64(lambdaId),
