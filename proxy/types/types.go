@@ -69,9 +69,17 @@ type InstanceStats interface {
 }
 
 type ScaleEvent struct {
-	Instance    interface{}
+	// BaseInstance Instance that triggers the scaling event.
+	BaseInstance interface{}
+
+	// ScaleTarget The number of instances to scale.
 	ScaleTarget int
-	Scaled      promise.Promise
+
+	// Scaled A promise object that can be used to wait for the completion of the scaling event.
+	Scaled promise.Promise
+
+	// Retire If there is insufficient space in BaseInstance, set to true to retire it.
+	Retire bool
 }
 
 func (evt *ScaleEvent) SetError(err error) {

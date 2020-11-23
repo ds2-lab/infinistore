@@ -1,10 +1,11 @@
 package lambdastore
 
 import (
-	"github.com/kelindar/binary"
 	"net/url"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/kelindar/binary"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
@@ -35,7 +36,7 @@ type Meta struct {
 	Hash string
 
 	// Sequence of snapshot.
-	SnapshotTerm    uint64
+	SnapshotTerm uint64
 
 	// Total transmission size for restoring all confirmed logs from start to SnapShotSeq.
 	SnapshotUpdates uint64
@@ -44,19 +45,24 @@ type Meta struct {
 	SnapshotSize uint64
 
 	// Flag shows that if meta is out of sync with the corresponding lambda.
-	Stale           bool
+	Stale bool
 
 	// Capacity of the instance.
 	Capacity uint64
 
-	size            uint64             // Size of the instance.
+	size uint64 // Size of the instance.
 	// chunks map[string]*ChuckMeta
 	// head ChuckMeta
 	// anchor *ChuckMeta
+	numChunks int32
 }
 
 func (m *Meta) Size() uint64 {
 	return atomic.LoadUint64(&m.size)
+}
+
+func (m *Meta) NumChunks() int {
+	return int(atomic.LoadInt32(&m.numChunks))
 }
 
 func (m *Meta) IncreaseSize(inc int64) uint64 {
@@ -65,6 +71,18 @@ func (m *Meta) IncreaseSize(inc int64) uint64 {
 
 func (m *Meta) DecreaseSize(dec int64) uint64 {
 	return atomic.AddUint64(&m.size, ^uint64(dec-1))
+}
+
+func (m *Meta) AddChunk(key string, sz int64) (num int, size uint64) {
+	num = int(atomic.AddInt32(&m.numChunks, 1))
+	size = m.IncreaseSize(sz)
+	return
+}
+
+func (m *Meta) RemoveChunk(key string, sz int64) (num int, size uint64) {
+	size = m.DecreaseSize(sz)
+	num = int(atomic.AddInt32(&m.numChunks, -1))
+	return
 }
 
 func (m *Meta) FromProtocolMeta(meta *protocol.Meta) (bool, error) {
@@ -87,7 +105,7 @@ func (m *Meta) FromProtocolMeta(meta *protocol.Meta) (bool, error) {
 }
 
 func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
-	return &protocol.Meta {
+	return &protocol.Meta{
 		Id:              id,
 		Term:            m.Term,
 		Updates:         m.Updates,

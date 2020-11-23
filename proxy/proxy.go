@@ -89,7 +89,7 @@ func main() {
 
 	// initial proxy server
 	srv := redeo.NewServer(nil)
-	prxy := server.New(false)
+	prxy := server.New()
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
 		dash.ConfigCluster(prxy.GetStatsProvider(), config.NumAvailableBuckets+1) // Show all unexpired instances + 1 expired bucket.

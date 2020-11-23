@@ -1,13 +1,12 @@
 package metastore
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
@@ -47,7 +46,7 @@ func (pm *LRUPlacerMeta) doPostProcess() {
 	pm.evicts = nil
 }
 
-func (pm *LRUPlacerMeta) confirm(chunk int64) {
+func (pm *LRUPlacerMeta) confirm(chunk int) {
 	if !pm.confirmed[chunk] {
 		pm.confirmed[chunk] = true
 		pm.numConfirmed++
@@ -85,12 +84,25 @@ func NewLRUPlacer(store *MetaStore, cluster InstanceManager) *LRUPlacer {
 	return placer
 }
 
-func (p *LRUPlacer) NewMeta(key string, size, dChunks, pChunks, chunk, chunkSize int64, lambdaId, sliceSize int) *Meta {
+func (p *LRUPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
 	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	// p.group.InitMeta(meta, sliceSize)   // Slice size is removed, we may added back later.
 	meta.Placement[chunk] = lambdaId
 	meta.lastChunk = chunk
 	return meta
+}
+
+func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command) (*Meta, MetaPostProcess, error) {
+	chunkId := newMeta.lastChunk
+	meta, _, post := p.GetOrInsert(key, newMeta)
+	if meta.Deleted {
+		return meta, post, nil
+	}
+	req := cmd.GetRequest()
+	req.InsId = meta.Placement[chunkId]
+	req.Info = meta
+
+	return meta, post, p.cluster.Instance(req.InsId).Dispatch(cmd)
 }
 
 // NewMeta will remap idx according to following logic:
@@ -151,7 +163,7 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 	// assigned := meta.slice.GetIndex(lambdaId)
 	assigned := lambdaId
 	instances := p.cluster.GetActiveInstances(len(meta.Placement))
-	instance := instances[assigned%len(instances)]
+	instance := instances[int(assigned)%len(instances)]
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunk] = assigned
 		placerMeta.confirm(chunk)
@@ -323,31 +335,31 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta) bool {
 	return found
 }
 
-func (p *LRUPlacer) dumpLRUPlacer(args ...bool) string {
-	if len(args) > 0 && args[0] {
-		return p.dump(p.objects[p.secondary])
-	} else {
-		return p.dump(p.objects[p.primary])
-	}
-}
+// func (p *LRUPlacer) dumpLRUPlacer(args ...bool) string {
+// 	if len(args) > 0 && args[0] {
+// 		return p.dump(p.objects[p.secondary])
+// 	} else {
+// 		return p.dump(p.objects[p.primary])
+// 	}
+// }
 
-func (p *LRUPlacer) dump(metas []*Meta) string {
-	if metas == nil || len(metas) < 1 {
-		return ""
-	}
+// func (p *LRUPlacer) dump(metas []*Meta) string {
+// 	if metas == nil || len(metas) < 1 {
+// 		return ""
+// 	}
 
-	elem := make([]string, len(metas)-1)
-	for i, meta := range metas[1:] {
-		if meta == nil {
-			elem[i] = "nil"
-			continue
-		}
+// 	elem := make([]string, len(metas)-1)
+// 	for i, meta := range metas[1:] {
+// 		if meta == nil {
+// 			elem[i] = "nil"
+// 			continue
+// 		}
 
-		visited := 0
-		if meta.placerMeta.(*LRUPlacerMeta).visited {
-			visited = 1
-		}
-		elem[i] = fmt.Sprintf("%s-%d", meta.Key, visited)
-	}
-	return strings.Join(elem, ",")
-}
+// 		visited := 0
+// 		if meta.placerMeta.(*LRUPlacerMeta).visited {
+// 			visited = 1
+// 		}
+// 		elem[i] = fmt.Sprintf("%s-%d", meta.Key, visited)
+// 	}
+// 	return strings.Join(elem, ",")
+// }

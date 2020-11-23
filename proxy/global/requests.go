@@ -34,9 +34,9 @@ func NewRequestCoordinator(size uintptr) *RequestCoordinator {
 	}
 }
 
-func (c *RequestCoordinator) Register(reqId string, cmd string, d int64, p int64) *RequestCounter {
+func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *RequestCounter {
 	prepared := c.pool.Get().(*RequestCounter)
-	prepared.initialized.Add(1)	// Block in case initalization is need.
+	prepared.initialized.Add(1) // Block in case initalization is need.
 
 	ret, ok := c.registry.GetOrInsert(reqId, prepared)
 	// There is potential problem with this late initialization approach!
@@ -113,8 +113,8 @@ func (c *RequestCoordinator) tryClearCounter(item interface{}) bool {
 // Counter for returned requests.
 type RequestCounter struct {
 	Cmd          string
-	DataShards   int64
-	ParityShards int64
+	DataShards   int
+	ParityShards int
 	Requests     []*types.Request
 
 	coordinator  *RequestCoordinator
@@ -164,14 +164,14 @@ func (c *RequestCounter) IsFulfilled(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsFulfilled(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 >= c.numToFulfill
+	return (status[0]&REQCNT_MASK_SUCCEED)>>32 >= c.numToFulfill
 }
 
 func (c *RequestCounter) IsLate(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsLate(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED) >> 32 > c.numToFulfill
+	return (status[0]&REQCNT_MASK_SUCCEED)>>32 > c.numToFulfill
 }
 
 func (c *RequestCounter) IsAllReturned(status ...uint64) bool {

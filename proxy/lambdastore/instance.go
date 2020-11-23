@@ -76,7 +76,7 @@ const (
 )
 
 var (
-	IM                    InstanceManager
+	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	MaxConnectTimeout     = 1 * time.Second
@@ -101,9 +101,22 @@ var (
 
 type InstanceManager interface {
 	Instance(uint64) *Instance
-	TryRelocate(interface{}, int) (*Instance, bool)
-	Relocate(interface{}, int) *Instance
 	Recycle(types.LambdaDeployment) error
+}
+
+type Relocator interface {
+	// Relocate relocate the chunk specified by the meta(interface{}) and chunkId(int).
+	// Return the instance the chunk is relocated to.
+	Relocate(interface{}, int, types.Command) (*Instance, error)
+
+	// TryRelocate Test and relocate the chunk specified by the meta(interface{}) and chunkId(int).
+	// Return the instance, trigggered or not(bool), and error if the chunk is triggered.
+	TryRelocate(interface{}, int, types.Command) (*Instance, bool, error)
+}
+
+type ClusterManager interface {
+	InstanceManager
+	Relocator
 }
 
 type ValidateOption struct {
@@ -119,11 +132,7 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
-	ChunkCounter int
-	KeyMap       []string
 
-	ctrlLink     *Connection
-	dataLink     *Connection
 	chanCmd      chan types.Command
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
@@ -136,6 +145,8 @@ type Instance struct {
 	coolTimeout  time.Duration
 
 	// Connection management
+	ctrlLink *Connection
+	dataLink *Connection
 	sessions *hashmap.HashMap
 
 	// Backup fields
@@ -172,8 +183,6 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		coolTimeout:  WarmTimeout,
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
-
-		KeyMap: make([]string, 0, 3000),
 	}
 }
 
@@ -578,7 +587,7 @@ func (ins *Instance) closeLocked() {
 	ins.log.Info("[%v]", ins)
 
 	// Recycle instance
-	IM.Recycle(ins)
+	CM.Recycle(ins)
 }
 
 func (ins *Instance) IsClosed() bool {
@@ -1104,12 +1113,6 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	return true
 }
 
-func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target *Instance) bool {
-	target.chanPriorCmd <- req // Rerouted request should not be queued again.
-	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target.Id(), req.Cmd)
-	return true
-}
-
 func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 	// Backing keys will not be relocated.
 	// If the instance is expiring or reclaimed, main repository only is affected.
@@ -1117,10 +1120,13 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	target := IM.Relocate(req.Info, req.Id.Chunk())
-	req.ToRecover(target.Id())
-	ins.log.Debug("Instance reclaimed, relocated %v to %d.", req.Key, req.InsId)
-	ins.rerouteRequestWithTarget(req, target)
+	target, err := CM.Relocate(req.Info, req.Id.Chunk(), req.ToRecover())
+	if err != nil {
+		ins.log.Warn("Instance reclaimed, tried relocated %v but failed: %v", req.Key, err)
+		return false
+	}
+
+	ins.log.Debug("Instance reclaimed, relocated %v to %d", req.Key, target.Id())
 	return true
 }
 

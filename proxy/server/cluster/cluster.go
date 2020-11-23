@@ -13,7 +13,8 @@ var (
 
 type Cluster interface {
 	lambdastore.InstanceManager
-	metastore.InstanceManager
+	lambdastore.Relocator
+	metastore.ClusterManager
 
 	Start() error
 	WaitReady()

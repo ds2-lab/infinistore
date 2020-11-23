@@ -2,12 +2,13 @@ package metastore
 
 import (
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -21,23 +22,37 @@ func init() {
 	}
 }
 
+type TestInstanceManager struct {
+	all []*lambdastore.Instance
+}
+
+func (im *TestInstanceManager) Instance(id uint64) *lambdastore.Instance {
+	return im.all[id]
+}
+
+func (im *TestInstanceManager) GetActiveInstances(int) []*lambdastore.Instance {
+	return im.all
+}
+
+func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
+
 func newTestMeta(i int) *Meta {
 	return &Meta{
-		Key: strconv.Itoa(i),
-		Placement: []int{i},
-		placerMeta: &PlacerMeta{},
+		Key:        strconv.Itoa(i),
+		Placement:  []uint64{uint64(i)},
+		placerMeta: &LRUPlacerMeta{},
 	}
 }
 
-func initPlacer(caseCode int) *Placer {
+func initPlacer(caseCode int) *LRUPlacer {
 	container = make([]*Meta, 0, 15)
-	placer := NewPlacer(nil, nil)
+	placer := NewLRUPlacer(nil, nil)
 
 	for i := 0; i < 10; i++ {
 		container = append(container, newTestMeta(i))
 		placer.AddObject(container[i])
 	}
-	switch (caseCode) {
+	switch caseCode {
 	case 1:
 		placer.NextAvailableObject(container[0])
 		for i := 0; i < 4; i++ {
@@ -50,17 +65,17 @@ func initPlacer(caseCode int) *Placer {
 	return placer
 }
 
-func initGroupPlacer(numCluster int, capacity int) *Placer {
-	group := NewGroup(numCluster)
+func initGroupPlacer(numCluster int, capacity int) *LRUPlacer {
+	im := &TestInstanceManager{all: make([]*lambdastore.Instance, numCluster)}
 	for i := 0; i < numCluster; i++ {
-		ins := lambdastore.NewInstance("TestInstance", uint64(i), false)
+		ins := lambdastore.NewInstance("TestInstance", uint64(i))
 		ins.Meta.Capacity = uint64(capacity)
-		group.Set(group.Reserve(i, ins))
+		im.all[i] = ins
 	}
-	return NewPlacer(NewMataStore(), group)
+	return NewLRUPlacer(New(), im)
 }
 
-func dumpPlacer(p *Placer, args ...bool) string {
+func dumpPlacer(p *LRUPlacer, args ...bool) string {
 	if len(args) > 0 && args[0] {
 		return dump(p.objects[p.secondary])
 	} else {
@@ -73,7 +88,7 @@ func dump(metas []*Meta) string {
 		return ""
 	}
 
-	elem := make([]string, len(metas) - 1)
+	elem := make([]string, len(metas)-1)
 	for i, meta := range metas[1:] {
 		if meta == nil {
 			elem[i] = "nil"
@@ -81,7 +96,7 @@ func dump(metas []*Meta) string {
 		}
 
 		visited := 0
-		if meta.placerMeta.visited {
+		if meta.placerMeta.(*LRUPlacerMeta).visited {
 			visited = 1
 		}
 		elem[i] = fmt.Sprintf("%s-%d", meta.Key, visited)
@@ -89,7 +104,7 @@ func dump(metas []*Meta) string {
 	return strings.Join(elem, ",")
 }
 
-func proxySimulator(incomes chan interface{}, p *Placer, done *sync.WaitGroup) {
+func proxySimulator(incomes chan interface{}, p *LRUPlacer, done *sync.WaitGroup) {
 	for income := range incomes {
 		switch m := income.(type) {
 		case *Meta:
@@ -120,8 +135,8 @@ var _ = Describe("Placer", func() {
 		Expect(found).To(Equal(true))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-1,6-1,7-1,8-1,9-1", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1", idx)))
-		Expect(container[idx].placerMeta.pos).To(Equal([2]int{5, 5}))
-		Expect(container[idx].placerMeta.swapMap).To(Equal(container[4].Placement))
+		Expect(container[idx].placerMeta.(*LRUPlacerMeta).pos).To(Equal([2]int{5, 5}))
+		Expect(container[idx].placerMeta.(*LRUPlacerMeta).swapMap).To(Equal(container[4].Placement))
 	})
 
 	It("should replace the unvisited object even the newer has been appended to the list", func() {
@@ -131,35 +146,35 @@ var _ = Describe("Placer", func() {
 
 		placer.AddObject(container[idx])
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-1,1-1,2-1,3-1,4-0,5-1,6-1,7-1,8-1,9-1,%d-1", idx)))
-		Expect(container[idx].placerMeta.pos).To(Equal([2]int{0, idx + 1}))
+		Expect(container[idx].placerMeta.(*LRUPlacerMeta).pos).To(Equal([2]int{0, idx + 1}))
 
 		found := placer.NextAvailableObject(container[idx])
 		Expect(found).To(Equal(true))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-1,6-1,7-1,8-1,9-1,nil", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1", idx)))
-		Expect(container[idx].placerMeta.pos).To(Equal([2]int{5, 5}))
-		Expect(container[idx].placerMeta.swapMap).To(Equal(container[4].Placement))
+		Expect(container[idx].placerMeta.(*LRUPlacerMeta).pos).To(Equal([2]int{5, 5}))
+		Expect(container[idx].placerMeta.(*LRUPlacerMeta).swapMap).To(Equal(container[4].Placement))
 	})
 
 	It("should a second call and compact works if the first call failed", func() {
 		placer := initPlacer(1)
 		idx := len(container)
-		container = append(container, newTestMeta(idx), newTestMeta(idx + 1))
+		container = append(container, newTestMeta(idx), newTestMeta(idx+1))
 
 		placer.AddObject(container[idx])
 		placer.NextAvailableObject(container[idx])
 
-		found := placer.NextAvailableObject(container[idx + 1])
+		found := placer.NextAvailableObject(container[idx+1])
 		Expect(found).To(Equal(false))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0,nil", idx)))
 
-		found = placer.NextAvailableObject(container[idx + 1])
+		found = placer.NextAvailableObject(container[idx+1])
 		Expect(found).To(Equal(true))
-		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("%d-1,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0", idx + 1, idx)))
-		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("%d-1", idx + 1)))
-		Expect(container[idx + 1].placerMeta.pos).To(Equal([2]int{1, 1}))
-		Expect(container[idx + 1].placerMeta.swapMap).To(Equal(container[0].Placement))
+		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("%d-1,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0", idx+1, idx)))
+		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("%d-1", idx+1)))
+		Expect(container[idx+1].placerMeta.(*LRUPlacerMeta).pos).To(Equal([2]int{1, 1}))
+		Expect(container[idx+1].placerMeta.(*LRUPlacerMeta).swapMap).To(Equal(container[0].Placement))
 	})
 
 	It("should post process callback works", func() {
@@ -169,9 +184,9 @@ var _ = Describe("Placer", func() {
 		}
 
 		meta := newTestMeta(1)
-		meta.placerMeta.evicts = newTestMeta(2)
-		meta.placerMeta.once = &sync.Once{}
-		meta.placerMeta.postProcess(cb)
+		meta.placerMeta.(*LRUPlacerMeta).evicts = newTestMeta(2)
+		meta.placerMeta.(*LRUPlacerMeta).once = &sync.Once{}
+		meta.placerMeta.(*LRUPlacerMeta).postProcess(cb)
 
 		Expect(called).To(Equal("2"))
 	})
@@ -197,7 +212,7 @@ var _ = Describe("Placer", func() {
 		for i := 0; i < n; i++ {
 			for j := 0; j < shards; j++ {
 				lambdaId := sess % numCluster
-				queues[lambdaId] <- placer.NewMeta(strconv.Itoa(i), numCluster, shards, j, lambdaId, int64(chunkSize))
+				queues[lambdaId] <- placer.NewMeta(strconv.Itoa(i), int64(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0)
 				sess++
 			}
 		}
@@ -217,7 +232,7 @@ var _ = Describe("Placer", func() {
 		shards := 6
 		chunkSize := 400
 
-		placer := initGroupPlacer(numCluster * 2, capacity)
+		placer := initGroupPlacer(numCluster*2, capacity)
 		queues := make([]chan interface{}, numCluster)
 		var simulators sync.WaitGroup
 		for i := 0; i < numCluster; i++ {
@@ -238,7 +253,7 @@ var _ = Describe("Placer", func() {
 						fmt.Printf("Set %d@%s: %v\n", m.lastChunk, meta.Key, meta.Placement)
 						conns.Done()
 					}
-				}(placer.NewMeta(strconv.Itoa(i), numCluster, shards, j, lambdaId, int64(chunkSize)))
+				}(placer.NewMeta(strconv.Itoa(i), int64(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0))
 				sess++
 			}
 		}
@@ -252,7 +267,7 @@ var _ = Describe("Placer", func() {
 		meta, ok := placer.Get("1", 0)
 		Expect(ok).To(Equal(true))
 		Expect(meta.Key).To(Equal("1"))
-		Expect(meta.placerMeta.confirmed).To(Equal([]bool{true, true, true, true, true, true}))
+		Expect(meta.placerMeta.(*LRUPlacerMeta).confirmed).To(Equal([]bool{true, true, true, true, true, true}))
 		Expect(meta.Placement).To(Equal(Placement{16, 17, 18, 19, 10, 11}))
 	})
 

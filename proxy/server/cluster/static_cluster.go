@@ -135,13 +135,13 @@ func (c *StaticCluster) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
 }
 
-func (c *StaticCluster) Relocate(obj interface{}, chunk int) *lambdastore.Instance {
+func (c *StaticCluster) Relocate(obj interface{}, chunk int, cmd types.Command) (*lambdastore.Instance, error) {
 	// Not support.
-	return nil
+	return nil, ErrUnsupported
 }
 
-func (c *StaticCluster) TryRelocate(o interface{}, chunkId int) (*lambdastore.Instance, bool) {
-	return nil, false
+func (c *StaticCluster) TryRelocate(o interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, bool, error) {
+	return nil, false, ErrUnsupported
 }
 
 func (c *StaticCluster) Recycle(ins types.LambdaDeployment) error {
