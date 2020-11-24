@@ -262,12 +262,13 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 			return ErrInstanceClosed
 		}
 
+		ins.wgChanCmd.Add(1)
 		select {
 		case ins.chanCmd <- cmd:
-			ins.wgChanCmd.Add(1)
 			ins.mu.Unlock()
 			return nil
 		default:
+			ins.wgChanCmd.Done()
 		}
 
 		// Avoid channel get blocked in the mutex
