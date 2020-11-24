@@ -19,5 +19,3 @@ function perform(){
 
 mkdir -p $PWD/$ENTRY
 perform
-
-mv $PWD/log $PWD/$ENTRY.log

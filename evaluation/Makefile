@@ -40,7 +40,7 @@ playback-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 400 10 2 1 -enable-dashboard 1>./log 2>&1 &
 	tail -f ./log
 
-start-server:
+start-server: build
 	./server.sh 1>./log 2>&1 &
 
 stop-server:
