@@ -335,7 +335,7 @@ func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
 	instance := conn.instance
 	if instance == nil {
-		// Lock up lambda instance
+		// Look up lambda instance
 		instance, _ = IM.Instance(uint64(storeId))
 	}
 	if instance == nil {
