@@ -643,13 +643,8 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return nil, ErrInstanceClosed
 	}
 
-<<<<<<< HEAD
 	lastResolved := ins.validated.ResolvedAt()
 	if (lastResolved != time.Time{} && time.Since(lastResolved) >= ValidationTimeout) {
-=======
-	if ins.validated.IsResolved() {
-		// REVIEW: For reclaimed yet not closed instance, requests can be control request or requests of backing instances.
->>>>>>> develop
 		// For reclaimed instance, simply return the result of last validation.
 		// if ins.IsReclaimed() {
 		// 	return castValidatedConnection(ins.validated)
