@@ -261,7 +261,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		}
 
 		// wait to be inserted and continue after select
-		ins.chanCmd <- cmd:
+		ins.chanCmd <- cmd
 	}
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
