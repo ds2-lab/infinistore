@@ -134,6 +134,7 @@ type Instance struct {
 	Meta
 
 	chanCmd      chan types.Command
+	wgChanCmd    sync.WaitGroup
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
 	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
@@ -252,25 +253,31 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		return ErrInstanceClosed
 	}
 
-	// Ensure atomicity
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
+	for {
+		// Ensure atomicity
+		ins.mu.Lock()
 
-	if ins.IsClosed() {
-		return ErrInstanceClosed
-	}
+		if ins.IsClosed() {
+			ins.mu.Unlock()
+			return ErrInstanceClosed
+		}
 
-	select {
-	case ins.chanCmd <- cmd:
-	default:
+		select {
+		case ins.chanCmd <- cmd:
+			ins.wgChanCmd.Add(1)
+			ins.mu.Unlock()
+			return nil
+		default:
+		}
+
+		// Avoid channel get blocked in the mutex
+		ins.mu.Unlock()
 		if errorOnBusy {
 			return ErrInstanceBusy
 		} else {
-			ins.chanCmd <- cmd
+			ins.wgChanCmd.Wait()
 		}
 	}
-
-	return nil
 }
 
 func (ins *Instance) IsBusy() bool {
@@ -300,19 +307,24 @@ func (ins *Instance) HandleRequests() {
 	for {
 		select {
 		case <-ins.closed:
+			// Handle rest commands in channels
+			close(ins.chanPriorCmd)
+			for cmd := range ins.chanPriorCmd {
+				ins.handleRequest(cmd)
+			}
+			close(ins.chanCmd)
+			for cmd := range ins.chanCmd {
+				ins.wgChanCmd.Wait()
+				ins.handleRequest(cmd)
+			}
 			return
 		case cmd := <-ins.chanPriorCmd: // Priority queue get
 			ins.handleRequest(cmd)
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
+			ins.wgChanCmd.Wait()
 			// Drain priority channel first.
 			for len(ins.chanPriorCmd) > 0 {
 				ins.handleRequest(<-ins.chanPriorCmd)
-				// Check closure.
-				select {
-				case <-ins.closed:
-					return
-				default:
-				}
 			}
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
@@ -631,12 +643,17 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return nil, ErrInstanceClosed
 	}
 
+<<<<<<< HEAD
 	lastResolved := ins.validated.ResolvedAt()
 	if (lastResolved != time.Time{} && time.Since(lastResolved) >= ValidationTimeout) {
+=======
+	if ins.validated.IsResolved() {
+		// REVIEW: For reclaimed yet not closed instance, requests can be control request or requests of backing instances.
+>>>>>>> develop
 		// For reclaimed instance, simply return the result of last validation.
-		if ins.IsReclaimed() {
-			return castValidatedConnection(ins.validated)
-		}
+		// if ins.IsReclaimed() {
+		// 	return castValidatedConnection(ins.validated)
+		// }
 
 		// Not validating. Validate...
 		ins.validated.ResetWithOptions(opt)
@@ -963,11 +980,13 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 	} else if flags&protocol.PONG_RECLAIMED > 0 {
 		// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
 		atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
-		ins.log.Info("Reclaimed")
 		// We can close the instance if it is not backing any instance.
 		if !ins.IsBacking(true) {
+			ins.log.Info("Reclaimed")
 			ins.closeLocked()
 			return conn, nil
+		} else {
+			ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
 		}
 	}
 
@@ -1047,7 +1066,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Check lambda status first
 		validateStart := time.Now()
 		// Once active connection is confirmed, keep awake on serving.
-		ctrlLink, _ := ins.Validate(&ValidateOption{Command: cmd})
+		ctrlLink, err := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
 		// Only after validated, we know whether the instance is reclaimed.
@@ -1057,11 +1076,11 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// 2. Report not found
 		if cmd.String() == protocol.CMD_GET && ins.IsReclaimed() && ins.relocateGetRequest(cmd.GetRequest()) {
 			return
-		}
-
-		// Handle errors
-		if ctrlLink == nil {
-			// Check if link is valid, nil if instance get closed
+		} else if err != nil {
+			// Handle errors
+			if req, ok := cmd.(*types.Request); ok {
+				req.SetResponse(err)
+			}
 			return
 		}
 
