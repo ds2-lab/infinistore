@@ -472,7 +472,7 @@ func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
 	mw.numActives += num
 
 	mw.assignBackupLocked(newGins, bucket)
-	mw.log.Debug("Scaled bucket %d by %d out of %d, trigger: %d", bucket.id, num, ins.Id(), lastLen, ins.Id())
+	mw.log.Debug("Scaled bucket %d by %d out of %d, trigger: %d", bucket.id, num, ins.Id(), lastLen)
 
 	// Flag inactive
 	if evt.Retire {
