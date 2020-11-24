@@ -12,26 +12,43 @@ var (
 		},
 	}
 	emptyPlacement = make(Placement, 100)
+
+	InvalidPlacement = ^uint64(0)
 )
 
 type Meta struct {
 	Key       string
 	Size      int64
-	DChunks   int64
-	PChunks   int64
+	DChunks   int
+	PChunks   int
 	NumChunks int
 	Placement
 	ChunkSize int64
 	Reset     bool
 	Deleted   bool
 
-	Balanced   int32
 	placerMeta interface{}
-	lastChunk  int64
+	lastChunk  int
 	mu         sync.Mutex
 }
 
-func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
+func NewEmptyMeta() *Meta {
+	meta := metaPool.Get().(*Meta)
+	meta.Key = ""
+	meta.Size = 0
+	meta.DChunks = 0
+	meta.PChunks = 0
+	meta.NumChunks = 0
+	meta.Placement = nil
+	meta.ChunkSize = 0
+	meta.Deleted = false
+	meta.Reset = false
+	meta.placerMeta = nil
+
+	return meta
+}
+
+func NewMeta(key string, size int64, d, p int, chunkSize int64) *Meta {
 	meta := metaPool.Get().(*Meta)
 	meta.Key = key
 	meta.Size = size
@@ -41,8 +58,7 @@ func NewMeta(key string, size, d, p, chunkSize int64) *Meta {
 	meta.Placement = initPlacement(meta.Placement, meta.NumChunks)
 	meta.ChunkSize = chunkSize
 	meta.Deleted = false
-	meta.Balanced = 0
-
+	meta.Reset = false
 	meta.placerMeta = nil
 
 	return meta
@@ -56,11 +72,11 @@ func (m *Meta) ChunkKey(chunkId int) string {
 	return fmt.Sprintf("%d@%s", chunkId, m.Key)
 }
 
-func (m *Meta) GetPlace(chunkId int) int {
+func (m *Meta) GetPlace(chunkId int) uint64 {
 	return m.Placement[chunkId]
 }
 
-type Placement []int
+type Placement []uint64
 
 func initPlacement(p Placement, sz int) Placement {
 	if p == nil && sz == 0 {

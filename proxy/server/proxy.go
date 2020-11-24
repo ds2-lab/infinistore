@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,12 +25,10 @@ type Proxy struct {
 	log     logger.ILogger
 	cluster cluster.Cluster
 	placer  metastore.Placer
-
-	ready sync.WaitGroup
 }
 
 // initial lambda group
-func New(replica bool) *Proxy {
+func New() *Proxy {
 	p := &Proxy{
 		log: global.GetLogger("Proxy: "),
 	}
@@ -39,7 +36,7 @@ func New(replica bool) *Proxy {
 	case config.StaticCluster:
 		p.cluster = cluster.NewStaticCluster(config.NumLambdaClusters)
 	default:
-		p.cluster = cluster.NewMovingWindow(10, 1)
+		p.cluster = cluster.NewMovingWindow()
 	}
 	p.placer = p.cluster.GetPlacer()
 
@@ -49,7 +46,7 @@ func New(replica bool) *Proxy {
 		p.log.Error("Failed to start cluster: %v", err)
 	}
 
-	lambdastore.IM = p.cluster
+	lambdastore.CM = p.cluster
 
 	return p
 }
@@ -109,48 +106,41 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Start counting time.
 	collectEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano())
 
-	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.placer.NewMeta(
-		key, size, dataChunks, parityChunks, dChunkId, int64(bodyStream.Len()), int(lambdaId), int(randBase))
-
-	meta, _, postProcess := p.placer.GetOrInsert(key, prepared)
-	if meta.Deleted {
-		// Object may be evicted in some cases:
-		// 1: Some chunks were set.
-		// 2: Placer evicted this object (unlikely).
-		// 3: We got evicted meta.
-		w.AppendErrorf("KEY %s@%s not set to lambda store, may got evicted before all chunks are set.", chunkId, key)
-		w.Flush()
-		return
-	}
-	if postProcess != nil {
-		postProcess(p.dropEvicted)
-	}
-	chunkKey := meta.ChunkKey(int(dChunkId))
-	lambdaDest := meta.Placement[dChunkId]
-
-	p.log.Debug("chunkId id is %v, placement is %v", chunkId, meta.Placement)
-
-	// Send chunk to the corresponding lambda instance in group
-	p.log.Debug("Requesting to set %s: %d", chunkKey, lambdaDest)
-	instance := p.cluster.Instance(uint64(lambdaDest))
-	if err := instance.Dispatch(&types.Request{
+		key, size, int(dataChunks), int(parityChunks), int(dChunkId), int64(bodyStream.Len()), uint64(lambdaId), int(randBase))
+	chunkKey := prepared.ChunkKey(int(dChunkId))
+	req := &types.Request{
 		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
-		InsId:          uint64(lambdaDest),
+		InsId:          uint64(lambdaId),
 		Cmd:            protocol.CMD_SET,
 		Key:            chunkKey,
 		BodyStream:     bodyStream,
 		Client:         client,
 		CollectorEntry: collectEntry,
-		Info:           meta,
-	}); err != nil {
-		w.AppendErrorf("%v", err)
+		Info:           prepared,
+	}
+
+	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
+	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
+	if err != nil {
+		w.AppendError(err.Error())
+		w.Flush()
+		return
+	} else if meta.Deleted {
+		// Object may be evicted in some cases:
+		// 1: Some chunks were set.
+		// 2: Placer evicted this object (unlikely).
+		// 3: We got evicted meta.
+		w.AppendErrorf("KEY %s not set to lambda store, may got evicted before all chunks are set.", chunkKey)
 		w.Flush()
 		return
 	}
-	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is ", reqId, ", chunkId is ", chunkId, ", lambdaStore Id is", lambdaId)
-	// temp, _ := p.placer.Get(key, int(dChunkId))
-	// p.log.Debug("get test placement is %v", temp.Placement)
+
+	if postProcess != nil {
+		postProcess(p.dropEvicted)
+		// continue
+	}
+	p.log.Debug("Requested to set %s to node %d", chunkKey, meta.Placement[dChunkId])
 }
 
 // HandleGet "get chunk" handler
@@ -185,23 +175,11 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		CollectorEntry: collectorEntry,
 		Info:           meta,
 	}
-
-	// Validate the status of the instance
-	instance := p.cluster.Instance(uint64(lambdaDest))
-	if instance != nil {
-		p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
-	} else if instance = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Invalid instance(%d).", lambdaDest)); instance == nil {
-		// Failed to relocate.
-		w.AppendNil()
-		w.Flush()
-		return
-	}
-
 	// Update counter
 	counter.Requests[dChunkId] = req
 
 	// Send request to lambda channel
-	if counter.IsFulfilled() || instance.IsReclaimed() {
+	if counter.IsFulfilled() {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
 		status := counter.AddReturned(int(dChunkId))
@@ -209,20 +187,17 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		counter.ReleaseIfAllReturned(status)
 		return
 	}
-	// Dispatch
-	if err := instance.Dispatch(req); err != nil {
-		// Err if instance is closed, relocate.
-		if instance = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("%s(%d).", err, lambdaDest)); instance == nil {
-			// Failed to relocate.
-			w.AppendNil()
-			w.Flush()
-		}
 
-		if err := instance.Dispatch(req); err != nil {
-			// This is unlikely, abandon
+	// Validate the status of the instance
+	instance := p.cluster.Instance(uint64(lambdaDest))
+	if instance == nil || instance.IsReclaimed() || instance.Dispatch(req) != nil {
+		// In both case, the instance can be closed, try relocate.
+		_, err := p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) closed.", lambdaDest))
+		if err != nil {
+			// If relocating still fails, abandon.
 			w.AppendNil()
 			w.Flush()
-			p.log.Warn("%s(%d). Failed to request %s.", err, instance.Id(), chunkKey)
+			p.log.Warn("Failed to request %s: %v", chunkKey, err)
 		}
 	}
 }
@@ -270,26 +245,20 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		if wrapper.Request.Cmd == protocol.CMD_RECOVER {
 			if wrapper.Request.Changes&types.CHANGE_PLACEMENT > 0 {
 				meta := wrapper.Request.Info.(*metastore.Meta)
-				meta.Placement[rsp.Id.Chunk()] = int(wrapper.Request.InsId)
+				meta.Placement[rsp.Id.Chunk()] = wrapper.Request.InsId
 				p.log.Debug("Relocated %v to %d.", wrapper.Request.Key, wrapper.Request.InsId)
 			}
 		}
 
 		// Async logic
 		if wrapper.Request.Cmd == protocol.CMD_GET {
-			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
-			instance, ok := p.cluster.TryRelocate(wrapper.Request.Info, wrapper.Request.Id.Chunk())
-			if !ok {
-				return
-			}
+			// Build control command
 			recoverReqId := uuid.New().String()
-			p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), instance.Id())
-
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
 				Request: &types.Request{
-					Id:         types.Id{ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
-					InsId:      instance.Id(),
+					Id: types.Id{ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
+					// InsId:      wrapper.Request,      // Leave empty, the cluster will set it on relocating.
 					Cmd:        protocol.CMD_RECOVER,
 					RetCommand: protocol.CMD_RECOVER,
 					BodySize:   wrapper.Request.BodySize,
@@ -299,8 +268,16 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 				},
 				Callback: p.handleRecoverCallback,
 			}
-			if err := instance.Dispatch(control); err == nil {
+
+			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
+			instance, triggered, err := p.cluster.TryRelocate(wrapper.Request.Info, wrapper.Request.Id.Chunk(), control)
+			if !triggered {
+				// pass
+			} else if err != nil {
+				p.log.Debug("Relocation triggered. Failed to relocate %s(%d): %v", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), err)
+			} else {
 				global.ReqCoordinator.RegisterControl(recoverReqId, control)
+				p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), instance.Id())
 			}
 		}
 		// Use more general way to deal error
@@ -317,7 +294,7 @@ func (p *Proxy) CollectData() {
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
 	instance := arg.(*lambdastore.Instance)
-	ctrl.Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
+	ctrl.Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = instance.Id()
 	p.log.Debug("async updated instance %v", int(instance.Id()))
 }
 
@@ -336,18 +313,14 @@ func (p *Proxy) dropEvicted(meta *metastore.Meta) {
 	p.log.Warn("Evict %s", meta.Key)
 }
 
-func (p *Proxy) getPlacementFromRequest(req *types.Request) int {
+func (p *Proxy) getPlacementFromRequest(req *types.Request) uint64 {
 	return req.Info.(*metastore.Meta).Placement[req.Id.Chunk()]
 }
 
-func (p *Proxy) relocate(req *types.Request, meta *metastore.Meta, chunk int, key string, reason string) *lambdastore.Instance {
-	instance := p.cluster.Relocate(meta, chunk)
-	if instance == nil {
-		p.log.Warn("%s Failed to relocate %s. This is unlikely, please check the cluster implementation.", reason, key)
-	} else {
-		// Update fields
-		req.ToRecover(instance.Id())
+func (p *Proxy) relocate(req *types.Request, meta *metastore.Meta, chunk int, key string, reason string) (*lambdastore.Instance, error) {
+	instance, err := p.cluster.Relocate(meta, chunk, req.ToRecover())
+	if err == nil {
 		p.log.Debug("%s Requesting to relocate and recover %s: %d", reason, key, instance.Id())
 	}
-	return instance
+	return instance, err
 }

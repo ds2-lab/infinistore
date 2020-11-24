@@ -93,8 +93,7 @@ func (req *Request) PrepareForDel(conn Conn) {
 	req.conn = conn
 }
 
-func (req *Request) ToRecover(toInsId uint64) *Request {
-	req.InsId = toInsId
+func (req *Request) ToRecover() *Request {
 	req.Cmd = protocol.CMD_RECOVER
 	req.RetCommand = protocol.CMD_GET
 	req.Changes = req.Changes & CHANGE_PLACEMENT

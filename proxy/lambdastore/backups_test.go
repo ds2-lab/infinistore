@@ -1,11 +1,12 @@
 package lambdastore_test
 
 import (
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+	"log"
 	"math/rand"
 	"time"
-	"log"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 
 	. "github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
@@ -14,7 +15,7 @@ func newBackups(bak, cand int) *Backups {
 	backups := &Backups{}
 	candidates := make([]*Instance, cand)
 	for i := 0; i < cand; i++ {
-		candidates[i] = NewInstance("Test", uint64(i), false)
+		candidates[i] = NewInstance("Test", uint64(i))
 	}
 	backups.Reset(bak, candidates)
 	return backups

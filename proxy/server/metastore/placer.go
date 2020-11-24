@@ -7,7 +7,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
-type InstanceManager interface {
+type ClusterManager interface {
 	// GetActiveInstances Request available instances with minimum number required.
 	GetActiveInstances(int) []*lambdastore.Instance
 
@@ -15,12 +15,19 @@ type InstanceManager interface {
 	Trigger(int, ...interface{})
 }
 
+type InstanceManager interface {
+	lambdastore.InstanceManager
+	ClusterManager
+}
+
 type Placer interface {
 	// Parameters: key, size, dChunks, pChunks, chunkId, chunkSize, lambdaId, sliceSize
-	NewMeta(string, int64, int64, int64, int64, int64, int, int) *Meta
-	GetOrInsert(string, *Meta) (*Meta, bool, MetaPostProcess)
+	NewMeta(string, int64, int, int, int, int64, uint64, int) *Meta
+	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
 }
+
+type MetaInitializer func(meta *Meta)
 
 type DefaultPlacer struct {
 	metaStore *MetaStore
@@ -37,41 +44,30 @@ func NewDefaultPlacer(store *MetaStore, cluster InstanceManager) *DefaultPlacer 
 	return placer
 }
 
-func (l *DefaultPlacer) NewMeta(key string, size, dChunks, pChunks, chunkId, chunkSize int64, lambdaId, sliceSize int) *Meta {
+func (l *DefaultPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunkId int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
 	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	meta.Placement[chunkId] = lambdaId
 	meta.lastChunk = chunkId
 	return meta
 }
 
-func (l *DefaultPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostProcess) {
-	//lambdaId from client
+func (l *DefaultPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command) (*Meta, MetaPostProcess, error) {
 	chunkId := newMeta.lastChunk
-	//lambdaId := newMeta.Placement[chunkId]
 
 	meta, got, _ := l.metaStore.GetOrInsert(key, newMeta)
 	if got {
 		newMeta.close()
 	}
+	cmd.GetRequest().Info = meta
 
-	instance := l.Place(meta, int(chunkId))
-	meta.Placement[chunkId] = int(instance.Id())
-
-	instance.ChunkCounter += 1 // TODO: Use atomic operation
-	size := instance.IncreaseSize(meta.ChunkSize)
-	instance.KeyMap = append(instance.KeyMap, key) // TODO: Use atomic operation
-	l.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-		instance.Id(), size, instance.Meta.Capacity, chunkId, key, meta.ChunkSize)
-
-	// Check if scaling is reqired.
-	// TODO: It is the responsibility of the cluster to handle duplicated events.
-	if instance.ChunkCounter >= global.Options.GetInstanceChunkThreshold() ||
-		size >= global.Options.GetInstanceThreshold() {
-		l.log.Debug("Insuffcient storage reported %d", instance.Id())
-		l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{Instance: instance})
+	instance, err := l.Place(meta, chunkId, cmd)
+	if err != nil {
+		meta.Placement[chunkId] = InvalidPlacement
+		return meta, nil, err
 	}
 
-	return meta, got, nil
+	meta.Placement[chunkId] = instance.Id()
+	return meta, nil, nil
 }
 
 func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
@@ -85,20 +81,42 @@ func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
 	return meta, ok
 }
 
-func (l *DefaultPlacer) Place(meta *Meta, chunkId int) *lambdastore.Instance {
+func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
+	test := chunkId
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
-	var instance *lambdastore.Instance
-	var idx int
-	for idx = int(chunkId); idx < len(instances); idx += len(meta.Placement) {
-		ins := instances[idx]
-		if !ins.IsBusy() {
-			instance = ins
-			break
+	for {
+		if test > len(instances) {
+			instances = l.cluster.GetActiveInstances(len(instances) + len(meta.Placement)) // Force scale
+			// Continue and test in next iteration.
+			continue
+		}
+
+		ins := instances[test]
+		cmd.GetRequest().InsId = ins.Id()
+		if ins.IsBusy() {
+			// Try next group
+			test += len(meta.Placement)
+		} else if err := ins.DispatchWithOptions(cmd, true); err == lambdastore.ErrInstanceBusy {
+			// Try next group
+			test += len(meta.Placement)
+		} else if err != nil {
+			return nil, err
+		} else {
+			// Placed successfully
+			key := meta.ChunkKey(chunkId)
+			numChunks, size := ins.AddChunk(key, meta.ChunkSize)
+			l.log.Debug("Lambda %d size updated: %d of %d (key:%s, Δ:%d, chunks:%d).",
+				ins.Id(), size, ins.Meta.Capacity, key, meta.ChunkSize, numChunks)
+
+			// Check if scaling is reqired.
+			// NOTE: It is the responsibility of the cluster to handle duplicated events.
+			if numChunks >= global.Options.GetInstanceChunkThreshold() ||
+				size >= global.Options.GetInstanceThreshold() {
+				l.log.Debug("Insuffcient storage reported %d", ins.Id())
+				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true})
+			}
+
+			return ins, nil
 		}
 	}
-	if instance == nil {
-		instances = l.cluster.GetActiveInstances(len(instances) + len(meta.Placement)) // Force scale
-		instance = instances[idx]
-	}
-	return instance
 }

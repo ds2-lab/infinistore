@@ -7,6 +7,8 @@ prepare:
 
 build: prepare
 	go build -o bin/proxy ../proxy/
+
+build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
