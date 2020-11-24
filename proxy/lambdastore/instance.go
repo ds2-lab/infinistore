@@ -247,13 +247,14 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 			return ErrInstanceClosed
 		}
 
+		ins.wgChanCmd.Add(1)
 		select {
 		case ins.chanCmd <- cmd:
-			ins.wgChanCmd.Add(1)
 			ins.mu.Unlock()
 			return nil
 		default:
 			// Channel blocked: buffer is full.
+			ins.wgChanCmd.Done()
 		}
 
 		// Wait for unblock and try again
