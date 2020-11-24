@@ -134,7 +134,6 @@ type Instance struct {
 	Meta
 
 	chanCmd      chan types.Command
-	wgChanCmd    sync.WaitGroup
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
 	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
@@ -253,32 +252,25 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		return ErrInstanceClosed
 	}
 
-	for {
-		// Ensure atomicity
-		ins.mu.Lock()
-
-		if ins.IsClosed() {
-			ins.mu.Unlock()
-			return ErrInstanceClosed
-		}
-
-		ins.wgChanCmd.Add(1)
-		select {
-		case ins.chanCmd <- cmd:
-			ins.mu.Unlock()
-			return nil
-		default:
-			ins.wgChanCmd.Done()
-		}
-
-		// Avoid channel get blocked in the mutex
-		ins.mu.Unlock()
+	select {
+	case ins.chanCmd <- cmd:
+		// continue after select
+	default:
 		if errorOnBusy {
 			return ErrInstanceBusy
-		} else {
-			ins.wgChanCmd.Wait()
 		}
+
+		// wait to be inserted and continue after select
+		ins.chanCmd <- cmd:
 	}
+
+	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
+	if ins.IsClosed() {
+		ins.cleanCmdChannel(ins.chanCmd)
+	}
+
+	// Once the cmd is sent to chanCmd, HandleRequests() or cleanCmdChannel() will handle the possible error.
+	return nil
 }
 
 func (ins *Instance) IsBusy() bool {
@@ -309,21 +301,14 @@ func (ins *Instance) HandleRequests() {
 		select {
 		case <-ins.closed:
 			// Handle rest commands in channels
-			close(ins.chanPriorCmd)
-			for cmd := range ins.chanPriorCmd {
-				ins.handleRequest(cmd)
-			}
-			close(ins.chanCmd)
-			for cmd := range ins.chanCmd {
-				ins.wgChanCmd.Done()
-				ins.handleRequest(cmd)
-			}
+			ins.cleanCmdChannel(ins.chanPriorCmd)
+			ins.cleanCmdChannel(ins.chanCmd)
 			return
 		case cmd := <-ins.chanPriorCmd: // Priority queue get
 			ins.handleRequest(cmd)
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
-			ins.wgChanCmd.Done()
 			// Drain priority channel first.
+			// The implementation is not thread safe. As long as this is the only place to read chanPriorCmd, it is ok.
 			for len(ins.chanPriorCmd) > 0 {
 				ins.handleRequest(<-ins.chanPriorCmd)
 			}
@@ -601,6 +586,18 @@ func (ins *Instance) closeLocked() {
 
 	// Recycle instance
 	CM.Recycle(ins)
+}
+
+// Support concurrent cleaning up.
+func (ins *Instance) cleanCmdChannel(ch chan types.Command) {
+	for {
+		select {
+		case cmd := <-ch:
+			ins.handleRequest(cmd)
+		default:
+			return
+		}
+	}
 }
 
 func (ins *Instance) IsClosed() bool {
