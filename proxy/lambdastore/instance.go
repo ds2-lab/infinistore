@@ -292,14 +292,14 @@ func (ins *Instance) HandleRequests() {
 			}
 			close(ins.chanCmd)
 			for cmd := range ins.chanCmd {
-				ins.wgChanCmd.Wait()
+				ins.wgChanCmd.Done()
 				ins.handleRequest(cmd)
 			}
 			return
 		case cmd := <-ins.chanPriorCmd: // Priority queue get
 			ins.handleRequest(cmd)
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
-			ins.wgChanCmd.Wait()
+			ins.wgChanCmd.Done()
 			// Drain priority channel first.
 			for len(ins.chanPriorCmd) > 0 {
 				ins.handleRequest(<-ins.chanPriorCmd)
