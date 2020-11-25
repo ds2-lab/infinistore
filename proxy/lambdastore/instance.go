@@ -1081,7 +1081,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 				req.SetResponse(err)
 			}
 			return
-		} else if ctrlLink != nil {
+		} else if ctrlLink == nil {
 			// Unexpected error
 			if req, ok := cmd.(*types.Request); ok {
 				req.SetResponse(ErrUnknown)
