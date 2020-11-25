@@ -85,9 +85,17 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	test := chunkId
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
 	for {
-		if test > len(instances) {
-			instances = l.cluster.GetActiveInstances(len(instances) + len(meta.Placement)) // Force scale
-			// Continue and test in next iteration.
+		// Not test is 0 based.
+		if test >= len(instances) {
+			// Rotation safe: because rotation will not affect the number of active instances.
+			instances = l.cluster.GetActiveInstances((test/len(meta.Placement) + 1) * len(meta.Placement)) // Force scale to ceil(test/meta.chunks)
+
+			// If failed to get required number of instances, reset "test" and wish luck.
+			if test >= len(instances) {
+				test = chunkId
+			}
+
+			// continue and test agian
 			continue
 		}
 
