@@ -97,6 +97,8 @@ var (
 	ErrNotCtrlLink       = errors.New("not control link")
 	ErrInstanceValidated = errors.New("instance has been validated by another connection")
 	ErrInstanceBusy      = errors.New("instance busy")
+	ErrUnexpectedReturn  = errors.New("unexpected return from validation")
+	ErrUnknown           = errors.New("unknown error")
 )
 
 type InstanceManager interface {
@@ -642,7 +644,10 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	}
 
 	lastResolved := ins.validated.ResolvedAt()
-	if (lastResolved != time.Time{} && time.Since(lastResolved) >= ValidationTimeout) {
+	// 1. resolved
+	// 2. last validation succeeded and time since lastResolved >= ValidationTimeout
+	// 3. or something wrong on last validating (must be ignorable)
+	if (lastResolved != time.Time{} && (ins.validated.Error() != nil || time.Since(lastResolved) >= ValidationTimeout)) {
 		// For reclaimed instance, simply return the result of last validation.
 		// if ins.IsReclaimed() {
 		// 	return castValidatedConnection(ins.validated)
@@ -765,7 +770,8 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			ins.mu.Lock()
 			// Does not affect the MAYBE status.
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
-			ins.flagValidatedLocked(nil) // No need to return a validated connection.
+			// No need to return a validated connection. If someone do require the connection, it is an unexpected error.
+			ins.flagValidatedLocked(nil, ErrUnexpectedReturn)
 			ins.mu.Unlock()
 
 			ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
@@ -1074,6 +1080,13 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 			if req, ok := cmd.(*types.Request); ok {
 				req.SetResponse(err)
 			}
+			return
+		} else if ctrlLink != nil {
+			// Unexpected error
+			if req, ok := cmd.(*types.Request); ok {
+				req.SetResponse(ErrUnknown)
+			}
+			ins.log.Warn("Unexpected nil control link with no error returned.")
 			return
 		}
 
