@@ -26,11 +26,30 @@ var _ = Describe("MovingWindow", func() {
 		cluster.Close()
 	})
 
+	It("should success to scale on demand after rotated", func() {
+		cluster := NewMovingWindow()
+		lambdastore.CM = cluster
+		cluster.Start()
+
+		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+
+		Expect(cluster.Rotate()).To(BeTrue())
+
+		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+
+		instances := cluster.GetActiveInstances(config.NumLambdaClusters * 3)
+		Expect(len(instances)).To(Equal(config.NumLambdaClusters * 3))
+
+		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 3))
+
+		cluster.Close()
+	})
+
 	It("should concurrent scaling ok", func() {
 		cluster := NewMovingWindow()
 		lambdastore.CM = cluster
 		cluster.Start()
-		concurrency := 10
+		concurrency := 100
 
 		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
 

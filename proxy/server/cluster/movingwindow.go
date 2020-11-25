@@ -22,6 +22,7 @@ import (
 var (
 	NumLambdaClusters = config.NumLambdaClusters
 	NumInitialBuffers = config.NumLambdaClusters
+	NumScalerBuffer   = NumLambdaClusters * 100
 
 	ErrInvalidInstance = errors.New("invalid instance")
 )
@@ -64,7 +65,7 @@ func NewMovingWindow() *MovingWindow {
 		startTime: time.Now(),
 
 		// for scaling out
-		scaler: make(chan *types.ScaleEvent, NumLambdaClusters),
+		scaler: make(chan *types.ScaleEvent, NumScalerBuffer),
 		// scaleCounter: 0,
 
 		done: make(chan struct{}),
@@ -236,11 +237,8 @@ func (mw *MovingWindow) Trigger(event int, args ...interface{}) {
 			mw.log.Warn("Invalid parameters for EventInsufficientStorage, (*lambdastore.Instance) expected")
 			return
 		}
-		// Will not block here
-		select {
-		case mw.scaler <- evt:
-		default:
-		}
+		// Try not block here: make sure the scaler buffer is large enough
+		mw.scaler <- evt
 	}
 }
 
@@ -256,6 +254,10 @@ func (mw *MovingWindow) Daemon() {
 			if !statTimer.Stop() {
 				<-statTimer.C
 			}
+			for len(mw.scaler) > 0 {
+				evt := <-mw.scaler
+				evt.SetError(ErrClusterClosed)
+			}
 			return
 		// scaling out in bucket
 		case evt := <-mw.scaler:
@@ -269,20 +271,9 @@ func (mw *MovingWindow) Daemon() {
 			//}
 			mw.mu.Lock()
 
-			// Start new bucket to fill active window.
-			bucket, added, err := mw.getCurrentBucketLocked().createNextBucket(NumLambdaClusters)
-			if err != nil {
-				mw.log.Error("Failed to initate new bucket: %v", err)
-				continue // No degradation or expiration if no new bucket is allocated.
-			} else {
-				// append to bucket list & append current bucket group to proxy group
-				mw.buckets = append(mw.buckets, bucket)
-				mw.numActives += added
-				mw.assignBackupLocked(mw.group.SubGroup(DefaultGroupIndex(bucket.end.Idx()-added), bucket.end), bucket)
-
-				// update cursor, point to active bucket
-				mw.cursor = bucket
-				mw.log.Debug("Rotation finished, latest bucket is %d", bucket.id)
+			// Rotate. No degradation or expiration if no new bucket is allocated.
+			if !mw.Rotate() {
+				continue
 			}
 
 			// Degrade instances beyond active window.
@@ -322,6 +313,25 @@ func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
 		return nil
 	} else {
 		return mw.buckets[len(mw.buckets)-config.NumActiveBuckets-1]
+	}
+}
+
+func (mw *MovingWindow) Rotate() bool {
+	// Start new bucket to fill active window.
+	bucket, added, err := mw.getCurrentBucketLocked().createNextBucket(NumLambdaClusters)
+	if err != nil {
+		mw.log.Error("Failed to initate new bucket: %v", err)
+		return false
+	} else {
+		// append to bucket list & append current bucket group to proxy group
+		mw.buckets = append(mw.buckets, bucket)
+		mw.numActives += added
+		mw.assignBackupLocked(mw.group.SubGroup(DefaultGroupIndex(bucket.end.Idx()-added), bucket.end), bucket)
+
+		// update cursor, point to active bucket
+		mw.cursor = bucket
+		mw.log.Debug("Rotation finished, latest bucket is %d", bucket.id)
+		return true
 	}
 }
 

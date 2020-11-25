@@ -9,6 +9,7 @@ import (
 
 var (
 	ErrUnsupported = errors.New("unsupported")
+	ErrClusterClosed = errors.New("err cluster closed")
 )
 
 type Cluster interface {
