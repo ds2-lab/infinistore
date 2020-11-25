@@ -105,6 +105,12 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numAdded int, err er
 	// Adjust current bucket
 	b.end = bucket.start
 	b.instances = bucket.instances[:b.activeStart.Idx()-b.start.Idx()]
+
+	// Update bucketIndex
+	gInstances := b.group.SubGroup(bucket.start, bucket.end)
+	for _, gins := range gInstances {
+		gins.idx.(*BucketIndex).BucketId = nextID
+	}
 	return bucket, 0, nil
 }
 
@@ -152,7 +158,7 @@ func (b *Bucket) waitReady() {
 
 func (b *Bucket) shouldScale(gins *GroupInstance, num int) bool {
 	b.mu.RLock()
-	scale := b.end.Idx()-gins.Idx() <= num
+	scale := b.end.Idx()-gins.Idx() < num
 	b.mu.RUnlock()
 	return scale
 }
