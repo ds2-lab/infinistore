@@ -54,7 +54,7 @@ function perform(){
 	done
 
 	if [ -f $PWD/proxy.log ] ; then
-		mv $PWD/proxy.log $PWD/$(ENTRY)_proxy.log
+		mv $PWD/proxy.log $PWD/${ENTRY}_proxy.log
 	fi
 }
 
