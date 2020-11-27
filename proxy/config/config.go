@@ -55,14 +55,14 @@ const RecoverRate = 40 * 1000000 // Not actually used.
 const BackupsPerInstance = 20 // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 // Each bucket's active duration
-const BucketDuration = 10 // min
+const BucketDuration = 1 // min
 
 // Number of buckets that warmup every InstanceWarmTimeout
-const NumActiveBuckets = 6
+const NumActiveBuckets = 2
 
 // Number of buckets before expiring
 // Buckets beyond NumActiveBuckets but within ExpireBucketsNum will get degraded warmup: InstanceDegradeWarmTimeout
-const NumAvailableBuckets = 18
+const NumAvailableBuckets = 4
 
 // Async migrate control
 const ActiveReplica = 2 //min

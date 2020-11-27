@@ -12,6 +12,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 var container []*Meta
@@ -28,6 +29,10 @@ type TestInstanceManager struct {
 
 func (im *TestInstanceManager) Instance(id uint64) *lambdastore.Instance {
 	return im.all[id]
+}
+
+func (im *TestInstanceManager) Recycle(dp types.LambdaDeployment) error {
+	return nil
 }
 
 func (im *TestInstanceManager) GetActiveInstances(int) []*lambdastore.Instance {

@@ -50,18 +50,17 @@ type MigrationScheduler interface {
 }
 
 type ClusterStats interface {
-	Len() int
+	InstanceLen() int
 	InstanceStats(int) InstanceStats
 	AllInstancesStats() Iterator
 	InstanceStatsFromIterator(Iterator) (int, InstanceStats)
 }
 
 type GroupedClusterStats interface {
-	Len() int
+	ClusterLen() int
 	ClusterStats(int) ClusterStats
 	AllClustersStats() Iterator
 	ClusterStatsFromIterator(Iterator) (int, ClusterStats)
-	InstanceSum(int) int
 }
 
 type InstanceStats interface {

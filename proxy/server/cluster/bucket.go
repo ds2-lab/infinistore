@@ -74,7 +74,7 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 	return
 }
 
-func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numAdded int, err error) {
+func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -83,10 +83,7 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numAdded int, err er
 	// Shortcut for insufficient number of spare instances
 	if b.activeStart.Idx()+num > b.end.Idx() {
 		bucket, err = newBucket(nextID, b.group, num)
-		if err == nil {
-			numAdded = num
-		}
-		return
+		return bucket, 0, err
 	}
 
 	// Compose new bucket consists of instances with spare capacity.
@@ -104,14 +101,16 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numAdded int, err er
 
 	// Adjust current bucket
 	b.end = bucket.start
-	b.instances = bucket.instances[:b.activeStart.Idx()-b.start.Idx()]
+	for i := b.end.Idx() - b.start.Idx(); i < len(b.instances); i++ {
+		b.instances[i] = b.instances[i].GetShadowInstance()
+	}
 
 	// Update bucketIndex
 	gInstances := b.group.SubGroup(bucket.start, bucket.end)
 	for _, gins := range gInstances {
 		gins.idx.(*BucketIndex).BucketId = nextID
 	}
-	return bucket, 0, nil
+	return bucket, len(bucket.instances), nil
 }
 
 func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
@@ -196,17 +195,28 @@ func (b *Bucket) flagInactive(gins *GroupInstance) {
 	b.mu.Unlock()
 }
 
+func (b *Bucket) getInstances() []*lambdastore.Instance {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return b.instances[:b.end.Idx()-b.start.Idx()]
+}
+
 func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	// Return all actives
 	// Force to create a new slice mapping to avoid the length being changed.
-	return b.instances[b.activeStart.Idx()-b.start.Idx():]
+	return b.instances[b.activeStart.Idx()-b.start.Idx() : b.end.Idx()-b.start.Idx()]
+}
+
+func (b *Bucket) len() int {
+	return b.end.Idx() - b.start.Idx()
 }
 
 // types.ClusterStatus implementation
-func (b *Bucket) Len() int {
+func (b *Bucket) InstanceLen() int {
 	return len(b.instances)
 }
 
