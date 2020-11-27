@@ -37,6 +37,7 @@ const (
 	INSTANCE_UNSTARTED = 0
 	INSTANCE_RUNNING   = 1
 	INSTANCE_CLOSED    = 2
+	INSTANCE_SHADOW    = 15
 
 	// Connection status
 	// Activate: Sleeping -> Activating -> Active
@@ -191,6 +192,10 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 // create new lambda instance
 func NewInstance(name string, id uint64) *Instance {
 	return NewInstanceFromDeployment(NewDeployment(name, id), id)
+}
+
+func (ins *Instance) GetShadowInstance() *Instance {
+	return &Instance{status: INSTANCE_SHADOW}
 }
 
 func (ins *Instance) String() string {

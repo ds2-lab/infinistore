@@ -12,6 +12,10 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
+var (
+	DefaultRune rune = '▣'
+)
+
 type ClusterView struct {
 	*ui.Canvas
 	Cluster    types.ClusterStats
@@ -48,8 +52,14 @@ func (v *ClusterView) Update() {
 
 func (v *ClusterView) UpdateInstance(idx int) {
 	instance := v.Cluster.InstanceStats(idx)
-	v.updateMapper(v.Cluster.Len())
+	v.updateMapper(v.Cluster.InstanceLen())
 	v.updateInstance(idx, instance)
+}
+
+func (v *ClusterView) SetCell(p image.Point, cell *drawille.Cell) {
+	point := image.Pt(p.X/2, p.Y/4)
+	cell.Rune -= drawille.BRAILLE_OFFSET
+	v.Canvas.Canvas.CellMap[point] = *cell
 }
 
 func (v *ClusterView) update() {
@@ -81,7 +91,7 @@ func (v *ClusterView) updateInstance(idx int, ins types.InstanceStats) {
 	if mapped.X < 0 || mapped.Y < 0 {
 		return
 	}
-	v.SetPoint(mapped, v.getColorByInstance(ins))
+	v.SetCell(mapped, v.getCellByInstance(ins))
 }
 
 func (v *ClusterView) updateMapper(len int) {
@@ -116,43 +126,50 @@ func (v *ClusterView) mapPoint(p image.Point) image.Point {
 	return ret
 }
 
-func (v *ClusterView) getColorByInstance(ins types.InstanceStats) ui.Color {
-	if ins == nil {
-		return ui.ColorWhite
+func (v *ClusterView) getCellByInstance(ins types.InstanceStats) *drawille.Cell {
+	if ins == types.InstanceStats(nil) {
+		return &drawille.Cell{Rune: '▢', Color: drawille.Color(ui.ColorWhite)}
 	}
 	status := ins.Status()
 
-	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
+	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_SHADOW {
+		return &drawille.Cell{Rune: '▢', Color: drawille.Color(ui.ColorWhite)}
+	} else if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
 		// Unstarted
-		return ui.ColorWhite
+		return &drawille.Cell{Color: drawille.Color(ui.ColorWhite)}
 	} else if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing&lambdastore.INSTANCE_RECOVERING > 0 {
 		// Recovering
-		return ui.ColorCyan
+		return &drawille.Cell{Color: drawille.Color(ui.ColorCyan)}
 	} else if backing&lambdastore.INSTANCE_BACKING > 0 {
 		// Backing
-		return ui.ColorBlue
+		return &drawille.Cell{Color: drawille.Color(ui.ColorBlue)}
 	} else if phase := (status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 12); phase == lambdastore.PHASE_ACTIVE {
 		// Active
-		return ui.ColorGreen
+		return &drawille.Cell{Color: drawille.Color(ui.ColorGreen)}
 	} else if phase == lambdastore.PHASE_BACKING_ONLY {
 		// Backing only
-		return ui.ColorYellow
+		return &drawille.Cell{Color: drawille.Color(ui.ColorYellow)}
 	} else if phase >= lambdastore.PHASE_RECLAIMED {
 		// Expired or reclaimed
-		return ui.ColorRed
+		return &drawille.Cell{Color: drawille.Color(ui.ColorRed)}
 	} else {
-		return ui.ColorMagenta
+		return &drawille.Cell{Color: drawille.Color(ui.ColorMagenta)}
 	}
 }
 
 func (v *ClusterView) Draw(buf *ui.Buffer) {
 	v.update()
 	v.Block.Draw(buf)
+	var defaultRune rune
 	for point, cell := range v.Canvas.Canvas.GetCells() {
 		if point.In(v.Rectangle) {
+			if cell.Rune == defaultRune {
+				cell.Rune = DefaultRune
+			}
 			convertedCell := ui.Cell{
 				// cell.Rune, see https://github.com/gizak/termui/blob/master/v3/symbols.go for options.
-				'▣', // or ui.DOT
+				// more Runes: https://en.wikipedia.org/wiki/List_of_Unicode_characters
+				cell.Rune, // or ui.DOT
 				// ui.IRREGULAR_BLOCKS[12],
 				ui.Style{
 					ui.Color(cell.Color),
@@ -166,7 +183,7 @@ func (v *ClusterView) Draw(buf *ui.Buffer) {
 }
 
 func (v *ClusterView) SetRect(x1, y1, x2, y2 int) {
-	if v.Border == true {
+	if v.Border {
 		v.Canvas.SetRect(x1, y1, x2, y2)
 	} else {
 		v.Rectangle = image.Rect(x1, y1, x2, y2)

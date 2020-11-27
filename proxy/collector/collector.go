@@ -12,6 +12,11 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 )
 
+const (
+	LogTypeCluster      = "cluster"
+	LogTypeBucketRotate = "bucket"
+)
+
 var (
 	Enable           bool
 	LogServer2Client nanolog.Handle
@@ -23,10 +28,10 @@ var (
 	LogLambda          nanolog.Handle = 10004
 	LogValidate        nanolog.Handle = 10005
 	LogEndtoEnd        nanolog.Handle = 20000
-	LogCluster         nanolog.Handle = 10
-	ErrUnexpectedEntry                = errors.New("unexpected log entry")
+	LogCluster         nanolog.Handle
+	LogBucketRotate    nanolog.Handle
+	ErrUnexpectedEntry = errors.New("unexpected log entry")
 
-	logMu        sync.Mutex
 	ticker       *time.Ticker
 	stopped      bool
 	lastActivity = time.Now()
@@ -35,7 +40,6 @@ var (
 			return &DataEntry{}
 		},
 	}
-	defaultDataEntry DataEntry
 )
 
 func init() {
@@ -43,8 +47,10 @@ func init() {
 	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
 	// cmd, status, bytes, start, duration
 	LogEndtoEnd = nanolog.AddLogger("%s,%s,%i64,%i64,%i64")
-	// type, time, total, actives, degraded
-	LogCluster = nanolog.AddLogger("%s,%i64,%i,%i,%i")
+	// type(cluster), time, total, actives, degraded, expired
+	LogCluster = nanolog.AddLogger("%s,%i64,%i,%i,%i,%i")
+	// type(bucket), time, migrated, remain, degraded, expired
+	LogBucketRotate = nanolog.AddLogger("%s,%i64,%i,%i,%i,%i")
 }
 
 func Create(prefix string) {
