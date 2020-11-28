@@ -57,6 +57,8 @@ type MovingWindow struct {
 }
 
 func NewMovingWindow() *MovingWindow {
+	initPool()
+
 	cluster := &MovingWindow{
 		log:       global.GetLogger("MovingWindow: "),
 		group:     NewGroup(0),

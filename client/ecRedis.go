@@ -3,7 +3,6 @@ package client
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -112,7 +111,6 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 			placements[i], _ = strconv.Atoi(ret.(string))
 		}
 	}
-	fmt.Println("placements is", index)
 
 	return stats.ReqId, true
 }

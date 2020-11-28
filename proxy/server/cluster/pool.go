@@ -168,10 +168,11 @@ func (s *Pool) GetDestination(lambdaId uint64) (types.LambdaDeployment, error) {
 	return pool.ReserveForInstance(lambdaId)
 }
 
-func init() {
-	pool = newPool()
-
-	global.Migrator = pool
+func initPool() {
+	if pool == nil {
+		pool = newPool()
+		global.Migrator = pool
+	}
 }
 
 func CleanUpPool() {
