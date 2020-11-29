@@ -39,7 +39,7 @@ function start_proxy() {
     echo "running proxy server"
     PREFIX=$1
     DASHBOARD=$2
-    DEBUG=
+    DEBUG="-debug"
     if [ "$DASHBOARD" != "" ] ; then
         echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -log=proxy.log $DASHBOARD"
     else
@@ -67,13 +67,13 @@ function playback() {
     SCALE=$3
     CLUSTER=$4
     FILE=$5
-    COMPACT=$6
     NANOLOG=$7
+    COMPACT=$6
     OUTPUT=$8
     if [ "$OUTPUT" != "" ] ; then
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT -file $NANOLOG $FILE 1>$OUTPUT 2>&1
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE 1>$OUTPUT 2>&1
     else
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT -file $NANOLOG $FILE
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE
     fi
 }
 
@@ -83,6 +83,7 @@ function dryrun() {
     SCALE=$3
     CLUSTER=$4
     FILE=$5
+    NANOLOG=$7
     COMPACT=$6
-    $BINDIR/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    $BINDIR/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE
 }

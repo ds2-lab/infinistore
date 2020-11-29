@@ -35,9 +35,9 @@ function perform(){
 		sleep 1s
 	done
 	cat /tmp/infinicache.pid
-	#        set
+	# playback
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $PREPROXY $OUTPUT
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $PREPROXY $COMPACT $OUTPUT
 	kill -2 `cat $PID`
   # Wait for proxy cleaned up
 	TIMEOUT=60
@@ -66,7 +66,7 @@ function dry_perform(){
 	SCALE=$5
 	COMPACT=$6
 
-	dryrun $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT
+	dryrun $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE dryrun $COMPACT
 }
 
 if [ "$7" == "dryrun" ]; then
