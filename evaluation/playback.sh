@@ -37,7 +37,7 @@ function perform(){
 	cat /tmp/infinicache.pid
 	#        set
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $OUTPUT
+	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $COMPACT $PREPROXY $OUTPUT
 	kill -2 `cat $PID`
   # Wait for proxy cleaned up
 	TIMEOUT=60
