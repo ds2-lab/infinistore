@@ -100,6 +100,7 @@ var (
 	ErrInstanceBusy      = errors.New("instance busy")
 	ErrUnexpectedReturn  = errors.New("unexpected return from validation")
 	ErrUnknown           = errors.New("unknown error")
+	ErrValidationFailed  = errors.New("funciton validation failed")
 )
 
 type InstanceManager interface {
@@ -376,7 +377,7 @@ func (ins *Instance) startRecoveryLocked() int {
 	available := ins.backups.Availables()
 	atomic.StoreUint32(&ins.recovering, uint32(available))
 	if available > ins.backups.Len()/2 {
-		ins.log.Debug("Parallel recovery started with %d backup instances:%v, changes: %d", available, logFunc, changes)
+		ins.log.Info("Parallel recovery started with %d backup instances:%v, changes: %d", available, logFunc, changes)
 	} else if available == 0 {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
@@ -389,14 +390,18 @@ func (ins *Instance) startRecoveryLocked() int {
 // Resume serving
 func (ins *Instance) ResumeServing() {
 	ins.mu.Lock()
+	ins.resumeServingLocked()
+	ins.mu.Unlock()
+	ins.log.Info("Recovered and service resumed")
+}
+
+func (ins *Instance) resumeServingLocked() {
 	atomic.StoreUint32(&ins.recovering, 0)
 	ins.backups.Stop(ins)
 	// Clear whitelist during fast recovery.
 	if ins.writtens.Len() > 0 {
 		ins.writtens = hashmap.New(TEMP_MAP_SIZE)
 	}
-	ins.mu.Unlock()
-	ins.log.Debug("Recovered and service resumed")
 }
 
 func (ins *Instance) IsRecovering() bool {
@@ -700,7 +705,8 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 				// Exponential backoff
 				connectTimeout *= time.Duration(BackoffFactor)
 				if connectTimeout > MaxConnectTimeout {
-					connectTimeout = MaxConnectTimeout
+					// Time to abandon
+					return ins.flagValidatedLocked(nil, ErrValidationFailed)
 				}
 				ins.log.Warn("Timeout on validating, re-ping...")
 			} else {
@@ -979,9 +985,15 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 
 	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
 	if flags&protocol.PONG_RECOVERY > 0 {
-		ins.log.Debug("Parallel recovery requested.")
+		ins.log.Info("Parallel recovery requested.")
 		ins.startRecoveryLocked()
-	} else if flags&protocol.PONG_RECLAIMED > 0 {
+	} else if (flags&protocol.PONG_ON_INVOKING > 0) && ins.IsRecovering() {
+		// If flags indicate it is from function invokcation without recovery request, the service is resumed but somehow we missed it.
+		ins.resumeServingLocked()
+		ins.log.Info("Function invoked without data loss, service resumed.")
+	}
+
+	if flags&protocol.PONG_RECLAIMED > 0 {
 		// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
 		atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 		// We can close the instance if it is not backing any instance.

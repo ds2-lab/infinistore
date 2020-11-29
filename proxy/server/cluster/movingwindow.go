@@ -21,7 +21,8 @@ import (
 
 var (
 	NumLambdaClusters = config.NumLambdaClusters
-	NumInitialBuffers = config.NumLambdaClusters
+	MaxBackingNodes   = 5
+	NumInitialBuffers = NumLambdaClusters * (config.BackupsPerInstance/MaxBackingNodes - 1)
 	NumScalerBuffer   = NumLambdaClusters * 100
 
 	ErrInvalidInstance = errors.New("invalid instance")
@@ -88,7 +89,7 @@ func (mw *MovingWindow) Start() error {
 	mw.numActives += bucket.len()
 
 	// assign backup node for all nodes of this bucket
-	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end), bucket)
+	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end))
 
 	// Set cursor to latest bucket.
 	mw.cursor = bucket
@@ -332,16 +333,17 @@ func (mw *MovingWindow) Rotate() (old *Bucket, inherited int, err error) {
 		return old, 0, err
 	}
 
+	// update cursor, point to active bucket
+	mw.cursor = bucket
+
 	// append to bucket list & append current bucket group to proxy group
 	mw.buckets = append(mw.buckets, bucket)
 	added := bucket.len() - inherited
 	mw.numActives += added
 	if added > 0 {
-		mw.assignBackupLocked(mw.group.SubGroup(DefaultGroupIndex(bucket.end.Idx()-added), bucket.end), bucket)
+		mw.assignBackupLocked(mw.group.SubGroup(DefaultGroupIndex(bucket.end.Idx()-added), bucket.end))
 	}
 
-	// update cursor, point to active bucket
-	mw.cursor = bucket
 	return old, inherited, nil
 }
 
@@ -413,7 +415,7 @@ func (mw *MovingWindow) rand() int {
 }
 
 // only assign backup for new node in bucket
-func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance, current *Bucket) {
+func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance) {
 	// When current bucket leaves active window, there backups should not have been expired.
 	bucketRange := config.NumAvailableBuckets
 	if bucketRange > len(mw.buckets) {
@@ -421,7 +423,7 @@ func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance, current *Bucke
 	}
 	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
 
-	all := mw.group.SubGroup(startBucket.start, current.end)
+	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
 	for _, gins := range gall {
 		num, candidates := mw.getBackupsForNode(all, gins.Idx()-startBucket.start.Idx())
 		node := gins.Instance()
@@ -469,7 +471,7 @@ func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
 	}
 	mw.numActives += num
 
-	mw.assignBackupLocked(newGins, bucket)
+	mw.assignBackupLocked(newGins)
 	mw.log.Debug("Scaled bucket %d by %d out of %d, trigger: %d", bucket.id, num, ins.Id(), lastLen)
 
 	// Flag inactive
@@ -510,5 +512,9 @@ func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int) (int, []
 	for j := 0; j < numTotal; j++ {
 		candidates[j] = gall[(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
 	}
+	// Because only first numBaks backups will be used initially, shuffle to avoid the same backup set.
+	rand.Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
 	return numBaks, candidates
 }
