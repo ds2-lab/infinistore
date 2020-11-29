@@ -70,11 +70,12 @@ function playback() {
     CLUSTER=$4
     FILE=$5
     COMPACT=$6
-    OUTPUT=$7
+    NANOLOG=$7
+    OUTPUT=$8
     if [ "$OUTPUT" != "" ] ; then
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE 1>$OUTPUT 2>&1
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT -file $NANOLOG $FILE 1>$OUTPUT 2>&1
     else
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT -file $NANOLOG $FILE
     fi
 }
 
