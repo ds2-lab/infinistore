@@ -138,7 +138,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	var recoverErrs []chan error
-	flags := protocol.PONG_FOR_CTRL
+	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
 		pong.SendWithFlags(ctx, flags)

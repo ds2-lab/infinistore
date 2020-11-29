@@ -16,12 +16,12 @@ var _ = Describe("MovingWindow", func() {
 		lambdastore.CM = cluster
 		cluster.Start()
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 2))
 
 		instances := cluster.GetActiveInstances(config.NumLambdaClusters * 3)
 		Expect(len(instances)).To(Equal(config.NumLambdaClusters * 3))
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 3))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 3))
 
 		cluster.Close()
 	})
@@ -31,16 +31,16 @@ var _ = Describe("MovingWindow", func() {
 		lambdastore.CM = cluster
 		cluster.Start()
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 2))
 
 		Expect(cluster.Rotate()).To(BeTrue())
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 2))
 
 		instances := cluster.GetActiveInstances(config.NumLambdaClusters * 3)
 		Expect(len(instances)).To(Equal(config.NumLambdaClusters * 3))
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 3))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 3))
 
 		cluster.Close()
 	})
@@ -51,7 +51,7 @@ var _ = Describe("MovingWindow", func() {
 		cluster.Start()
 		concurrency := 100
 
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 2))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 2))
 
 		var done sync.WaitGroup
 		for i := 0; i < concurrency; i++ {
@@ -66,7 +66,7 @@ var _ = Describe("MovingWindow", func() {
 		}
 
 		done.Wait()
-		Expect(cluster.GetCurrentBucket().Len()).To(Equal(config.NumLambdaClusters * 3))
+		Expect(cluster.GetCurrentBucket().len()).To(Equal(config.NumLambdaClusters * 3))
 
 		cluster.Close()
 	})

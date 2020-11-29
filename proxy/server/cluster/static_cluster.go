@@ -26,6 +26,8 @@ type StaticCluster struct {
 
 // initial lambda group
 func NewStaticCluster(size int) *StaticCluster {
+	initPool()
+
 	extra := 0
 	if global.Options.Evaluation && global.Options.NumBackups > 0 {
 		extra = global.Options.NumBackups

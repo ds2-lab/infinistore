@@ -84,10 +84,12 @@ const (
 	PONG_FOR_DATA = int64(0x0000)
 	// PONG_FOR_CTRL Pong for ctrl link
 	PONG_FOR_CTRL = int64(0x0001)
+	// PONG_ON_INVOKING Pong issued on invoking
+	PONG_ON_INVOKING = int64(0x0010)
 	// PONG_RECOVERY Pong with parallel recovery requested
-	PONG_RECOVERY = int64(0x0002)
+	PONG_RECOVERY = int64(0x0020)
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
-	PONG_RECLAIMED = int64(0x0004)
+	PONG_RECLAIMED = int64(0x0040)
 
 	CMD_TEST        = "test"
 	CMD_GET         = "get"         // Redis and Lambda command
