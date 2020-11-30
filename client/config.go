@@ -11,5 +11,5 @@ var (
 	MaxLambdaStores int = config.NumLambdaClusters
 
 	// Timeout Operation timeout
-	Timeout = 1 * time.Second
+	Timeout = 10 * time.Second
 )
