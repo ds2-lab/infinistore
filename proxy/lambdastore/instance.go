@@ -1020,8 +1020,12 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	if len(errs) > 0 {
 		err = errs[0]
 	}
-	if _, err := ins.validated.Resolve(conn, err); err == nil {
-		ins.log.Debug("[%v]Validated", ins)
+	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
+		if err != nil {
+			ins.log.Debug("[%v]Validation failed: %v", err)
+		} else {
+			ins.log.Debug("[%v]Validated", ins)
+		}
 	}
 	return castValidatedConnection(ins.validated)
 }
