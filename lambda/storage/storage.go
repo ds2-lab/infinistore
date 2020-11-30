@@ -395,9 +395,7 @@ func (s *Storage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	}
 	if lineage.Term > meta.Term {
 		meta.Consistent = false
-		return meta.Consistent, fmt.Errorf(
-			"Detected staled term of lambda %d, expected at least %d, have %d",
-			meta.Id, lineage.Term, meta.Term)
+		return meta.Consistent, fmt.Errorf("detected staled term of lambda %d, expected at least %d, have %d", meta.Id, lineage.Term, meta.Term)
 	}
 	// Don't check hash if term is the start term(1).
 	meta.Consistent = lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash)
@@ -490,6 +488,7 @@ func (s *Storage) TrackLineage() {
 			var failure error
 			if op.LineageOp.Op == types.OP_SET && !op.Persisted {
 				go func() {
+					uploadStart := time.Now()
 					for i := 0; i < attemps; i++ {
 						if i > 0 {
 							s.log.Info("Attemp %d - uploading %s ...", i+1, op.Key)
@@ -505,12 +504,15 @@ func (s *Storage) TrackLineage() {
 						if int64(len(op.Body)) >= largeUploader.PartSize {
 							uploader = largeUploader
 						}
+
+						attemptStart := uploadStart
 						_, failure = uploader.Upload(upParams)
 						if failure != nil {
 							s.log.Warn("Attemp %d - failed to upload %s: %v", i+1, op.Key, failure)
 						} else {
 							// success
 							failure = nil
+							s.log.Debug("Success to upload %s, upload takes %v, total %v", op.Key, time.Since(attemptStart), time.Since(uploadStart))
 							break
 						}
 					}
@@ -813,9 +815,9 @@ func (s *Storage) doCommitTerm(lineage *types.LineageTerm, uploader *s3manager.U
 		Body:   buf,
 	}
 	_, err = uploader.Upload(params)
-	if err != nil {
-		// TODO: Pending and retry at a later time.
-	}
+	// if err != nil {
+	// 	// TODO: Pending and retry at a later time.
+	// }
 	return lineage, term.Term, err
 }
 
