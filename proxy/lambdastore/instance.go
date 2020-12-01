@@ -1022,7 +1022,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
 		if err != nil {
-			ins.log.Debug("[%v]Validation failed: %v", err)
+			ins.log.Debug("[%v]Validation failed: %v", ins, err)
 		} else {
 			ins.log.Debug("[%v]Validated", ins)
 		}
