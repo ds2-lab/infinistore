@@ -1321,7 +1321,7 @@ func (s *Storage) isRecoverable(key string, meta *types.LineageMeta, verify bool
 		return true
 	}
 	s.backupLocator.Reset(int(meta.BackupTotal))
-	target, _ := s.backupLocator.Locate(key)
+	target, _, _ := s.backupLocator.Locate(key)
 	if target == meta.BackupId {
 		return true
 	} else if verify {
