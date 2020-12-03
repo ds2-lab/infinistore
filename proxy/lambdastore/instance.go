@@ -147,6 +147,7 @@ type Instance struct {
 	closed       chan struct{}
 	coolTimer    *time.Timer
 	coolTimeout  time.Duration
+	coolReset    chan struct{}
 
 	// Connection management
 	ctrlLink *Connection
@@ -185,6 +186,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		closed:       make(chan struct{}),
 		coolTimer:    time.NewTimer(time.Duration(rand.Int63n(int64(WarmTimeout)) + int64(WarmTimeout)/2)), // Differentiate the time to start warming up.
 		coolTimeout:  WarmTimeout,
+		coolReset:    make(chan struct{}, 1),
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
 	}
@@ -311,6 +313,13 @@ func (ins *Instance) HandleRequests() {
 			// Handle rest commands in channels
 			ins.cleanCmdChannel(ins.chanPriorCmd)
 			ins.cleanCmdChannel(ins.chanCmd)
+			if !ins.coolTimer.Stop() {
+				// For parallel access, use select.
+				select {
+				case <-ins.coolTimer.C:
+				default:
+				}
+			}
 			return
 		case cmd := <-ins.chanPriorCmd: // Priority queue get
 			ins.handleRequest(cmd)
@@ -325,11 +334,13 @@ func (ins *Instance) HandleRequests() {
 			// Warmup will not work until first call.
 			// Double check, for it could timeout before a previous request got handled.
 			if ins.IsReclaimed() || len(ins.chanPriorCmd) > 0 || len(ins.chanCmd) > 0 || atomic.LoadUint32(&ins.status) == INSTANCE_UNSTARTED {
-				ins.resetCoolTimer()
+				ins.resetCoolTimer(false)
 			} else {
 				// Force warm up.
 				ins.warmUp()
 			}
+		case <-ins.coolReset:
+			ins.resetCoolTimer(false)
 		}
 	}
 }
@@ -572,13 +583,6 @@ func (ins *Instance) closeLocked() {
 		close(ins.closed)
 	}
 	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
-	if !ins.coolTimer.Stop() {
-		// For parallel access, use select.
-		select {
-		case <-ins.coolTimer.C:
-		default:
-		}
-	}
 	// Close all links
 	// TODO: Due to reconnection from lambda side, we may just leave links to be closed by the lambda.
 	if ins.ctrlLink != nil {
@@ -1279,7 +1283,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 func (ins *Instance) warmUp() {
 	ins.validate(&ValidateOption{WarmUp: true})
 	// Force reset
-	ins.resetCoolTimer()
+	ins.resetCoolTimer(false)
 }
 
 func (ins *Instance) flagWarmed() {
@@ -1289,10 +1293,19 @@ func (ins *Instance) flagWarmed() {
 		return
 	}
 
-	ins.resetCoolTimer()
+	ins.resetCoolTimer(true)
 }
 
-func (ins *Instance) resetCoolTimer() {
+func (ins *Instance) resetCoolTimer(flag bool) {
+	if flag {
+		select {
+		case ins.coolReset <- struct{}{}:
+		default:
+			// skip
+		}
+		return
+	}
+
 	if !ins.coolTimer.Stop() {
 		// For parallel access, use select.
 		select {
