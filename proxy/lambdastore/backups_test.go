@@ -156,6 +156,21 @@ var _ = Describe("Backups", func() {
 		backups.Reserve(nil)
 		testAllReserved(backups, readiness)
 	})
+
+	It("should GetByKey be safe in case the length of backups is smaller than required", func() {
+		required := 20
+		backups := newBackups(required, required)
+		readiness := getRandomReadiness(required, 0)
+		readiness[backups.candidates[required-1].Id()] = readinessBusy
+		setTestCase(backups, readiness)
+
+		backups.Reserve(nil)
+		Expect(len(backups.backups)).To(Equal(required - 1))
+
+		ins, ok := backups.GetByHash(uint64(required - 1))
+		Expect(ins).To(BeNil())
+		Expect(ok).To(BeFalse())
+	})
 })
 
 func dumpInstance(all []*Instance) {
