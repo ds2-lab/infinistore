@@ -1,16 +1,28 @@
 package lambdastore
 
 import (
+	"strconv"
+
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
-type BackupReserver func(*Instance) bool
+type Backer interface {
+	ReserveBacking() bool
+	StartBacking(*Instance, int, int) bool
+	StopBacking(*Instance)
+}
+
+type BackerGetter interface {
+	toBacker(*Instance) Backer
+	toInstance(Backer, int) *Instance
+}
 
 type BackupIterator struct {
+	backend *Backups
 	i       int
 	len     int
 	skipped int
-	backups []*Instance
+	backups []Backer
 }
 
 func (iter *BackupIterator) Len() int {
@@ -29,23 +41,22 @@ func (iter *BackupIterator) Next() bool {
 }
 
 func (iter *BackupIterator) Value() (int, interface{}) {
-	return iter.i - iter.skipped, iter.backups[iter.i]
+	return iter.i - iter.skipped, iter.backend.getInstance(iter.backups[iter.i], iter.i)
 }
 
 // Backups for a instace. If not specified, all operation are not thread safe.
 type Backups struct {
-	Reserver BackupReserver
-
-	backups    []*Instance
+	backups    []Backer
 	candidates []*Instance
 	required   int
 	availables int
 	locator    protocol.BackupLocator
+	adapter    BackerGetter
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
 	if cap(b.backups) < num {
-		backups := make([]*Instance, num)
+		backups := make([]Backer, num)
 		if len(b.backups) > 0 {
 			copy(backups[:len(b.backups)], b.backups)
 		}
@@ -64,7 +75,7 @@ func (b *Backups) Availables() int {
 }
 
 func (b *Backups) Iter() *BackupIterator {
-	return &BackupIterator{i: -1, len: b.availables, backups: b.backups}
+	return &BackupIterator{backend: b, i: -1, len: b.availables, backups: b.backups}
 }
 
 func (b *Backups) Reserve(fallback *Instance) int {
@@ -84,7 +95,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 	alters := len(b.backups) // Alternates start from "alters"
 	failures := 0            // Right most continous unavailables
 	for i := 0; i < len(b.backups); i++ {
-		if b.reserve(b.candidates[i]) {
+		if b.getBacker(b.candidates[i]).ReserveBacking() {
 			changes += b.promoteCandidate(i, i)
 			failures = 0
 			continue
@@ -97,7 +108,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 		}
 		// Try find whatever possible
 		for ; alters < len(b.candidates); alters++ {
-			if b.reserve(b.candidates[alters]) {
+			if b.getBacker(b.candidates[alters]).ReserveBacking() {
 				changes += b.promoteCandidate(i, alters)
 				failures = 0
 				break
@@ -124,7 +135,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 }
 
 func (b *Backups) Invalidate() {
-	b.required = 0
+	// b.required = 0
 	b.availables = 0
 	b.backups = b.backups[:0]
 }
@@ -151,7 +162,7 @@ func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
 		return nil, false
 	} else {
 		backups[i].StartBacking(target, i, b.required)
-		return backups[i], true
+		return b.getInstance(backups[i], i), true
 	}
 }
 
@@ -192,28 +203,22 @@ func (b *Backups) getByLocation(loc int, required int) (*Instance, bool) {
 		return nil, false
 	}
 
-	return backup, true
-}
-
-func (b *Backups) reserve(ins *Instance) bool {
-	if b.Reserver == nil {
-		return ins.ReserveBacking()
-	} else {
-		return b.Reserver(ins)
-	}
+	return b.getInstance(backup, loc), true
 }
 
 func (b *Backups) promoteCandidate(dest int, src int) int {
+	changes := b.addToBackups(dest, b.candidates[src])
 	if dest != src {
 		// Exchange candidates to keep the next elections get a stable result
 		b.candidates[dest], b.candidates[src] = b.candidates[src], b.candidates[dest]
 	}
-	return b.addToBackups(dest, b.candidates[dest])
+	return changes
 }
 
 func (b *Backups) addToBackups(dest int, ins *Instance) int {
-	change := b.backups[dest] != ins
-	b.backups[dest] = ins
+	change := b.getInstance(b.backups[dest], dest) != ins
+	// fmt.Printf("Compared backups %v - %v: %v\n", b.describeInstance(b.getInstance(b.backups[dest], dest)), b.describeInstance(ins), change)
+	b.backups[dest] = b.getBacker(ins)
 	if ins != nil {
 		b.availables++
 	}
@@ -221,5 +226,33 @@ func (b *Backups) addToBackups(dest int, ins *Instance) int {
 		return 1
 	} else {
 		return 0
+	}
+}
+
+func (b *Backups) getBacker(ins *Instance) Backer {
+	if ins == nil {
+		return nil
+	}
+	if b.adapter != nil {
+		return b.adapter.toBacker(ins)
+	}
+	return ins
+}
+
+func (b *Backups) getInstance(backer Backer, i int) *Instance {
+	if backer == nil {
+		return nil
+	}
+	if b.adapter != nil {
+		return b.adapter.toInstance(backer, i)
+	}
+	return backer.(*Instance)
+}
+
+func (b *Backups) describeInstance(ins *Instance) string {
+	if ins == nil {
+		return "<nil>"
+	} else {
+		return strconv.FormatUint(ins.Id(), 10)
 	}
 }
