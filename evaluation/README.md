@@ -64,17 +64,19 @@ cloudwatch/download.sh 202011070320 log
 
 ~~~
 # Unzip
-tar -xzf downloaded/data/202011070320.tar.gz
+mkdir -p downloaded/proxy/202011070320
+tar -xzf downloaded/proxy/202011070320.tar.gz -C downloaded/proxy/202011070320/
 
 # Decode .clog file
 ./infla.sh 202011070320
 
 # Extract cluster data from proxy output
 cat downloaded/202011070320/simulate-400_proxy.csv | grep cluster, > downloaded/202011070320/cluster.csv
+cat downloaded/202011070320/simulate-400_proxy.csv | grep bucket, > downloaded/202011070320/bucket.csv
 
 # Extract billing info from cloudwatch log
 cloudwatch/parse.sh downloaded/log/202011070320
 cat downloaded/log/202011070320_bill.csv | grep invocation > downloaded/202011070320/bill.csv
-make build
+make build-data
 bin/preprocess -o downloaded/202011070320/recovery.csv -processor workload downloaded/data/202011070320
 ~~~

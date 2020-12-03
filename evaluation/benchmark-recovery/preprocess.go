@@ -10,8 +10,6 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"syscall"
-	"time"
 
 	nanoReader "github.com/ScottMansfield/nanolog/reader"
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -112,15 +110,16 @@ func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
 			prepend := strings.Join(fileNameRecognizer.FindStringSubmatch(df)[1:], ",")
 			err = recoveryProcessor(df, file, prepend, opts)
 		case "workload":
-			fi, err := os.Stat(df)
-			if err != nil {
-				log.Warn("Failed to get stat of file %s: %v", df, err)
-				continue
-			}
-			stat_t := fi.Sys().(*syscall.Stat_t)
-			ct := time.Unix(int64(stat_t.Mtimespec.Sec), int64(0)) // Mac
+			// fi, err := os.Stat(df)
+			// if err != nil {
+			// 	log.Warn("Failed to get stat of file %s: %v", df, err)
+			// 	continue
+			// }
+			// stat_t := fi.Sys().(*syscall.Stat_t)
+			// ct := time.Unix(int64(stat_t.Mtimespec.Sec), int64(0)) // Mac
 			// ct := time.Unix(int64(stat_t.Ctim.Sec), int64(0)) // Linux
-			prepend := ct.UTC().String()
+			// prepend := ct.UTC().String()
+			prepend := ""
 			err = recoveryProcessor(df, file, prepend, opts)
 		default:
 			log.Error("Unsupported processor: %s", opts.processor)
@@ -211,21 +210,23 @@ func recoveryProcessor(df string, file io.Writer, prepend string, opts *Options)
 			continue
 		}
 		fields := strings.Split(line, ",")
-		for len(fields) >= 11 {
-			l := strings.Join(fields[:10], ",")
-			io.WriteString(file, prepend)
-			io.WriteString(file, ",")
+		for len(fields) >= 12 {
+			l := strings.Join(fields[:11], ",")
+			if len(prepend) > 0 {
+				io.WriteString(file, prepend)
+				io.WriteString(file, ",")
+			}
 			io.WriteString(file, l)
 			io.WriteString(file, ",")
-			if len(fields[10]) > 36 {
-				io.WriteString(file, fields[10][:36])
+			if len(fields[11]) > 36 {
+				io.WriteString(file, fields[11][:36])
 				io.WriteString(file, "\n")
-				fields[10] = fields[10][36:]
-				fields = fields[10:]
-			} else {
-				io.WriteString(file, fields[10])
-				io.WriteString(file, "\n")
+				fields[10] = fields[11][36:]
 				fields = fields[11:]
+			} else {
+				io.WriteString(file, fields[11])
+				io.WriteString(file, "\n")
+				fields = fields[12:]
 			}
 		}
 		if len(fields) > 0 {
@@ -267,8 +268,10 @@ func nanologProcessor(df string, file io.Writer, prepend string, opts *Options) 
 		if opts.lastLineMatcher != nil && !opts.lastLineMatcher.Match([]byte(last)) {
 			continue
 		}
-		io.WriteString(file, prepend)
-		io.WriteString(file, ",")
+		if len(prepend) > 0 {
+			io.WriteString(file, prepend)
+			io.WriteString(file, ",")
+		}
 		io.WriteString(file, line)
 		io.WriteString(file, "\n")
 	}

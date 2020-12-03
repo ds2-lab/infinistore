@@ -14,6 +14,16 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
+var (
+	Hasher   = &hasher{partitionCount: 271}
+	ECConfig = consistent.Config{
+		PartitionCount:    271,
+		ReplicationFactor: 20,
+		Load:              1.25,
+		Hasher:            Hasher,
+	}
+)
+
 // Client InfiniCache client
 type Client struct {
 	EC           reedsolomon.Encoder
@@ -42,12 +52,6 @@ func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
 // Dial Dial proxies
 func (c *Client) Dial(addrArr []string) bool {
 	//t0 := time.Now()
-	cfg := consistent.Config{
-		PartitionCount:    271,
-		ReplicationFactor: 20,
-		Load:              1.25,
-		Hasher:            hasher{},
-	}
 	members := make([]consistent.Member, len(addrArr))
 	for i, addr := range addrArr {
 		log.Debug("Dialing %s...", addr)
@@ -60,7 +64,7 @@ func (c *Client) Dial(addrArr []string) bool {
 		}
 	}
 	log.Debug("Creating consistent ring %v...", members)
-	c.Ring = consistent.New(members, cfg)
+	c.Ring = consistent.New(members, ECConfig)
 	//time0 := time.Since(t0)
 	//fmt.Println("Dial all goroutines are done!")
 	//if err := nanolog.Log(LogClient, "Dial", time0.String()); err != nil {

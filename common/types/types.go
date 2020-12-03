@@ -70,11 +70,11 @@ const (
 	// FLAG_ENABLE_WARMUP Enable warmup.
 	FLAG_ENABLE_WARMUP = 0x0001
 	// FLAG_FIXED_INTERVAL_WARMUP Warming up with fixed interval regardless workload.
-	FLAG_FIXED_INTERVAL_WARMUP = 0x0003
+	FLAG_FIXED_INTERVAL_WARMUP = 0x0002
 	// FLAG_ENABLE_REPLICA Enable replication.
 	FLAG_ENABLE_REPLICA = 0x0010
 	// FLAG_WARMUP_REPLICA Replication will be triggered on warming up.
-	FLAG_WARMUP_REPLICA = 0x0030
+	FLAG_WARMUP_REPLICA = 0x0020
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
 	// FLAG_EXPIRED Disable recovery for main repository

@@ -358,30 +358,27 @@ func (ins *Instance) startRecoveryLocked() int {
 	// Reserve available backups
 	changes := ins.backups.Reserve(nil)
 
-	// Prepare log printer for debugging
-	logFunc := logger.NewFunc(func() string {
-		var msg strings.Builder
-		for i := 0; i < ins.backups.Len(); i++ {
-			msg.WriteString(" ")
-			backup, ok := ins.backups.StartByIndex(i, ins)
-			if ok {
-				msg.WriteString(strconv.FormatUint(backup.Id(), 10))
-			} else {
-				msg.WriteString("N/A")
-			}
+	// Start backup and build logs
+	var msg strings.Builder
+	for i := 0; i < ins.backups.Len(); i++ {
+		msg.WriteString(" ")
+		backup, ok := ins.backups.StartByIndex(i, ins)
+		if ok {
+			msg.WriteString(strconv.FormatUint(backup.Id(), 10))
+		} else {
+			msg.WriteString("N/A")
 		}
-		return msg.String()
-	})
+	}
 
 	// Start backups.
 	available := ins.backups.Availables()
 	atomic.StoreUint32(&ins.recovering, uint32(available))
 	if available > ins.backups.Len()/2 {
-		ins.log.Info("Parallel recovery started with %d backup instances:%v, changes: %d", available, logFunc, changes)
+		ins.log.Info("Parallel recovery started with %d backup instances:%v, changes: %d", available, msg.String(), changes)
 	} else if available == 0 {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
-		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%v, changes: %d", available, logFunc, changes)
+		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%v, changes: %d", available, msg.String(), changes)
 	}
 
 	return available
@@ -1022,7 +1019,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
 		if err != nil {
-			ins.log.Debug("[%v]Validation failed: %v", err)
+			ins.log.Debug("[%v]Validation failed: %v", ins, err)
 		} else {
 			ins.log.Debug("[%v]Validated", ins)
 		}
