@@ -22,23 +22,18 @@ build-simulator: prepare
 
 dryrun: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 -compact dryrun
-	tail -f ./log
 
 simulate: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact 1>./log 2>&1 &
-	tail -f ./log
 
 simulate-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact -enable-dashboard 1>./log 2>&1 &
-	tail -f ./log
 
 playback: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 1>./log 2>&1 &
-	tail -f ./log
 
 playback-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -enable-dashboard 1>./log 2>&1 &
-	tail -f ./log
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
