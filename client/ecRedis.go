@@ -82,7 +82,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	}
 	//addr, ok := c.getHost(key)
 	//fmt.Println("in SET, key is: ", key)
-	member := c.Ring.LocateKey([]byte(key))
+	member := c.Ring.GetPartitionOwner(Hasher.PartitionID([]byte(key)))
 	host := member.String()
 	// log.Debug("ring LocateKey costs: %v", time.Since(stats.Begin))
 	// log.Debug("SET located host: %s", host)
@@ -145,7 +145,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	}
 
 	//addr, ok := c.getHost(key)
-	member := c.Ring.LocateKey([]byte(key))
+	member := c.Ring.GetPartitionOwner(Hasher.PartitionID([]byte(key)))
 	host := member.String()
 	//fmt.Println("ring LocateKey costs:", time.Since(t))
 	//fmt.Println("GET located host: ", host)

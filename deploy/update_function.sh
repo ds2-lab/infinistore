@@ -5,6 +5,8 @@ PREFIX="Store1VPCNode"
 KEY="lambda"
 cluster=400
 mem=1024
+# try -code
+CODE=$2
 
 S3="tianium.default"
 
@@ -17,5 +19,5 @@ echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Updating lambda functions.."
-go run $BASE/deploy_function.go -S3 ${S3} -code -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
+go run $BASE/deploy_function.go -S3 ${S3} $CODE -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
 rm $KEY*
