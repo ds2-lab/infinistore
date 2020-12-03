@@ -50,14 +50,23 @@ func (b *BackupLocator) Reset(num int) {
 	// }
 }
 
-func (b *BackupLocator) Locate(key string) (int, bool) {
+func (b *BackupLocator) Locate(key string) (int, int, bool) {
 	if !b.enable {
-		return 0, false
+		return 0, 0, false
 	}
 
 	// Simple hashing. Default implementation
-	return int(xxhash.Sum64([]byte(key)) % uint64(b.backups)), true
+	return int(xxhash.Sum64([]byte(key)) % uint64(b.backups)), b.backups, true
 
 	// Consistent hashing
 	// return int(b.ring.LocateKey([]byte(key)).(backupMember)), true
+}
+
+func (b *BackupLocator) LocateByHash(hash uint64) (int, int, bool) {
+	if !b.enable {
+		return 0, 0, false
+	}
+
+	// Simple hashing. Default implementation
+	return int(hash % uint64(b.backups)), b.backups, true
 }
