@@ -72,6 +72,7 @@ tar -xzf downloaded/proxy/202011070320.tar.gz -C downloaded/proxy/202011070320/
 
 # Extract cluster data from proxy output
 cat downloaded/202011070320/simulate-400_proxy.csv | grep cluster, > downloaded/202011070320/cluster.csv
+cat downloaded/202011070320/simulate-400_proxy.csv | grep bucket, > downloaded/202011070320/bucket.csv
 
 # Extract billing info from cloudwatch log
 cloudwatch/parse.sh downloaded/log/202011070320

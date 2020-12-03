@@ -43,6 +43,7 @@ type Backups struct {
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
+	// TODO: Add capability to decrease the # of backups.
 	if cap(b.backups) < num {
 		backups := make([]*Instance, len(b.backups), num)
 		if len(b.backups) > 0 {
@@ -75,9 +76,10 @@ func (b *Backups) Reserve(fallback *Instance) int {
 	b.availables = 0
 
 	// Reserve backups so we can know how many backups are available
+	// To minimize backups' zigzag, holes are keep in place
 	changes := 0
 	alters := len(b.backups) // Alternates start from "alters"
-	failures := 0            // Continous unavailables
+	failures := 0            // Right most continous unavailables
 	for i := 0; i < len(b.backups); i++ {
 		if b.reserve(b.candidates[i]) {
 			changes += b.promoteCandidate(i, i)
@@ -85,7 +87,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 			continue
 		}
 		// Nothing left
-		if alters == len(b.candidates) {
+		if alters >= len(b.candidates) {
 			changes += b.addToBackups(i, fallback)
 			failures++
 			continue
@@ -99,9 +101,12 @@ func (b *Backups) Reserve(fallback *Instance) int {
 			}
 		}
 		// Nothing left
-		if alters == len(b.candidates) {
+		if alters >= len(b.candidates) {
 			changes += b.addToBackups(i, fallback)
 			failures++
+		} else {
+			// Advance alters
+			alters++
 		}
 	}
 
@@ -110,7 +115,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 		b.backups = b.backups[:cap(b.backups)-failures]
 	}
 
-	b.locator.Reset(len(b.backups))
+	b.locator.Reset(cap(b.backups))
 
 	return changes
 }

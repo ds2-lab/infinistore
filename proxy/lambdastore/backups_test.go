@@ -1,14 +1,19 @@
-package lambdastore_test
+package lambdastore
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+)
 
-	. "github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+const (
+	readinessReady    = 0
+	readinessBusy     = 1
+	readinessReserved = 2
 )
 
 func newBackups(bak, cand int) *Backups {
@@ -21,14 +26,18 @@ func newBackups(bak, cand int) *Backups {
 	return backups
 }
 
-func setTestCase(backups *Backups, readiness []bool) {
+func setTestCase(backups *Backups, readiness []int) {
 	backups.Reserver = func(ins *Instance) bool {
 		// log.Printf("Test readiness %d: %v\n", ins.Id(), readiness[ins.Id()])
-		return readiness[ins.Id()]
+		if readiness[ins.Id()] == readinessReady {
+			readiness[ins.Id()] = readinessReserved
+			return true
+		}
+		return false
 	}
 }
 
-func testAllReserved(backups *Backups, readiness []bool) {
+func testAllReserved(backups *Backups, readiness []int) {
 	iter := backups.Iter()
 	iterated := 0
 	Expect(iter.Len()).To(Equal(backups.Availables()))
@@ -38,16 +47,19 @@ func testAllReserved(backups *Backups, readiness []bool) {
 		// 	log.Printf("detect false: %d:%d", i, backup.Id())
 		// }
 		Expect(i).To(Equal(iterated))
-		Expect(readiness[backup.(*Instance).Id()]).To(Equal(true))
+		Expect(readiness[backup.(*Instance).Id()]).To(Equal(readinessReserved))
 		iterated++
 	}
 }
 
-func getRandomReadiness(cand int, maxf int) []bool {
-	failures := rand.Intn(maxf)
-	readiness := make([]bool, cand)
-	for i := failures; i < cand; i++ {
-		readiness[i] = true
+func getRandomReadiness(cand int, maxf int) []int {
+	readiness := make([]int, cand)
+	failures := maxf
+	if maxf > 0 {
+		failures = rand.Intn(maxf)
+	}
+	for i := 0; i < failures; i++ {
+		readiness[i] = readinessBusy
 	}
 	rand.Shuffle(cand, func(i int, j int) {
 		readiness[j], readiness[i] = readiness[i], readiness[j]
@@ -60,10 +72,10 @@ var _ = Describe("Backups", func() {
 
 	It("should all backups be reserved", func() {
 		backups := newBackups(5, 7)
-		var readiness []bool
+		var readiness []int
 
 		// Fill up
-		readiness = []bool{true, true, true, false, true, true, true}
+		readiness = []int{readinessReady, readinessReady, readinessReady, readinessBusy, readinessReady, readinessReady, readinessReady}
 		setTestCase(backups, readiness)
 		Expect(backups.Reserve(nil)).To(Equal(5))
 		Expect(backups.Len()).To(Equal(5))
@@ -72,7 +84,7 @@ var _ = Describe("Backups", func() {
 		// status: [0, 1, 2, 5, 4] [3, 6]
 
 		// Keep consistent
-		readiness = []bool{true, true, true, true, true, true, true}
+		readiness = []int{readinessReady, readinessReady, readinessReady, readinessReady, readinessReady, readinessReady, readinessReady}
 		setTestCase(backups, readiness)
 		Expect(backups.Reserve(nil)).To(Equal(0))
 		Expect(backups.Len()).To(Equal(5))
@@ -81,16 +93,17 @@ var _ = Describe("Backups", func() {
 		// status: [0, 1, 2, 5, 4] [3, 6]
 
 		// Used up
-		readiness = []bool{true, true, false, true, true, false, true}
+		readiness = []int{readinessReady, readinessReady, readinessBusy, readinessReady, readinessReady, readinessBusy, readinessReady}
 		setTestCase(backups, readiness)
-		Expect(backups.Reserve(nil)).To(Equal(2))
+		changed := backups.Reserve(nil)
+		Expect(changed).To(Equal(2))
 		Expect(backups.Len()).To(Equal(5))
 		Expect(backups.Availables()).To(Equal(5))
 		testAllReserved(backups, readiness)
 		// status: [0, 1, 3, 6, 4] [2, 5]
 
 		// Test hole
-		readiness = []bool{true, false, false, true, true, false, true}
+		readiness = []int{readinessReady, readinessBusy, readinessBusy, readinessReady, readinessReady, readinessBusy, readinessReady}
 		setTestCase(backups, readiness)
 		Expect(backups.Reserve(nil)).To(Equal(1))
 		Expect(backups.Len()).To(Equal(5))
@@ -99,7 +112,7 @@ var _ = Describe("Backups", func() {
 		// status: [0, 1(nil), 3, 6, 4] [2, 5]
 
 		// Hole be filled
-		readiness = []bool{true, false, false, true, true, true, true}
+		readiness = []int{readinessReady, readinessBusy, readinessBusy, readinessReady, readinessReady, readinessReady, readinessReady}
 		setTestCase(backups, readiness)
 		Expect(backups.Reserve(nil)).To(Equal(1))
 		Expect(backups.Len()).To(Equal(5))
@@ -108,7 +121,7 @@ var _ = Describe("Backups", func() {
 		// status: [0, 5, 3, 6, 4] [2, 1]
 
 		// Test smaller length
-		readiness = []bool{false, true, false, false, false, true, true}
+		readiness = []int{readinessBusy, readinessReady, readinessBusy, readinessBusy, readinessBusy, readinessReady, readinessReady}
 		setTestCase(backups, readiness)
 		Expect(backups.Reserve(nil)).To(Equal(3))
 		Expect(backups.Len()).To(Equal(5))
@@ -132,4 +145,23 @@ var _ = Describe("Backups", func() {
 		log.Printf("%f changes", avg)
 		Expect(avg).To(BeNumerically("<", 1))
 	})
+
+	It("should be able to fill backups with more one redundant candidates", func() {
+		backups := newBackups(20, 40)
+		readiness := getRandomReadiness(40, 0)
+		readiness[backups.candidates[1].Id()] = readinessBusy
+		readiness[backups.candidates[4].Id()] = readinessBusy
+		setTestCase(backups, readiness)
+
+		backups.Reserve(nil)
+		testAllReserved(backups, readiness)
+	})
 })
+
+func dumpInstance(all []*Instance) {
+	ids := make([]uint64, len(all))
+	for i := 0; i < len(all); i++ {
+		ids[i] = all[i].Id()
+	}
+	fmt.Println(ids)
+}

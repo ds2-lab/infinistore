@@ -294,7 +294,7 @@ func (mw *MovingWindow) Daemon() {
 			// Log: type, time, total, actives, degraded, expired
 			collector.Collect(collector.LogCluster,
 				collector.LogTypeCluster, ts.UnixNano(),
-				total, mw.numActives, total-mw.numActives, mw.getCurrentBucketLocked().end.Idx()+1-total)
+				total, mw.numActives, total-mw.numActives, mw.getCurrentBucketLocked().end.Idx()-total)
 
 			// reset ticker
 			statTimer.Reset(1 * time.Minute)
