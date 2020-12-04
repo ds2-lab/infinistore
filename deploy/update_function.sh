@@ -3,7 +3,7 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="Store1VPCNode"
 KEY="lambda"
-cluster=400
+cluster=1000
 mem=1024
 # try -code
 CODE=$2

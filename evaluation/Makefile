@@ -21,19 +21,19 @@ build-simulator: prepare
 	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
 dryrun: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 400 10 2 1 -compact dryrun
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 -compact dryrun
 
 simulate: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 10 2 1 -compact 1>./log 2>&1 &
 
 simulate-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 10 2 1 -compact -enable-dashboard 1>./log 2>&1 &
 
 playback: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 400 10 2 1 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 1>./log 2>&1 &
 
 playback-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 400 10 2 1 -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 -enable-dashboard 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
