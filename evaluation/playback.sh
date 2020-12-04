@@ -10,6 +10,9 @@ ENTRY="/data/$DATE"
 NODE_PREFIX="Store1VPCNode"
 PID=/tmp/infinicache.pid
 
+CLUSTER=$2
+((MAXLAMBDAID=CLUSTER-1))
+
 source $PWD/util.sh
 
 function perform(){
@@ -78,8 +81,7 @@ else
 	perform $1 $2 $3 $4 $5 $6 $7
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
-
 	
-	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
-	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
+	echo "Transfering logs from CloudWatch to S3: [cloudwatch/export_ubuntu.sh $DATE/ \"$START\" \"$END\" 0 $MAXLAMBDAID] ..."
+	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END" 0 $MAXLAMBDAID
 fi
