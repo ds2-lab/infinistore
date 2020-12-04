@@ -5,7 +5,9 @@ import (
 	"log"
 	"sync"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
@@ -19,6 +21,8 @@ type Group struct {
 	buff    []*GroupInstance
 	idxBase int // The base for logic index. The base will increase every time "expire" is called.
 	mu      sync.RWMutex
+
+	log logger.ILogger
 }
 
 type GroupInstance struct {
@@ -56,7 +60,9 @@ func (i *DefaultGroupIndex) NextN(n int) DefaultGroupIndex {
 
 func NewGroup(num int) *Group {
 	return &Group{
-		all: make([]*GroupInstance, num, config.LambdaMaxDeployments),
+		all:  make([]*GroupInstance, num, config.LambdaMaxDeployments),
+		buff: make([]*GroupInstance, 0, config.LambdaMaxDeployments),
+		log:  global.GetLogger("Group: "),
 	}
 }
 
@@ -82,13 +88,10 @@ func (g *Group) EndIndex() DefaultGroupIndex {
 }
 
 func (g *Group) Expand(n int) (DefaultGroupIndex, error) {
-	if cap(g.all) < len(g.all)+n {
-		return DefaultGroupIndex(g.idxBase + len(g.all)), ErrInsufficientDeployments
-	}
-
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	g.all = g.checkCapacity(g.all, len(g.all)+n, true)
 	g.all = g.all[0 : len(g.all)+n]
 	return DefaultGroupIndex(g.idxBase + len(g.all)), nil
 }
@@ -100,16 +103,14 @@ func (g *Group) Expire(n int) error {
 
 	// Force bin packing
 	g.mu.Lock()
-	if g.buff == nil {
-		g.buff = make([]*GroupInstance, cap(g.all))
-	}
+	g.buff = g.checkCapacity(g.buff, len(g.all)-n, false)
 	g.buff = g.buff[:len(g.all)-n]
 	copy(g.buff, g.all[n:len(g.all)])
 	g.idxBase += n
 	g.all, g.buff = g.buff, g.all
 	g.mu.Unlock()
 
-	log.Printf("expired %d of %d instances, new base %d, left %d\n", n, len(g.all)+n, g.idxBase, len(g.all))
+	g.log.Debug("expired %d of %d instances, new base %d, left %d\n", n, len(g.all)+n, g.idxBase, len(g.all))
 
 	return nil
 }
@@ -151,4 +152,18 @@ func (g *Group) Instance(idx GroupIndex) *lambdastore.Instance {
 	ret := g.all[idx.Idx()-g.idxBase]
 	g.mu.RUnlock()
 	return ret.LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (g *Group) checkCapacity(buff []*GroupInstance, num int, preserve bool) []*GroupInstance {
+	if cap(buff) < num {
+		newBuff := make([]*GroupInstance, 0, ((num-1)/cap(buff)+1)*cap(buff)) // Ceil num/cap * cap
+		if preserve {
+			copy(newBuff[:len(buff)], buff)
+			return newBuff[:len(buff)]
+		} else {
+			return newBuff
+		}
+	}
+
+	return buff
 }

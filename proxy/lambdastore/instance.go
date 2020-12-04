@@ -400,7 +400,7 @@ func (ins *Instance) ResumeServing() {
 	ins.mu.Lock()
 	ins.resumeServingLocked()
 	ins.mu.Unlock()
-	ins.log.Info("Recovered and service resumed")
+	ins.log.Info("Parallel recovered and service resumed")
 }
 
 func (ins *Instance) resumeServingLocked() {
@@ -595,7 +595,7 @@ func (ins *Instance) closeLocked() {
 	}
 	atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 	ins.flagValidatedLocked(nil, ErrInstanceClosed)
-	ins.log.Info("[%v]", ins)
+	ins.log.Info("[%v]Closed", ins)
 
 	// Recycle instance
 	CM.Recycle(ins)
@@ -986,12 +986,12 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 
 	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
 	if flags&protocol.PONG_RECOVERY > 0 {
-		ins.log.Info("Parallel recovery requested.")
+		ins.log.Debug("Parallel recovery requested.")
 		ins.startRecoveryLocked()
 	} else if (flags&protocol.PONG_ON_INVOKING > 0) && ins.IsRecovering() {
 		// If flags indicate it is from function invokcation without recovery request, the service is resumed but somehow we missed it.
 		ins.resumeServingLocked()
-		ins.log.Info("Function invoked without data loss, service resumed.")
+		ins.log.Info("Function invoked without data loss, assuming parallel recovered and service resumed.")
 	}
 
 	if flags&protocol.PONG_RECLAIMED > 0 {
@@ -1023,7 +1023,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
 		if err != nil {
-			ins.log.Debug("[%v]Validation failed: %v", ins, err)
+			ins.log.Warn("[%v]Validation failed: %v", ins, err)
 		} else {
 			ins.log.Debug("[%v]Validated", ins)
 		}
