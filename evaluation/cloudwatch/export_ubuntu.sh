@@ -58,6 +58,15 @@ do
   do
     echo "exporting $LAMBDA$LOG_PREFIX$i"
     aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
+    if [ $? != 0 ] ; then
+      if [ k == 2 ] ; then
+        echo "abort"
+      else
+        echo "retry"
+      fi
+      sleep 2s
+      continue
+    fi
     sleep 2s
 
     # Wait for the end the last task
@@ -75,7 +84,14 @@ do
     if [ "$RUNNING" != "" ]; then
       echo "Detect running task and wait timeout, killing task \"$RUNNING\"..."
       aws logs cancel-export-task --task-id \"$RUNNING\"
+      if [ $? != 0 ] ; then
+        echo "Done"
+        sleep 2s
+        break
+      fi
     else
+      echo "Done"
+      sleep 2s
       break
     fi
 
@@ -87,8 +103,10 @@ do
         sleep 2s
       else
         break
-        echo "Done"
       fi
     done
+
+    echo "retry"
+    sleep 2s
   done
 done
