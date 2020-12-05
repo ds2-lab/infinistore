@@ -41,6 +41,9 @@ func NewDefaultPlacer(store *MetaStore, cluster InstanceManager) *DefaultPlacer 
 		cluster:   cluster,
 		log:       global.GetLogger("DefaultPlacer: "),
 	}
+	if colorLogger, ok := placer.log.(*logger.ColorLogger); ok {
+		colorLogger.Level = logger.LOG_LEVEL_ALL
+	}
 	return placer
 }
 
