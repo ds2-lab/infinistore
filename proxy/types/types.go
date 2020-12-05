@@ -79,6 +79,9 @@ type ScaleEvent struct {
 
 	// Retire If there is insufficient space in BaseInstance, set to true to retire it.
 	Retire bool
+
+	// Reason for logging.
+	Reason string
 }
 
 func (evt *ScaleEvent) SetError(err error) {

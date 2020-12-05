@@ -120,8 +120,8 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			// NOTE: It is the responsibility of the cluster to handle duplicated events.
 			if numChunks >= global.Options.GetInstanceChunkThreshold() ||
 				size >= global.Options.GetInstanceThreshold() {
-				l.log.Debug("Insuffcient storage reported %d", ins.Id())
-				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true})
+				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.Capacity)
+				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
 			}
 
 			return ins, nil
