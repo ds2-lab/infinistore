@@ -1,6 +1,7 @@
 package lambdastore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +84,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
+	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 	DefaultPingPayload    = []byte{}
@@ -137,17 +139,19 @@ type Instance struct {
 	*Deployment
 	Meta
 
-	chanCmd      chan types.Command
-	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
-	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
-	phase        uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
-	validated    promise.Promise
-	mu           sync.Mutex
-	closed       chan struct{}
-	coolTimer    *time.Timer
-	coolTimeout  time.Duration
-	coolReset    chan struct{}
+	chanCmd         chan types.Command
+	chanPriorCmd    chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	status          uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
+	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
+	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
+	validated       promise.Promise
+	mu              sync.Mutex
+	closed          chan struct{}
+	coolTimer       *time.Timer
+	coolTimeout     time.Duration
+	coolReset       chan struct{}
+	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
+	lambdaCanceller context.CancelFunc
 
 	// Connection management
 	ctrlLink *Connection
@@ -748,7 +752,7 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 }
 
 func (ins *Instance) triggerLambda(opt *ValidateOption) {
-	err := ins.triggerLambdaLocked(opt)
+	err := ins.doTriggerLambda(opt)
 	for {
 		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
 			return
@@ -793,12 +797,12 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_ACTIVATING)
 
 			ins.log.Info("[%v]Reactivateing...", ins)
-			err = ins.triggerLambdaLocked(opt)
+			err = ins.doTriggerLambda(opt)
 		}
 	}
 }
 
-func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) error {
+func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	if ins.Meta.Stale {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
@@ -863,7 +867,16 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) error {
 	}
 
 	ins.Meta.Stale = true
-	output, err := client.Invoke(input)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ins.mu.Lock()
+	ins.lambdaCanceller = cancel
+	ins.mu.Unlock()
+	output, err := client.InvokeWithContext(ctx, input)
+	ins.mu.Lock()
+	ins.lambdaCanceller = nil
+	ins.mu.Unlock()
+
 	ins.endSession(event.Sid)
 
 	// Don't reset links here, fronzen but not dead.
@@ -906,6 +919,24 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) error {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 	return nil
+}
+
+func (ins *Instance) AbandonLambda() {
+	if ins.lambdaCanceller == nil {
+		ins.log.Info("No invoked lambda found, assuming abandoned.")
+		return
+	}
+
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	if ins.lambdaCanceller == nil {
+		ins.log.Info("No invoked lambda found, assuming abandoned.")
+		return
+	}
+
+	ins.lambdaCanceller()
+	ins.log.Info("Lambda abandoned")
 }
 
 // Flag the instance as validated by specified connection.
@@ -1023,8 +1054,14 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
 		if err != nil {
+			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
+			if int(numFailure) >= MaxValidationFailure {
+				ins.log.Warn("Maxed validation failure reached, abandon active instance...")
+				go ins.AbandonLambda()
+			}
 		} else {
+			atomic.AddUint32(&ins.numFailure, 0)
 			ins.log.Debug("[%v]Validated", ins)
 		}
 	}

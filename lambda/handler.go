@@ -492,6 +492,7 @@ func main() {
 
 		var reqId, chunkId string
 		var finalize func(*types.OpRet, bool, ...time.Duration)
+		cmd := c.Name
 		finalize = func(ret *types.OpRet, wait bool, ds ...time.Duration) {
 			if ret == nil || !ret.IsDelayed() {
 				// Only if error
@@ -503,7 +504,7 @@ func main() {
 				go finalize(ret, true, ds...)
 				return
 			}
-			session.Timeout.DoneBusyWithReset(extension, c.Name)
+			session.Timeout.DoneBusyWithReset(extension, cmd)
 		}
 
 		errRsp := &worker.ErrorResponse{}
@@ -570,13 +571,14 @@ func main() {
 			extension = lambdaLife.TICK
 		}
 		var ret *types.OpRet
+		cmd := c.Name
 		defer func() {
 			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension, c.Name)
+				session.Timeout.DoneBusyWithReset(extension, cmd)
 			} else {
 				go func() {
 					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension, c.Name)
+					session.Timeout.DoneBusyWithReset(extension, cmd)
 				}()
 			}
 		}()
