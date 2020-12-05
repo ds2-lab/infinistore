@@ -10,6 +10,7 @@ BASE=`pwd`/`dirname $0`
 BIN=$BASE/../bin
 DATA=$BASE/../downloaded
 OUTPUT=$DATA/$PREFIX
+CLUSTER=1000
 
 mkdir -p $OUTPUT
 
@@ -23,8 +24,8 @@ tar -xzf $DATA/proxy/$PREFIX.tar.gz -C $DATA/proxy/$PREFIX/
 ./infla.sh $PREFIX
 
 # Extract cluster data from proxy output
-cat $OUTPUT/simulate-400_proxy.csv | grep cluster, > $OUTPUT/cluster.csv
-cat $OUTPUT/simulate-400_proxy.csv | grep bucket, > $OUTPUT/bucket.csv
+cat $OUTPUT/simulate-${CLUSTER}_proxy.csv | grep cluster, > $OUTPUT/cluster.csv
+cat $OUTPUT/simulate-${CLUSTER}_proxy.csv | grep bucket, > $OUTPUT/bucket.csv
 
 # Extract billing info from cloudwatch log
 cloudwatch/parse.sh $DATA/log/$PREFIX
