@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"errors"
-	"log"
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -128,9 +127,6 @@ func (g *Group) All() []*lambdastore.Instance {
 
 func (g *Group) SubGroup(start GroupIndex, end GroupIndex) []*GroupInstance {
 	g.mu.RLock()
-	if start.Idx()-g.idxBase < 0 || end.Idx()-g.idxBase > len(g.all) {
-		log.Printf("out of range: %d - %d (base %d), available %d", start.Idx(), end.Idx(), g.idxBase, len(g.all))
-	}
 	sub := make([]*GroupInstance, end.Idx()-start.Idx())
 	copy(sub, g.all[start.Idx()-g.idxBase:end.Idx()-g.idxBase])
 	g.mu.RUnlock()
