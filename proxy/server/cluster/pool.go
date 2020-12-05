@@ -80,7 +80,7 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment
 // Reserve a deployment to replace specified instance.
 // Can be a different deployment other than the instance's for different mode.
 func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) {
-	got, exists := s.actives.Get(insId)
+	got, exists := s.getActive(insId)
 	if !exists {
 		return nil, fmt.Errorf("instance %d not found", insId)
 	}
@@ -93,9 +93,20 @@ func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) 
 	}
 }
 
+// Helper function for two phase deletion
+func (s *Pool) getActive(key interface{}) (interface{}, bool) {
+	active, exists := s.actives.Get(key)
+	if exists && active != nil {
+		return active, true
+	} else {
+		return nil, false
+	}
+}
+
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
 	// There is no atomic delete that can detect the existence of the key. Using two phase deletion here.
-	if active, ok := s.actives.Get(dp.Id()); !ok {
+	// We need this to ensure a active being recycle once.
+	if active, ok := s.getActive(dp.Id()); !ok {
 		return
 	} else if !s.actives.Cas(dp.Id(), active, nil) {
 		return
@@ -111,7 +122,7 @@ func (s *Pool) Recycle(dp types.LambdaDeployment) {
 }
 
 func (s *Pool) Deployment(id uint64) (types.LambdaDeployment, bool) {
-	ins, exists := s.actives.Get(id)
+	ins, exists := s.getActive(id)
 	if exists {
 		return ins.(*GroupInstance).LambdaDeployment, exists
 	} else {
@@ -120,7 +131,7 @@ func (s *Pool) Deployment(id uint64) (types.LambdaDeployment, bool) {
 }
 
 func (s *Pool) Instance(id uint64) *lambdastore.Instance {
-	got, exists := s.actives.Get(id)
+	got, exists := s.getActive(id)
 	if !exists {
 		return nil
 	}
@@ -128,7 +139,7 @@ func (s *Pool) Instance(id uint64) *lambdastore.Instance {
 }
 
 func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
-	gins, exists := s.actives.Get(id)
+	gins, exists := s.getActive(id)
 	if !exists {
 		return nil, exists
 	}
