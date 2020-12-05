@@ -219,6 +219,7 @@ func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
 				BaseInstance: instances[len(instances)-1],
 				ScaleTarget:  num - len(instances),
 				Scaled:       prm,
+				Reason:       "on demand",
 			})
 		if err := prm.Error(); err != nil {
 			mw.log.Warn("Failed to get at least %d active instances: %v", num, err)
@@ -274,7 +275,7 @@ func (mw *MovingWindow) Daemon() {
 				mw.log.Error("Failed to initiate new bucket on rotating: %v", err)
 				continue
 			} else {
-				mw.log.Debug("Succeeded to rotate the cluster. The latest bucket is %d", mw.getCurrentBucketLocked().id)
+				mw.log.Info("Succeeded to rotate the cluster. The latest bucket is %d", mw.getCurrentBucketLocked().id)
 			}
 
 			// Degrade instances beyond active window.
@@ -354,7 +355,7 @@ func (mw *MovingWindow) degrade(bucket *Bucket) int {
 	}
 	mw.numActives -= len(instances)
 	bucket.state = BUCKET_COLD
-	bucket.log.Debug("Degraded")
+	bucket.log.Info("Degraded")
 
 	return len(instances)
 }
@@ -390,9 +391,9 @@ func (mw *MovingWindow) ExpireCheck() int {
 		expired := mw.expire(bucket)
 		bucket.state = BUCKET_EXPIRE
 		numExpiredInstances += expired
-		bucket.log.Debug("Expired %d instances", expired)
-		mw.log.Debug("%d in total to expire", numExpiredInstances)
+		bucket.log.Info("Expired %d instances", expired)
 	}
+	mw.log.Debug("%d in total to expire", numExpiredInstances)
 
 	// Update buckets: leave one expired bucket
 	if len(mw.buckets) > config.NumAvailableBuckets+1 {
@@ -472,7 +473,7 @@ func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
 	mw.numActives += num
 
 	mw.assignBackupLocked(newGins)
-	mw.log.Debug("Scaled bucket %d by %d out of %d, trigger: %d", bucket.id, num, ins.Id(), lastLen)
+	mw.log.Info("Scaled bucket %d by %d out of %d, trigger: %d, reason: %s", bucket.id, num, lastLen, ins.Id(), evt.Reason)
 
 	// Flag inactive
 	if evt.Retire {
