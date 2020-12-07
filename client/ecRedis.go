@@ -239,7 +239,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	cn := c.conns[addr][i]
 	w := cn.W
 
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
+	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	w.WriteMultiBulkSize(10)
@@ -257,10 +257,10 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
 		return
 	}
-	cn.conn.SetWriteDeadline(time.Time{})
 
 	// Flush pipeline
 	//if err := c.W[i].Flush(); err != nil {
+	cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
 	if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
 		c.setError(ret, addr, i, err)
 		log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
@@ -271,6 +271,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
 		return
 	}
+	cn.conn.SetWriteDeadline(time.Time{})
 
 	log.Debug("Initiated setting %d@%s(%s)", i, key, addr)
 	c.recvSet("Set", addr, reqId, i, ret, nil)
@@ -287,7 +288,7 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		return
 	}
 	cn := c.conns[addr][i]
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout)) // Set deadline for request
+	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
 	defer cn.conn.SetWriteDeadline(time.Time{})
 
 	// tGet := time.Now()
@@ -314,7 +315,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	cn := c.conns[addr][i]
-	cn.conn.SetReadDeadline(time.Now().Add(Timeout)) // Set deadline for response
+	cn.conn.SetReadDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for response
 	defer cn.conn.SetReadDeadline(time.Time{})
 
 	// peeking response type and receive
@@ -372,6 +373,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 		return
 	}
 
+	cn.conn.SetReadDeadline(time.Now().Add(HeaderTimeout))
 	// Check error
 	switch type0 {
 	case resp.TypeError:
@@ -398,7 +400,6 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	respId, _ := c.conns[addr][i].R.ReadBulkString()
 	strSize, _ := c.conns[addr][i].R.ReadBulkString()
 	chunkId, _ := c.conns[addr][i].R.ReadBulkString()
-	cn.conn.SetReadDeadline(time.Time{})
 
 	// Matching reqId and chunk
 	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
@@ -414,6 +415,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	// Read value
+	cn.conn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := c.conns[addr][i].R.StreamBulk()
 	if err != nil {
 		log.Warn("Error on getting reader of received chunk %d: %v", i, err)
