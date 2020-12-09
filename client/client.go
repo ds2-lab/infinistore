@@ -22,6 +22,8 @@ var (
 		Load:              1.25,
 		Hasher:            Hasher,
 	}
+	ErrNotFound = errors.New("not found")
+	ErrClient   = errors.New("client internal error")
 )
 
 // Client InfiniCache client

@@ -41,9 +41,9 @@ function start_proxy() {
     DASHBOARD=$2
     DEBUG=
     if [ "$DASHBOARD" != "" ] ; then
-        echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -log=proxy.log $DASHBOARD"
+        echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -log=proxy.log $DASHBOARD"
     else
-        GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX $DASHBOARD &
+        GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -lambda-prefix=${LAMBDAPREFIX} $DASHBOARD &
     fi
 }
 
