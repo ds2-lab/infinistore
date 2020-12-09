@@ -184,7 +184,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 			size:     config.InstanceOverhead,
 		}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awakeness:    INSTANCE_SLEEPING,
-		chanCmd:      make(chan types.Command, 1),
+		chanCmd:      make(chan types.Command),
 		chanPriorCmd: make(chan types.Command, 1),
 		validated:    promise.Resolved(), // Initialize with a resolved promise.
 		closed:       make(chan struct{}),
