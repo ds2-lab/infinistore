@@ -166,6 +166,7 @@ func checkUsage(options *global.CommandlineOptions) {
 
 	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
+	flag.StringVar(&options.LambdaPrefix, "lambda-prefix", "", "Prefix of the Lambda deployments.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
 	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
@@ -187,6 +188,11 @@ func checkUsage(options *global.CommandlineOptions) {
 		fmt.Fprintf(os.Stderr, "Available options:\n")
 		flag.PrintDefaults()
 		os.Exit(0)
+	}
+
+	if options.LambdaPrefix != "" {
+		config.LambdaPrefix = options.LambdaPrefix
+		log.Info("config.LambdaPrefix overrided: %s", config.LambdaPrefix)
 	}
 
 	if !options.NoDashboard {

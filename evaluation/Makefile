@@ -7,6 +7,7 @@ prepare:
 
 build: prepare
 	go build -o bin/proxy ../proxy/
+	#go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
@@ -41,9 +42,17 @@ start-server: build
 stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
 
-benchmark:
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+benchmark: build-bench
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
 benchmark-recovery: build build-bench
 	benchmark-recovery/benchmark.sh 1>./log 2>&1 &
+
+test: build-bench
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+
+test-redis: build-bench
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
