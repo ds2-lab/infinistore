@@ -9,6 +9,7 @@ type CommandlineOptions struct {
 	Debug              bool
 	Prefix             string
 	LambdaPrefix       string
+	PublicIP           string
 	D                  int
 	P                  int
 	NoDashboard        bool

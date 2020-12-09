@@ -167,6 +167,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
 	flag.StringVar(&options.LambdaPrefix, "lambda-prefix", "", "Prefix of the Lambda deployments.")
+	flag.StringVar(&options.PublicIP, "ip", "", "Public IP for non-VPC Lambda deployments.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
 	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
@@ -194,6 +195,11 @@ func checkUsage(options *global.CommandlineOptions) {
 		config.LambdaPrefix = options.LambdaPrefix
 		log.Info("config.LambdaPrefix overrided: %s", config.LambdaPrefix)
 	}
+
+	if options.PublicIP != "" {
+		global.ServerIp = options.PublicIP
+	}
+	log.Info("Lambdas will connect to IP %s, make sure Lambdas are not deployed in the VPC if it is a public IP", global.ServerIp)
 
 	if !options.NoDashboard {
 		if options.LogFile == "" {
