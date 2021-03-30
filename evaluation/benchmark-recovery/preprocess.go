@@ -19,7 +19,10 @@ var (
 	log = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_ALL}
 
 	// No.1_lambda2048_40_100_500
-	fileNameRecognizer = regexp.MustCompile(`No.(\d+)_lambda(\d+)_(\d+)_(\d+)_(\d+)`)
+	fileNameRecognizer      = regexp.MustCompile(`No.(\d+)_lambda(\d+)_(\d+)_(\d+)_(\d+)`)
+	analyticsTaskRecognizer = regexp.MustCompile(`(map|reduce)_io_data_([a-zA-Z]+)\d+\.dat`)
+	analyticsLineRecognizer = regexp.MustCompile(`^\{(.+?)\}$`)
+	functionRecognizer      *regexp.Regexp
 
 	recoveryFilenameMatcher = regexp.MustCompile(`^\d+$`)
 )
@@ -36,6 +39,7 @@ type Options struct {
 	lineMatcher     *regexp.Regexp
 	lastLineFilter  string
 	lastLineMatcher *regexp.Regexp
+	functionPrefix  string
 }
 
 func main() {
@@ -120,7 +124,20 @@ func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
 			// ct := time.Unix(int64(stat_t.Ctim.Sec), int64(0)) // Linux
 			// prepend := ct.UTC().String()
 			prepend := ""
+			if functionRecognizer != nil {
+				matched := functionRecognizer.FindStringSubmatch(df)
+				if len(matched) > 0 {
+					prepend = matched[0]
+				}
+			}
 			err = recoveryProcessor(df, file, prepend, opts)
+		case "analytics":
+			matched := analyticsTaskRecognizer.FindStringSubmatch(df)
+			prepend := ""
+			if len(matched) > 0 {
+				prepend = strings.Join(matched[1:], ",")
+			}
+			err = dataAnlyticsProcessor(df, file, prepend, opts)
 		default:
 			log.Error("Unsupported processor: %s", opts.processor)
 			return
@@ -133,9 +150,11 @@ func collectAll(dataFiles chan string, file io.Writer, opts *Options) {
 
 func writeTitle(f io.Writer, opts *Options) {
 	if opts.processor == "recovery" {
-		io.WriteString(f, "no,mem,numbackups,objsize,interval,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
+		io.WriteString(f, "no,mem,numbackups,objsize,interval,time,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
 	} else if opts.processor == "workload" {
-		io.WriteString(f, "time,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
+		io.WriteString(f, "func,time,op,recovery,node,backey,lineage,objects,total,lineagesize,objectsize,numobjects,session\n")
+	} else if opts.processor == "analytics" {
+		io.WriteString(f, "op,task,taskid,taskkey,size,start,end\n")
 	}
 }
 
@@ -149,6 +168,7 @@ func checkUsage(options *Options) {
 	flag.StringVar(&options.fileFilter, "filter-files", "", "Regexp to filter files to process.")
 	flag.StringVar(&options.lineFilter, "filter-lines", "", "Regexp to filter lines to output.")
 	flag.StringVar(&options.lastLineFilter, "filter-previous-line", "", "Regexp to filter lines that has specified previous line to output.")
+	flag.StringVar(&options.functionPrefix, "fprefix", "", "Regexp for function recognition.")
 
 	flag.Parse()
 
@@ -177,6 +197,11 @@ func checkUsage(options *Options) {
 		options.lastLineMatcher = regexp.MustCompile(options.lastLineFilter)
 		log.Info("Will filter last line matching %v", options.lastLineMatcher)
 	}
+
+	if options.functionPrefix != "" {
+		functionRecognizer = regexp.MustCompile(fmt.Sprintf("%s(\\d+)", options.functionPrefix))
+		log.Info("Will recognize function name like %v", functionRecognizer)
+	}
 }
 
 func csvProcessor(df string, file io.Writer, prepend string, opts *Options) error {
@@ -193,6 +218,36 @@ func csvProcessor(df string, file io.Writer, prepend string, opts *Options) erro
 		io.WriteString(file, prepend)
 		io.WriteString(file, ",")
 		io.WriteString(file, line)
+		io.WriteString(file, "\n")
+	}
+	return nil
+}
+
+func dataAnlyticsProcessor(df string, file io.Writer, prepend string, opts *Options) error {
+	dfile, err := os.Open(df)
+	if err != nil {
+		return err
+	}
+	defer dfile.Close()
+
+	s := bufio.NewScanner(dfile)
+	s.Split(bufio.ScanLines)
+	for s.Scan() {
+		line := s.Text()
+		// matches := analyticsLineRecognizer.FindStringSubmatch(line)
+		// if len(matches) == 0 {
+		// 	continue
+		// }
+		// line = matches[1]
+		line = line[1 : len(line)-1]
+
+		io.WriteString(file, prepend)
+		io.WriteString(file, ",")
+		segments := strings.Split(line, " ")
+		if len(segments) == 1 {
+			segments = strings.Split(line, "\t")
+		}
+		io.WriteString(file, strings.Join(segments, ","))
 		io.WriteString(file, "\n")
 	}
 	return nil
