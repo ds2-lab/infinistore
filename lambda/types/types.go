@@ -24,9 +24,12 @@ var (
 	ErrNotFound     = errors.New("key not found")
 )
 
+type Loggable interface {
+	ConfigLogger(int, bool)
+}
+
 type Storage interface {
 	Id() uint64
-	Init(uint64, bool) (Storage, error)
 	Get(string) (string, []byte, *OpRet)
 	GetStream(string) (string, resp.AllReadCloser, *OpRet)
 	Set(string, string, []byte) *OpRet
@@ -38,7 +41,10 @@ type Storage interface {
 
 type PersistentStorage interface {
 	Storage
+
 	SetRecovery(string, string, uint64) *OpRet
+	StartTracker()
+	StopTracker(interface{})
 }
 
 // For storage

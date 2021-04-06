@@ -1,12 +1,12 @@
 package types_test
 
 import (
-	"testing"
 	"encoding/json"
+	"testing"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 func TestTypes(t *testing.T) {
@@ -18,9 +18,9 @@ var _ = Describe("Types", func() {
 	It("should InputEvent be successfully encode/decode the Status", func() {
 		var input protocol.InputEvent
 		input.Cmd = "warmup"
-		input.Status = protocol.Status{ protocol.Meta{
+		input.Status = protocol.Status{protocol.Meta{
 			Term: 1,
-		} }
+		}}
 
 		data, err := json.Marshal(input)
 		Expect(err).To(BeNil())
@@ -34,10 +34,9 @@ var _ = Describe("Types", func() {
 	})
 
 	It("should Status be successfully encode/decode", func() {
-		var input protocol.Status
-		input = protocol.Status{ protocol.Meta{
+		input := protocol.Status{protocol.Meta{
 			Term: 1,
-		} }
+		}}
 
 		data, err := json.Marshal(input)
 		Expect(err).To(BeNil())

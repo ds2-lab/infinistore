@@ -20,8 +20,8 @@ var _ = Describe("BackupLocator", func() {
 
 		locator.Reset(len(buckets))
 		for i := 0; i < n; i++ {
-			bucket, _ := locator.Locate(fmt.Sprintf("key_%d", i))
-			// bucket, _ := locator.Locate(uuid.New().String())
+			bucket, _, _ := locator.Locate(fmt.Sprintf("key_%d", i))
+			// bucket, _, _ := locator.Locate(uuid.New().String())
 			buckets[bucket]++
 		}
 

@@ -3,9 +3,10 @@ package migrator
 import (
 	"errors"
 	"fmt"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strings"
 	"sync"
+
+	"github.com/mason-leap-lab/redeo/resp"
 
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
@@ -79,10 +80,6 @@ func newStorageAdapter(migrator *Client, store types.Storage) *StorageAdapter {
 
 func (s *StorageAdapter) Id() uint64 {
 	return s.store.Id()
-}
-
-func (s *StorageAdapter) Init(id uint64, persistent bool) (types.Storage, error) {
-	return nil, errors.New("Not implemented")
 }
 
 func (a *StorageAdapter) Restore() types.Storage {

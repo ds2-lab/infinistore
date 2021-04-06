@@ -915,7 +915,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
-	} else if event.IsPersistencyEnabled() {
+	} else if event.IsRecoveryEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 	return nil

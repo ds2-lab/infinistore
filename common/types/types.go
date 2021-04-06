@@ -22,6 +22,10 @@ func (i *InputEvent) IsPersistencyEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
 }
 
+func (i *InputEvent) IsRecoveryEnabled() bool {
+	return (i.Flags & (FLAG_ENABLE_PERSISTENT | FLAG_DISABLE_RECOVERY)) == FLAG_ENABLE_PERSISTENT
+}
+
 func (i *InputEvent) IsBackingOnly() bool {
 	return (i.Flags & FLAG_BACKING_ONLY) > 0
 }
@@ -77,7 +81,9 @@ const (
 	FLAG_WARMUP_REPLICA = 0x0020
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
-	// FLAG_EXPIRED Disable recovery for main repository
+	// FLAG_DISABLE_RECOVERY Disable recovery on reclaimation.
+	FLAG_DISABLE_RECOVERY = 0x0200
+	// FLAG_BACKING_ONLY Disable recovery for main repository
 	FLAG_BACKING_ONLY = 0x1000
 
 	// PONG_FOR_DATA Pong for data link

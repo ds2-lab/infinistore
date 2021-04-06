@@ -45,9 +45,7 @@ func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
 type Lineage interface {
 	IsConsistent(*LineageMeta) (bool, error)
 	ResetBackup()
-	TrackLineage()
 	Commit() (*CommitOption, error)
-	StopTracker(*CommitOption) LineageStatus
 	Recover(*LineageMeta) (bool, chan error)
 	Status() LineageStatus
 }
