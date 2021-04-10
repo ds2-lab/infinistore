@@ -452,6 +452,7 @@ func main() {
 		// Skip: chunkId := c.Arg(1).String()
 		key := c.Arg(2).String()
 
+		var recovered int64
 		chunkId, stream, ret := Store.GetStream(key)
 		// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
 		if ret.Error() == types.ErrNotFound && Persist != nil {
@@ -487,6 +488,7 @@ func main() {
 				}
 				return
 			}
+			recovered = 1
 
 			// Retry
 			chunkId, stream, ret = Store.GetStream(key)
@@ -503,6 +505,7 @@ func main() {
 				ReqId:      reqId,
 				ChunkId:    chunkId,
 				BodyStream: stream,
+				Recovered:  recovered,
 			}
 
 			t2 := time.Now()
@@ -707,6 +710,7 @@ func main() {
 			ReqId:      reqId,
 			ChunkId:    chunkId,
 			BodyStream: stream,
+			Recovered:  1,
 		}
 
 		t2 := time.Now()

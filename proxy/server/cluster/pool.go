@@ -35,13 +35,9 @@ func NewPool(numCluster int, numDeployment int) *Pool {
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
-		s.backend <- lambdastore.NewDeployment(config.LambdaPrefix, uint64(i))
+		s.backend <- lambdastore.NewDeployment(global.Options.GetLambdaPrefix(), uint64(i))
 	}
 	return s
-}
-
-func newPool() *Pool {
-	return NewPool(config.NumLambdaClusters, config.LambdaMaxDeployments)
 }
 
 func (s *Pool) NumAvailable() int {
@@ -179,9 +175,9 @@ func (s *Pool) GetDestination(lambdaId uint64) (types.LambdaDeployment, error) {
 	return pool.ReserveForInstance(lambdaId)
 }
 
-func initPool() {
+func initPool(size int) {
 	if pool == nil {
-		pool = newPool()
+		pool = NewPool(size, config.LambdaMaxDeployments)
 		global.Migrator = pool
 	}
 }

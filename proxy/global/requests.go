@@ -10,10 +10,15 @@ import (
 )
 
 const (
-	REQCNT_STATUS_SUCCEED  = 0x0000000100000000
-	REQCNT_STATUS_RETURNED = 0x0000000000000001
-	REQCNT_MASK_SUCCEED    = 0xFFFFFFFF00000000
-	REQCNT_MASK_RETURNED   = 0x00000000FFFFFFFF
+	REQCNT_STATUS_RETURNED  uint64 = 0x0000000000000001
+	REQCNT_STATUS_SUCCEED   uint64 = 0x0000000000010000
+	REQCNT_STATUS_RECOVERED uint64 = 0x0000000100000000
+	REQCNT_MASK_RETURNED    uint64 = 0x000000000000FFFF
+	REQCNT_MASK_SUCCEED     uint64 = 0x00000000FFFF0000
+	REQCNT_MASK_RECOVERED   uint64 = 0x0000FFFF00000000
+	REQCNT_BITS_RETURNED    uint64 = 0
+	REQCNT_BITS_SUCCEED     uint64 = 16
+	REQCNT_BITS_RECOVERED   uint64 = 32
 )
 
 var (
@@ -132,8 +137,13 @@ func (c *RequestCounter) String() string {
 	return c.reqId
 }
 
-func (c *RequestCounter) AddSucceeded(chunk int) uint64 {
-	status := atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED+REQCNT_STATUS_RETURNED)
+func (c *RequestCounter) AddSucceeded(chunk int, recovered bool) uint64 {
+	var status uint64
+	if recovered {
+		status = atomic.AddUint64(&c.status, REQCNT_STATUS_RECOVERED|REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED)
+	} else {
+		status = atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED)
+	}
 	if c.Requests[chunk] != nil {
 		c.Requests[chunk].MarkReturned()
 	}
@@ -152,26 +162,30 @@ func (c *RequestCounter) Status() uint64 {
 	return atomic.LoadUint64(&c.status)
 }
 
-func (c *RequestCounter) Succeeded() uint64 {
-	return (atomic.LoadUint64(&c.status) & REQCNT_MASK_SUCCEED) >> 32
+func (c *RequestCounter) Returned() uint64 {
+	return atomic.LoadUint64(&c.status) & REQCNT_MASK_RETURNED >> REQCNT_BITS_RETURNED
 }
 
-func (c *RequestCounter) Returned() uint64 {
-	return atomic.LoadUint64(&c.status) & REQCNT_MASK_RETURNED
+func (c *RequestCounter) Succeeded() uint64 {
+	return (atomic.LoadUint64(&c.status) & REQCNT_MASK_SUCCEED) >> REQCNT_BITS_SUCCEED
+}
+
+func (c *RequestCounter) Recovered() uint64 {
+	return (atomic.LoadUint64(&c.status) & REQCNT_MASK_RECOVERED) >> REQCNT_BITS_RECOVERED
 }
 
 func (c *RequestCounter) IsFulfilled(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsFulfilled(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED)>>32 >= c.numToFulfill
+	return (status[0]&REQCNT_MASK_SUCCEED)>>REQCNT_BITS_SUCCEED >= c.numToFulfill
 }
 
 func (c *RequestCounter) IsLate(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsLate(c.Status())
 	}
-	return (status[0]&REQCNT_MASK_SUCCEED)>>32 > c.numToFulfill
+	return (status[0]&REQCNT_MASK_SUCCEED)>>REQCNT_BITS_SUCCEED > c.numToFulfill
 }
 
 func (c *RequestCounter) IsAllReturned(status ...uint64) bool {

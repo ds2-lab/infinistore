@@ -26,7 +26,7 @@ type StaticCluster struct {
 
 // initial lambda group
 func NewStaticCluster(size int) *StaticCluster {
-	initPool()
+	initPool(size)
 
 	extra := 0
 	if global.Options.Evaluation && global.Options.NumBackups > 0 {
@@ -43,8 +43,8 @@ func NewStaticCluster(size int) *StaticCluster {
 
 	// Initialize instances
 	for i := c.group.StartIndex(); i < c.group.EndIndex(); i = i.Next() {
-		c.log.Info("[Registering lambda store %s%d]", config.LambdaPrefix, i)
-		pool.GetForGroup(c.group, i)
+		ins := pool.GetForGroup(c.group, i)
+		c.log.Info("[Lambda store %s Registered]", ins.Name())
 	}
 	// Something can only be done after all nodes initialized.
 	all := c.instances.Value().([]*lambdastore.Instance)

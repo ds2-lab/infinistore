@@ -18,6 +18,7 @@ type Response struct {
 	Size       int64
 	Body       []byte
 	BodyStream resp.AllReadCloser
+	Status     int64
 
 	w resp.ResponseWriter
 }
