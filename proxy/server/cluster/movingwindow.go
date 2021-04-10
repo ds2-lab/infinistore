@@ -20,25 +20,16 @@ import (
 )
 
 var (
-	NumLambdaClusters = config.NumLambdaClusters
-	MaxBackingNodes   = 5
-	NumInitialBuffers = NumLambdaClusters * (config.BackupsPerInstance/MaxBackingNodes - 1)
-	NumScalerBuffer   = NumLambdaClusters * 100
+	MaxBackingNodes = 5
 
 	ErrInvalidInstance = errors.New("invalid instance")
 )
 
-func init() {
-	if NumLambdaClusters > config.LambdaMaxDeployments {
-		NumLambdaClusters = config.LambdaMaxDeployments
-	}
-	if NumInitialBuffers+NumLambdaClusters > config.LambdaMaxDeployments {
-		NumInitialBuffers = config.LambdaMaxDeployments - NumLambdaClusters
-	}
-}
-
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
+	numFuncSteps   int // Minimum number of functions scale at a time.
+	numBufferFuncs int // Number of functions initialized as the buffer.
+
 	log     logger.ILogger
 	placer  *metastore.DefaultPlacer
 	group   *Group
@@ -58,9 +49,16 @@ type MovingWindow struct {
 }
 
 func NewMovingWindow() *MovingWindow {
-	initPool()
+	return NewMovingWindowWithOptions(global.Options.GetNumFunctions())
+}
+
+func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
+	initPool(numFuncSteps)
 
 	cluster := &MovingWindow{
+		numFuncSteps:   numFuncSteps,
+		numBufferFuncs: numFuncSteps * (config.BackupsPerInstance/MaxBackingNodes - 1),
+
 		log:       global.GetLogger("MovingWindow: "),
 		group:     NewGroup(0),
 		buckets:   make([]*Bucket, 0, config.NumAvailableBuckets+2), // Reserve space for new bucket and last expired bucket
@@ -68,18 +66,24 @@ func NewMovingWindow() *MovingWindow {
 		startTime: time.Now(),
 
 		// for scaling out
-		scaler: make(chan *types.ScaleEvent, NumScalerBuffer),
+		scaler: make(chan *types.ScaleEvent, numFuncSteps*100), // Reserve enough space for event queue to pervent blocking.
 		// scaleCounter: 0,
 
 		done: make(chan struct{}),
 	}
 	cluster.placer = metastore.NewDefaultPlacer(metastore.New(), cluster)
+	if cluster.numBufferFuncs+cluster.numFuncSteps > config.LambdaMaxDeployments {
+		cluster.numBufferFuncs = config.LambdaMaxDeployments - cluster.numFuncSteps
+	}
+	if cluster.numBufferFuncs < 0 {
+		cluster.numBufferFuncs = 0
+	}
 	return cluster
 }
 
 func (mw *MovingWindow) Start() error {
 	// init bucket
-	bucket, err := newBucket(0, mw.group, NumLambdaClusters+NumInitialBuffers)
+	bucket, err := newBucket(0, mw.group, mw.numFuncSteps+mw.numBufferFuncs)
 	if err != nil {
 		return err
 	}
@@ -329,7 +333,7 @@ func (mw *MovingWindow) Rotate() (old *Bucket, inherited int, err error) {
 
 	// Start new bucket to fill active window.
 	old = mw.getCurrentBucketLocked()
-	bucket, inherited, err := old.createNextBucket(NumLambdaClusters)
+	bucket, inherited, err := old.createNextBucket(mw.numFuncSteps)
 	if err != nil {
 		return old, 0, err
 	}
@@ -459,9 +463,9 @@ func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
 	mw.log.Debug("Scaleing...")
 
 	// Scale
-	num := NumLambdaClusters
-	if evt.ScaleTarget > NumLambdaClusters {
-		num = ((evt.ScaleTarget-1)/NumLambdaClusters + 1) * NumLambdaClusters
+	num := mw.numFuncSteps
+	if evt.ScaleTarget > mw.numFuncSteps {
+		num = ((evt.ScaleTarget-1)/mw.numFuncSteps + 1) * mw.numFuncSteps
 	}
 	lastLen := bucket.len()
 	newGins, err := bucket.scale(num)
@@ -486,7 +490,7 @@ func (mw *MovingWindow) testScaledLocked(gins *GroupInstance, bucket *Bucket, re
 	if gins.idx.(*BucketIndex).BucketId != bucket.id {
 		// Bucket is rotated
 		return false
-	} else if !bucket.shouldScale(gins, NumLambdaClusters) {
+	} else if !bucket.shouldScale(gins, mw.numFuncSteps) {
 		// Already scaled, flag inactive
 		if retire {
 			bucket.flagInactive(gins)

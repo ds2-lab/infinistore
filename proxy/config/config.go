@@ -5,7 +5,7 @@ import (
 )
 
 // LambdaPrefix Prefix of Lambda function, overridable with command line parameter -lambda-prefix.
-var LambdaPrefix = "Store1VPCNode"
+const LambdaPrefix = "Store1VPCNode"
 
 // AWSRegion Region of AWS services.
 const AWSRegion = "us-east-1"

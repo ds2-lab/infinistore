@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -205,12 +206,16 @@ type ObjectResponse struct {
 	Val        string
 	Body       []byte
 	BodyStream resp.AllReadCloser
+	Recovered  int64
 }
 
 func (r *ObjectResponse) Prepare() {
 	r.AppendBulkString(r.Cmd)
 	r.AppendBulkString(r.ReqId)
 	r.AppendBulkString(r.ChunkId)
+	if r.Cmd == protocol.CMD_GET {
+		r.AppendInt(r.Recovered)
+	}
 	if len(r.Val) > 0 {
 		r.AppendBulkString(r.Val)
 	}

@@ -76,11 +76,12 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(4)
+	conn.Writer().WriteMultiBulkSize(5)
 	conn.Writer().WriteBulkString(req.Cmd)
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
 	req.conn = conn
 }
 

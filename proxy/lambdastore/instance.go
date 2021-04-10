@@ -915,7 +915,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
-	} else if event.IsPersistencyEnabled() {
+	} else if event.IsRecoveryEnabled() {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 	return nil
@@ -1218,7 +1218,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 	cmdName := strings.ToLower(cmd.String())
 	switch req := cmd.(type) {
 	case *types.Request:
-		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), cmdName, req.Id.ReqId, req.Id.ChunkId, int64(validateDuration))
+		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), int64(validateDuration))
 
 		// Select link
 		link := ctrlLink

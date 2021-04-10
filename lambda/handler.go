@@ -80,11 +80,23 @@ func getAwsReqId(ctx context.Context) string {
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
-	Store, _ = Store.Init(input.Id, input.IsPersistencyEnabled())
-	Lineage = Store.(*storage.Storage).ConfigS3Lineage(S3_BACKUP_BUCKET, "")
-	Persist = (types.PersistentStorage)(nil)
-	if Lineage != nil {
-		Persist = Store.(*storage.Storage)
+	if Store == nil || Store.Id() != input.Id {
+		Persist = (types.PersistentStorage)(nil)
+		Lineage = (types.Lineage)(nil)
+		if input.IsRecoveryEnabled() {
+			store := storage.NewLineageStorage(input.Id)
+			store.ConfigS3(S3_BACKUP_BUCKET, "")
+			Store = store
+			Persist = store
+			Lineage = store
+		} else if input.IsPersistencyEnabled() {
+			store := storage.NewPersistentStorage(input.Id)
+			store.ConfigS3(S3_BACKUP_BUCKET, "")
+			Store = store
+			Persist = store
+		} else {
+			Store = storage.NewStorage(input.Id)
+		}
 	}
 
 	// Initialize session.
@@ -109,7 +121,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Update global parameters
 	collector.Prefix = input.Prefix
 	log.Level = input.Log
-	Store.(*storage.Storage).ConfigLogger(log.Level, log.Color)
+	Store.(types.Loggable).ConfigLogger(log.Level, log.Color)
 	lambdaLife.Immortal = !input.IsReplicaEnabled()
 
 	log.Info("New lambda invocation: %v", input.Cmd)
@@ -119,8 +131,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		return DefaultStatus, nil
 	}
 
-	// Check connection
 	Server.SetManualAck(true)
+
+	// Check connection
 	if started, err := Server.StartOrResume(input.Proxy, &worker.WorkerOptions{DryRun: DRY_RUN}); err != nil {
 		return DefaultStatus, err
 	} else if started {
@@ -137,6 +150,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Start data collector
 	go collector.Collect(session)
 
+	// Check lineage consistency and recovery if necessary
 	var recoverErrs []chan error
 	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
@@ -204,10 +218,13 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				}
 			}
 		}
-
-		// Start tracking
-		Lineage.TrackLineage()
 	}
+
+	// Start tracking
+	if Persist != nil {
+		Persist.StartTracker()
+	}
+
 	Server.SetManualAck(false)
 
 	// Wait until recovered to avoid timeout on recovery.
@@ -305,8 +322,11 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			log.Debug("Migration initiated.")
 		} else {
 			// Finalize, this is quick usually.
+			if Persist != nil {
+				Persist.StopTracker(commitOpt)
+			}
 			if Lineage != nil {
-				status = Lineage.StopTracker(commitOpt)
+				status = Lineage.Status()
 			}
 			byeHandler()
 			session.Done()
@@ -432,7 +452,47 @@ func main() {
 		// Skip: chunkId := c.Arg(1).String()
 		key := c.Arg(2).String()
 
+		var recovered int64
 		chunkId, stream, ret := Store.GetStream(key)
+		// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
+		if ret.Error() == types.ErrNotFound && Persist != nil {
+			if Lineage != nil {
+				log.Warn("Key not found while recovery is enabled: %v", key)
+			}
+			errRsp := &worker.ErrorResponse{}
+			chunkId = c.Arg(1).String()
+			sizeArg := c.Arg(3)
+			if sizeArg == nil {
+				errRsp.Error = errors.New("size must be set for trying recovery from persistent layer")
+				Server.AddResponses(errRsp, client)
+				if err := errRsp.Flush(); err != nil {
+					log.Error("Error on flush(error 500): %v", err)
+				}
+				return
+			}
+			size, szErr := sizeArg.Int()
+			if szErr != nil {
+				errRsp.Error = szErr
+				Server.AddResponses(errRsp, client)
+				if err := errRsp.Flush(); err != nil {
+					log.Error("Error on flush(error 500): %v", err)
+				}
+				return
+			}
+			ret = Persist.SetRecovery(key, chunkId, uint64(size))
+			if ret.Error() != nil {
+				errRsp.Error = ret.Error()
+				Server.AddResponses(errRsp, client)
+				if err := errRsp.Flush(); err != nil {
+					log.Error("Error on flush(error 500): %v", err)
+				}
+				return
+			}
+			recovered = 1
+
+			// Retry
+			chunkId, stream, ret = Store.GetStream(key)
+		}
 		if stream != nil {
 			defer stream.Close()
 		}
@@ -445,6 +505,7 @@ func main() {
 				ReqId:      reqId,
 				ChunkId:    chunkId,
 				BodyStream: stream,
+				Recovered:  recovered,
 			}
 
 			t2 := time.Now()
@@ -649,6 +710,7 @@ func main() {
 			ReqId:      reqId,
 			ChunkId:    chunkId,
 			BodyStream: stream,
+			Recovered:  1,
 		}
 
 		t2 := time.Now()
@@ -758,7 +820,8 @@ func main() {
 		Lifetime.Rest()
 
 		// Reset store
-		Store = (*storage.Storage)(nil)
+		Store = nil
+		Persist = nil
 		Lineage = nil
 		log.Debug("before done")
 		session.Done()
@@ -1124,6 +1187,24 @@ func main() {
 						readPong(ctrlClient.Reader)
 					}
 
+					// Get key with recovery
+					ctrlClient.Writer.WriteMultiBulkSize(5)
+					ctrlClient.Writer.WriteBulkString(protocol.CMD_GET)
+					ctrlClient.Writer.WriteBulkString("dummy request id")
+					ctrlClient.Writer.WriteBulkString("1")
+					ctrlClient.Writer.WriteBulkString("obj-1-9")
+					ctrlClient.Writer.WriteBulkString("100000")
+					ctrlClient.Writer.Flush()
+
+					// msg, _ := ctrlClient.Reader.ReadError()
+					// log.Error("error: %v", msg)
+
+					ctrlClient.Reader.ReadBulkString()            // cmd
+					ctrlClient.Reader.ReadBulkString()            // reqid
+					ctrlClient.Reader.ReadBulkString()            // chunk id
+					data, _ := ctrlClient.Reader.ReadBulkString() // stream
+					log.Info("Recovered data of size: %v", len(data))
+
 					<-ended
 
 					// // Control link interruption test
@@ -1244,19 +1325,19 @@ func main() {
 					// // 	fmt.Println(str)
 					// // }
 
-					// // // Get on recovering test
-					// // dataClient := worker.NewClient(shortcut.Conns[1].Server)
-					// // dataClient.Writer.WriteMultiBulkSize(4)
-					// // dataClient.Writer.WriteBulkString(protocol.CMD_GET)
-					// // dataClient.Writer.WriteBulkString("dummy request id")
-					// // dataClient.Writer.WriteBulkString("1")
-					// // dataClient.Writer.WriteBulkString("obj-9")
-					// // dataClient.Writer.Flush()
+					// // Get on recovering test
+					// dataClient := worker.NewClient(shortcut.Conns[1].Server)
+					// dataClient.Writer.WriteMultiBulkSize(4)
+					// dataClient.Writer.WriteBulkString(protocol.CMD_GET)
+					// dataClient.Writer.WriteBulkString("dummy request id")
+					// dataClient.Writer.WriteBulkString("1")
+					// dataClient.Writer.WriteBulkString("obj-9")
+					// dataClient.Writer.Flush()
 
-					// // dataClient.Reader.ReadBulkString() // cmd
-					// // dataClient.Reader.ReadBulkString() // reqid
-					// // dataClient.Reader.ReadBulkString() // chunk id
-					// // dataClient.Reader.ReadBulkString() // stream
+					// dataClient.Reader.ReadBulkString() // cmd
+					// dataClient.Reader.ReadBulkString() // reqid
+					// dataClient.Reader.ReadBulkString() // chunk id
+					// dataClient.Reader.ReadBulkString() // stream
 
 					// <-ended
 
@@ -1343,11 +1424,13 @@ func main() {
 					// readPong(ctrlClient.Reader)
 					// log.Info("Ctrl PONG received.")
 
-					// <-ended
+					<-ended
 
-					log.Info("Store size: %d", Store.Len())
-					Store.(*storage.Storage).ClearBackup()
-					log.Info("Store size after cleanup: %d", Store.Len())
+					if Lineage != nil {
+						log.Info("Store size: %d", Store.Len())
+						Lineage.(*storage.LineageStorage).ClearBackup()
+						log.Info("Store size after cleanup: %d", Store.Len())
+					}
 
 					// End of invocations
 					close(invokes)

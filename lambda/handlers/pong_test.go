@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/infinicache/lambda/worker"
 )
 
 type TestPongHandler struct {
@@ -23,13 +23,13 @@ func newTestPongHandler(override pong) *TestPongHandler {
 	return handler
 }
 
-func succeedPong(link *redeo.Client, flags int64) error {
+func succeedPong(link *worker.Link, flags int64) error {
 	return nil
 }
 
 func getTimeoutPong(handler *TestPongHandler, failure int) pong {
 	attempt := 0
-	return func(link *redeo.Client, flags int64) error {
+	return func(link *worker.Link, flags int64) error {
 		failure := attempt < failure
 		attempt++
 		if !failure {
