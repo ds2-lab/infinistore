@@ -77,13 +77,13 @@ func (c *Client) Dial(addrArr []string) bool {
 
 // Close Close the client
 func (c *Client) Close() {
-	log.Info("Cleaning up...")
+	// log.Debug("Cleaning up...")
 	for addr, conns := range c.conns {
 		for i := range conns {
 			c.disconnect(addr, i)
 		}
 	}
-	log.Info("Client closed.")
+	// log.Debug("Client closed.")
 }
 
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
