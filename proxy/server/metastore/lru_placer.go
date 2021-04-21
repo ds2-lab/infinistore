@@ -173,6 +173,7 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 		}
 		// We can add size to instance safely, the allocated space is reserved for this chunk even set operation may fail.
 		// This allow the client to reset the chunk without affecting the placement.
+		// instance.Meta.IncreaseSize(meta.ChunkSize)
 		size := instance.Meta.IncreaseSize(meta.ChunkSize)
 		p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
 			assigned, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
@@ -182,9 +183,15 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 	// Try find a replacement
 	// p.log.Warn("lambda %d overweight triggered by %d@%s, meta: %v", assigned, chunk, meta.Key, meta)
 	// p.log.Info(p.dumpLRUPlacer())
-	for !p.NextAvailableObject(meta) {
+	numScaned := 0
+	for candidate, found := p.NextAvailableObject(meta, nil); !found; candidate, found = p.NextAvailableObject(meta, candidate) {
 		// p.log.Warn("lambda %d overweight triggered by %d@%s, meta: %v", assigned, chunk, meta.Key, meta)
 		// p.log.Info(p.dumpLRUPlacer())
+		if numScaned > 0 && candidate != nil {
+			p.evictMeta(meta, candidate, false)
+			break
+		}
+		numScaned++
 	}
 	// p.log.Debug("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement)
 
@@ -258,7 +265,7 @@ func (p *LRUPlacer) TouchObject(meta *Meta) {
 	placerMeta.visitedAt = time.Now()
 }
 
-func (p *LRUPlacer) NextAvailableObject(meta *Meta) bool {
+func (p *LRUPlacer) NextAvailableObject(meta *Meta, candidate *Meta) (*Meta, bool) {
 	// Position 0 is reserved, cursor iterates from 1
 	if p.cursor == 0 {
 		if p.objects[p.secondary] == nil || cap(p.objects[p.secondary]) < len(p.objects[p.primary]) {
@@ -266,7 +273,7 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta) bool {
 		} else {
 			p.objects[p.secondary] = p.objects[p.secondary][:1] // Alwarys append from the 2nd position.
 		}
-		p.cursorBound = len(p.objects[p.primary]) // CusorBound is fixed once start iteration.
+		p.cursorBound = len(p.objects[p.primary]) // CursorBound is fixed once start iteration.
 		p.cursor = 1
 	}
 
@@ -284,24 +291,31 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta) bool {
 		} else if mPlacerMeta.visited && mPlacerMeta.allConfirmed() {
 			// Only switch to unvisited for complete object.
 			mPlacerMeta.visited = false
-		} else if !mPlacerMeta.visited {
-			// Found candidate
-			m.Deleted = true
-			// Don't reset placerMeta here, reset on recover object.
-			// m.placerMeta = nil
-			metaPlacerMeta := meta.placerMeta.(*LRUPlacerMeta)
-			metaPlacerMeta.swapMap = copyPlacement(metaPlacerMeta.swapMap, m.Placement)
-			metaPlacerMeta.evicts = m
+		} else if !mPlacerMeta.visited && meta.ChunkSize <= m.ChunkSize {
+			// // Found candidate and candidate is large enough to be freed for space.
+			// m.Deleted = true
+			// // Don't reset placerMeta here, reset on recover object.
+			// // m.placerMeta = nil
+			// metaPlacerMeta := meta.placerMeta.(*LRUPlacerMeta)
+			// metaPlacerMeta.swapMap = copyPlacement(metaPlacerMeta.swapMap, m.Placement)
+			// metaPlacerMeta.evicts = m
 
-			p.objects[p.primary][metaPlacerMeta.pos[p.primary]] = nil // unset old position
-			metaPlacerMeta.pos[p.primary] = p.cursor
-			p.objects[p.primary][p.cursor] = meta // replace
+			// p.objects[p.primary][metaPlacerMeta.pos[p.primary]] = nil // unset old position
+			// metaPlacerMeta.pos[p.primary] = p.cursor
+			// p.objects[p.primary][p.cursor] = meta // replace
+			// m = meta
+			// mPlacerMeta = m.placerMeta.(*LRUPlacerMeta)
+
+			// mPlacerMeta.visited = true
+			// mPlacerMeta.visitedAt = time.Now()
+			p.evictMeta(meta, m, false)
 			m = meta
-			mPlacerMeta = m.placerMeta.(*LRUPlacerMeta)
-
-			mPlacerMeta.visited = true
-			mPlacerMeta.visitedAt = time.Now()
+			mPlacerMeta = meta.placerMeta.(*LRUPlacerMeta)
 			found = true
+
+		} else if !mPlacerMeta.visited && (candidate == nil || m.ChunkSize > candidate.ChunkSize) {
+			// Candidate is not large enough, but largest we have seen so far.
+			candidate = m
 		}
 
 		// Add current object to the secondary array for compact purpose.
@@ -332,7 +346,33 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta) bool {
 		p.primary, p.secondary = p.secondary, p.primary
 	}
 
-	return found
+	return candidate, found
+}
+
+func (p *LRUPlacer) evictMeta(meta *Meta, candidate *Meta, resetSecondary bool) {
+	// Found candidate and candidate is large enough to be freed for space.
+	candidate.Deleted = true
+
+	// Don't reset placerMeta here, reset on recover object.
+	// m.placerMeta = nil
+	metaPlacerMeta := meta.placerMeta.(*LRUPlacerMeta)
+	metaPlacerMeta.swapMap = copyPlacement(metaPlacerMeta.swapMap, candidate.Placement)
+	metaPlacerMeta.evicts = candidate
+
+	candidatePlacerMeta := candidate.placerMeta.(*LRUPlacerMeta)
+	candidatePlacerMeta.visited = true
+	candidatePlacerMeta.visitedAt = time.Now()
+
+	p.objects[p.primary][metaPlacerMeta.pos[p.primary]] = nil // unset old position
+	cursorPrimary := candidatePlacerMeta.pos[p.primary]
+	metaPlacerMeta.pos[p.primary] = cursorPrimary
+	p.objects[p.primary][cursorPrimary] = meta // replace
+	if resetSecondary {
+		p.objects[p.secondary][metaPlacerMeta.pos[p.secondary]] = nil // unset old position
+		cursorSecondary := candidatePlacerMeta.pos[p.secondary]
+		metaPlacerMeta.pos[p.secondary] = cursorSecondary
+		p.objects[p.secondary][cursorSecondary] = meta // replace
+	}
 }
 
 // func (p *LRUPlacer) dumpLRUPlacer(args ...bool) string {
