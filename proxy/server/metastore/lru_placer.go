@@ -1,16 +1,22 @@
 package metastore
 
 import (
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
 	INIT_LRU_CAPACITY = 10000
+)
+
+var (
+	ErrPlacementConflict = errors.New("conflict on placing")
 )
 
 type LRUPlacerMeta struct {
@@ -94,15 +100,41 @@ func (p *LRUPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunk int,
 
 func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command) (*Meta, MetaPostProcess, error) {
 	chunkId := newMeta.lastChunk
-	meta, _, post := p.GetOrInsert(key, newMeta)
-	if meta.Deleted {
-		return meta, post, nil
-	}
-	req := cmd.GetRequest()
-	req.InsId = meta.Placement[chunkId]
-	req.Info = meta
 
-	return meta, post, p.cluster.Instance(req.InsId).Dispatch(cmd)
+	meta, got, _ := p.store.GetOrInsert(key, newMeta)
+	if got {
+		meta.Placement[chunkId] = newMeta.Placement[chunkId]
+		newMeta.close()
+	}
+	cmd.GetRequest().Info = meta
+
+	_, post, err := p.Place(meta, chunkId, cmd)
+	return meta, post, err
+}
+
+// For test and simulation
+func (p *LRUPlacer) Insert(key string, newMeta *Meta) (*Meta, MetaPostProcess, error) {
+	chunkId := newMeta.lastChunk
+
+	meta, got, _ := p.store.GetOrInsert(key, newMeta)
+	if got {
+		meta.Placement[chunkId] = newMeta.Placement[chunkId]
+		newMeta.close()
+	}
+
+	_, post, err := p.FindPlacement(meta, chunkId)
+	return meta, post, err
+}
+
+func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, MetaPostProcess, error) {
+	instance, post, err := p.FindPlacement(meta, chunkId)
+	if err != nil {
+		return instance, post, err
+	}
+
+	cmd.GetRequest().InsId = instance.Id()
+	err = instance.Dispatch(cmd)
+	return instance, post, err
 }
 
 // NewMeta will remap idx according to following logic:
@@ -112,14 +144,7 @@ func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command)
 // 3. If no Balancer relocation is available, request one.
 // 4. Remap to smaller "Size" of instance between target instance and remapped instance according to "chunk" in
 //    relocation array.
-func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostProcess) {
-	chunk := newMeta.lastChunk
-	lambdaId := newMeta.Placement[chunk]
-
-	meta, got, _ := p.store.GetOrInsert(key, newMeta)
-	if got {
-		newMeta.close()
-	}
+func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instance, MetaPostProcess, error) {
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
@@ -136,10 +161,10 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 	placerMeta := meta.placerMeta.(*LRUPlacerMeta)
 
 	// Usually this should always be false for SET operation, flag RESET if true.
-	if placerMeta.confirmed[chunk] {
+	if placerMeta.confirmed[chunkId] {
 		meta.Reset = true
 		// No size update is required, reserved on setting.
-		return meta, got, nil
+		return p.cluster.Instance(meta.Placement[chunkId]), nil, nil
 	}
 
 	// Check availability
@@ -148,25 +173,24 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 
 	// Double check if it is evicted.
 	if meta.Deleted {
-		return meta, got, nil
+		return nil, nil, ErrPlacementConflict
 	}
 
 	// Check if a replacement decision has been made.
 	if !IsPlacementEmpty(placerMeta.swapMap) {
-		meta.Placement[chunk] = placerMeta.swapMap[chunk]
-		placerMeta.confirm(chunk)
+		meta.Placement[chunkId] = placerMeta.swapMap[chunkId]
+		placerMeta.confirm(chunkId)
 
 		// No size update is required, reserved on eviction.
-		return meta, got, nil
+		return p.cluster.Instance(meta.Placement[chunkId]), nil, nil
 	}
 
 	// assigned := meta.slice.GetIndex(lambdaId)
-	assigned := lambdaId
-	instances := p.cluster.GetActiveInstances(len(meta.Placement))
-	instance := instances[int(assigned)%len(instances)]
+	assigned := meta.Placement[chunkId]
+	instance := p.cluster.Instance(meta.Placement[chunkId])
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
-		meta.Placement[chunk] = assigned
-		placerMeta.confirm(chunk)
+		meta.Placement[chunkId] = assigned
+		placerMeta.confirm(chunkId)
 		// If the object has not seen.
 		if placerMeta.pos[p.primary] == 0 {
 			p.AddObject(meta)
@@ -176,8 +200,8 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 		// instance.Meta.IncreaseSize(meta.ChunkSize)
 		size := instance.Meta.IncreaseSize(meta.ChunkSize)
 		p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-			assigned, size, instance.Meta.Capacity, chunk, key, meta.ChunkSize)
-		return meta, got, nil
+			assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
+		return instance, nil, nil
 	}
 
 	// Try find a replacement
@@ -196,14 +220,14 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 	// p.log.Debug("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement)
 
 	for i, tbe := range placerMeta.swapMap { // To be evicted
-		instance := instances[tbe]
+		instance := p.cluster.Instance(tbe)
 		if !placerMeta.confirmed[i] {
 			// Confirmed chunk will not move
 
 			// The size can be replaced safely, too.
 			size := instance.Meta.IncreaseSize(meta.ChunkSize - placerMeta.evicts.ChunkSize)
 			p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, evict:%d@%s, Δ:%d).",
-				tbe, size, instance.Meta.Capacity, i, key, i, placerMeta.evicts.Key,
+				tbe, size, instance.Meta.Capacity, i, meta.Key, i, placerMeta.evicts.Key,
 				meta.ChunkSize-placerMeta.evicts.ChunkSize)
 		} else {
 			size := instance.Meta.DecreaseSize(placerMeta.evicts.ChunkSize)
@@ -213,10 +237,10 @@ func (p *LRUPlacer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPos
 		}
 	}
 
-	meta.Placement[chunk] = placerMeta.swapMap[chunk]
-	placerMeta.confirm(chunk)
+	meta.Placement[chunkId] = placerMeta.swapMap[chunkId]
+	placerMeta.confirm(chunkId)
 	placerMeta.once = &sync.Once{}
-	return meta, got, placerMeta.postProcess
+	return p.cluster.Instance(meta.Placement[chunkId]), placerMeta.postProcess, nil
 }
 
 func (p *LRUPlacer) Get(key string, chunk int) (*Meta, bool) {
@@ -310,7 +334,7 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta, candidate *Meta) (*Meta, boo
 			// mPlacerMeta.visitedAt = time.Now()
 			p.evictMeta(meta, m, false)
 			m = meta
-			mPlacerMeta = meta.placerMeta.(*LRUPlacerMeta)
+			mPlacerMeta = m.placerMeta.(*LRUPlacerMeta)
 			found = true
 
 		} else if !mPlacerMeta.visited && (candidate == nil || m.ChunkSize > candidate.ChunkSize) {
@@ -358,11 +382,10 @@ func (p *LRUPlacer) evictMeta(meta *Meta, candidate *Meta, resetSecondary bool) 
 	metaPlacerMeta := meta.placerMeta.(*LRUPlacerMeta)
 	metaPlacerMeta.swapMap = copyPlacement(metaPlacerMeta.swapMap, candidate.Placement)
 	metaPlacerMeta.evicts = candidate
+	metaPlacerMeta.visited = true
+	metaPlacerMeta.visitedAt = time.Now()
 
 	candidatePlacerMeta := candidate.placerMeta.(*LRUPlacerMeta)
-	candidatePlacerMeta.visited = true
-	candidatePlacerMeta.visitedAt = time.Now()
-
 	p.objects[p.primary][metaPlacerMeta.pos[p.primary]] = nil // unset old position
 	cursorPrimary := candidatePlacerMeta.pos[p.primary]
 	metaPlacerMeta.pos[p.primary] = cursorPrimary

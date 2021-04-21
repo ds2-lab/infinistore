@@ -188,6 +188,20 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
+	// Validate the status of meta
+	if meta.Deleted {
+		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
+		if err != nil {
+			w.AppendError(err.Error())
+			w.Flush()
+			return
+		}
+		if postProcess != nil {
+			postProcess(p.dropEvicted)
+		}
+		return
+	}
+
 	// Validate the status of the instance
 	instance := p.cluster.Instance(uint64(lambdaDest))
 	if instance == nil || instance.IsReclaimed() || instance.Dispatch(req) != nil {

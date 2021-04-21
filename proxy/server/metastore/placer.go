@@ -24,6 +24,7 @@ type Placer interface {
 	// Parameters: key, size, dChunks, pChunks, chunkId, chunkSize, lambdaId, sliceSize
 	NewMeta(string, int64, int, int, int, int64, uint64, int) *Meta
 	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
+	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
 }
 
@@ -60,14 +61,14 @@ func (l *DefaultPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Comm
 	}
 	cmd.GetRequest().Info = meta
 
-	instance, err := l.Place(meta, chunkId, cmd)
+	instance, post, err := l.Place(meta, chunkId, cmd)
 	if err != nil {
 		meta.Placement[chunkId] = InvalidPlacement
-		return meta, nil, err
+		return meta, post, err
 	}
 
 	meta.Placement[chunkId] = instance.Id()
-	return meta, nil, nil
+	return meta, post, nil
 }
 
 func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
@@ -81,7 +82,7 @@ func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
 	return meta, ok
 }
 
-func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
+func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, MetaPostProcess, error) {
 	test := chunkId
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
 	for {
@@ -108,7 +109,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			// Try next group
 			test += len(meta.Placement)
 		} else if err != nil {
-			return nil, err
+			return nil, nil, err
 		} else {
 			// Placed successfully
 			key := meta.ChunkKey(chunkId)
@@ -124,7 +125,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
 			}
 
-			return ins, nil
+			return ins, nil, nil
 		}
 	}
 }

@@ -57,6 +57,11 @@ type Meta struct {
 	numChunks int32
 }
 
+func (m *Meta) ResetCapacity(capacity uint64, used uint64) {
+	m.Capacity = capacity
+	m.size = used
+}
+
 func (m *Meta) Size() uint64 {
 	return atomic.LoadUint64(&m.size)
 }

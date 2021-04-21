@@ -185,7 +185,8 @@ func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
 
 // lambdastore.Relocator implementation
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
-	return mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
+	ins, _, err := mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
+	return ins, err
 }
 
 func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, bool, error) {
