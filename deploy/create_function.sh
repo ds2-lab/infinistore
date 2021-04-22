@@ -12,7 +12,7 @@ if [ "$2" != "" ] ; then
   PREFIX="$2"
 fi
 
-echo "Creating Lambda deployments ${PREFIX}0 to ${PREFIX}$cluster of $mem MB, $1s timeout..."
+echo "Creating Lambda deployments ${PREFIX}0 to ${PREFIX}$((cluster-1)) of $mem MB, $1s timeout..."
 read -p "Press any key to confirm, or ctrl-C to stop."
 
 cd $BASE/../lambda

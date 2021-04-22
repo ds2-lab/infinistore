@@ -21,7 +21,7 @@ else
 fi
 
 if [ "$CODE" == "-code" ] ; then
-    echo -e "Updating "$EMPH"code and configuration"$RESET" of Lambda deployments ${PREFIX}0 to ${PREFIX}$cluster to $mem MB, $1s timeout..."
+    echo -e "Updating "$EMPH"code and configuration"$RESET" of Lambda deployments ${PREFIX}0 to ${PREFIX}$((cluster-1)) to $mem MB, $1s timeout..."
     read -p "Press any key to confirm, or ctrl-C to stop."
 
     cd $BASE/../lambda
@@ -32,7 +32,7 @@ if [ "$CODE" == "-code" ] ; then
     echo "Putting code zip to s3"
     aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 else 
-    echo -e "Updating "$EMPH"configuration"$RESET" of Lambda deployments ${PREFIX}0 to ${PREFIX}$cluster to $mem MB, $1s timeout..."
+    echo -e "Updating "$EMPH"configuration"$RESET" of Lambda deployments ${PREFIX}0 to ${PREFIX}$((cluster-1)) to $mem MB, $1s timeout..."
     read -p "Press any key to confirm, or ctrl-C to stop."
 fi
 
