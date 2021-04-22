@@ -129,7 +129,7 @@ func main() {
 	}()
 	prxy.WaitReady()
 	if dash != nil {
-		dash.ClusterView.Update()
+		dash.Update()
 	}
 
 	// Pid is only written after ready

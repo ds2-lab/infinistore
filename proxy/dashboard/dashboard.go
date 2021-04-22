@@ -20,7 +20,7 @@ type Dashboard struct {
 
 func NewDashboard() *Dashboard {
 	if err := ui.Init(); err != nil {
-		log.Panic("Failed to initialize dashboard: %v", err)
+		log.Panic(err)
 	}
 
 	dashboard := &Dashboard{
@@ -29,7 +29,6 @@ func NewDashboard() *Dashboard {
 		GroupedView: views.NewGroupedClusterView(" Nodes "),
 		LogView:     views.NewLogView(" Logs ", global.Options.LogFile),
 	}
-
 	// Full screen
 	termWidth, termHeight := ui.TerminalDimensions()
 	dashboard.Grid.SetRect(0, 0, termWidth, termHeight)
@@ -58,7 +57,7 @@ func (dash *Dashboard) ConfigCluster(cluster interface{}, cols int) {
 	case types.ClusterStats:
 		dash.Grid.Items[0].Entry = dash.ClusterView
 		dash.ClusterView.Cluster = cluster.(types.ClusterStats)
-		dash.ClusterView.Cols = 80
+		dash.ClusterView.Cols = 25
 		dash.ClusterView.Update()
 	case types.GroupedClusterStats:
 		dash.Grid.Items[0].Entry = dash.GroupedView
