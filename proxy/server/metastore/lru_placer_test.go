@@ -39,6 +39,10 @@ func (im *TestInstanceManager) GetActiveInstances(int) []*lambdastore.Instance {
 	return im.all
 }
 
+func (im *TestInstanceManager) GetSlice(int) Slice {
+	return nil
+}
+
 func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
 
 func newTestMeta(i int) *Meta {
