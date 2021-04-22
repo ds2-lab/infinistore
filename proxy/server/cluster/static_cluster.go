@@ -27,6 +27,10 @@ type Slice struct {
 	cap  int
 }
 
+func NewSlice(size int, initializer SliceInitializer) *Slice {
+	return &Slice{once: &sync.Once{}, init: initializer, size: size}
+}
+
 func (s *Slice) Size() int {
 	return s.size
 }
@@ -189,7 +193,7 @@ func (c *StaticCluster) GetActiveInstances(num int) []*lambdastore.Instance {
 }
 
 func (c *StaticCluster) GetSlice(size int) metastore.Slice {
-	return &Slice{init: c.nextSlice, size: size}
+	return NewSlice(size, c.nextSlice)
 }
 
 func (c *StaticCluster) Trigger(event int, args ...interface{}) {
