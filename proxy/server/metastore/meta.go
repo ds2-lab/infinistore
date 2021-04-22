@@ -16,6 +16,14 @@ var (
 	InvalidPlacement = ^uint64(0)
 )
 
+type SliceInitializer func(int) (int, int)
+
+type Slice interface {
+	Size() int
+	Reset(int)
+	GetIndex(uint64) uint64
+}
+
 type Meta struct {
 	Key       string
 	Size      int64
@@ -27,6 +35,7 @@ type Meta struct {
 	Reset     bool
 	Deleted   bool
 
+	slice      Slice
 	placerMeta interface{}
 	lastChunk  int
 	mu         sync.Mutex

@@ -92,7 +92,11 @@ func NewLRUPlacer(store *MetaStore, cluster InstanceManager) *LRUPlacer {
 
 func (p *LRUPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
 	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
-	// p.group.InitMeta(meta, sliceSize)   // Slice size is removed, we may added back later.
+	if meta.slice == nil {
+		meta.slice = p.cluster.GetSlice(sliceSize)
+	} else {
+		meta.slice.Reset(sliceSize)
+	}
 	meta.Placement[chunk] = lambdaId
 	meta.lastChunk = chunk
 	return meta
@@ -152,6 +156,9 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 	if meta.Deleted {
 		meta.placerMeta = nil
 		meta.Deleted = false
+		if meta.slice != nil {
+			meta.slice.Reset(meta.slice.Size())
+		}
 	}
 
 	// Initialize placerMeta if not.
@@ -187,6 +194,9 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 
 	// assigned := meta.slice.GetIndex(lambdaId)
 	assigned := meta.Placement[chunkId]
+	if meta.slice != nil {
+		assigned = meta.slice.GetIndex(meta.Placement[chunkId])
+	}
 	instance := p.cluster.Instance(meta.Placement[chunkId])
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunkId] = assigned

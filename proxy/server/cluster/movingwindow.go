@@ -236,6 +236,10 @@ func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
 	}
 }
 
+func (mw *MovingWindow) GetSlice(size int) metastore.Slice {
+	return nil
+}
+
 func (mw *MovingWindow) Trigger(event int, args ...interface{}) {
 	if event == metastore.EventInsufficientStorage {
 		if len(args) == 0 {
