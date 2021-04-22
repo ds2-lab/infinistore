@@ -4,7 +4,7 @@ BASE=`pwd`/`dirname $0`
 PREFIX="Store1VPCNode"
 KEY="lambda"
 cluster=400
-mem=1024
+mem=1536
 # try -code
 
 S3="tianium.default"
