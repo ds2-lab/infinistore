@@ -8,7 +8,7 @@ import (
 
 var (
 	// MaxLambdaStores This setting will avoid network contention. Must equal or smaller than config.NumLambdaClusters
-	MaxLambdaStores int = config.NumLambdaClusters
+	MaxLambdaStores int = config.SliceSize
 
 	// Timeout The timeout of a single operation
 	Timeout = 10 * time.Second

@@ -3,6 +3,7 @@ package cluster
 import (
 	"math/rand"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
@@ -16,12 +17,42 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
+type SliceInitializer func(int) (int, int)
+
+type Slice struct {
+	once *sync.Once
+	init SliceInitializer
+	size int
+	base int
+	cap  int
+}
+
+func (s *Slice) Size() int {
+	return s.size
+}
+
+func (s *Slice) Reset(size int) {
+	s.size = size
+	s.once = &sync.Once{}
+}
+
+func (s *Slice) GetIndex(idx uint64) uint64 {
+	s.once.Do(s.get)
+	return uint64((s.base + int(idx)) % s.cap)
+}
+
+func (s *Slice) get() {
+	s.base, s.cap = s.init(s.size)
+}
+
 type StaticCluster struct {
 	log       logger.ILogger
 	group     *Group
 	placer    *metastore.LRUPlacer
 	ready     sync.WaitGroup
+	cap       int
 	instances cache.InlineCache
+	sliceBase uint64
 }
 
 // initial lambda group
@@ -34,6 +65,7 @@ func NewStaticCluster(size int) *StaticCluster {
 	}
 	c := &StaticCluster{
 		log:   global.GetLogger("StaticCluster: "),
+		cap:   size + extra,
 		group: NewGroup(size + extra),
 	}
 	c.placer = metastore.NewLRUPlacer(metastore.New(), c)
@@ -156,6 +188,10 @@ func (c *StaticCluster) GetActiveInstances(num int) []*lambdastore.Instance {
 	return c.instances.Value().([]*lambdastore.Instance)
 }
 
+func (c *StaticCluster) GetSlice(size int) metastore.Slice {
+	return &Slice{init: c.nextSlice, size: size}
+}
+
 func (c *StaticCluster) Trigger(event int, args ...interface{}) {
 	// No event
 }
@@ -186,4 +222,8 @@ func (c *StaticCluster) getBackupsForNode(all []*lambdastore.Instance, i int) (i
 		candidates[j] = all[selectFrom+(i+j*distance+rand.Int()%distance+1)%available] // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
+}
+
+func (c *StaticCluster) nextSlice(sliceSize int) (int, int) {
+	return int((atomic.AddUint64(&c.sliceBase, uint64(sliceSize)) - uint64(sliceSize)) % uint64(c.cap)), c.cap
 }

@@ -11,6 +11,9 @@ type ClusterManager interface {
 	// GetActiveInstances Request available instances with minimum number required.
 	GetActiveInstances(int) []*lambdastore.Instance
 
+	// GetSlice Get slice implementation if support
+	GetSlice(int) Slice
+
 	// Trigger Trigger event with code and parameter
 	Trigger(int, ...interface{})
 }
