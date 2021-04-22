@@ -44,6 +44,7 @@ func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
 func newTestMeta(i int) *Meta {
 	return &Meta{
 		Key:        strconv.Itoa(i),
+		ChunkSize:  1,
 		Placement:  []uint64{uint64(i)},
 		placerMeta: &LRUPlacerMeta{},
 	}
@@ -59,7 +60,7 @@ func initPlacer(caseCode int) *LRUPlacer {
 	}
 	switch caseCode {
 	case 1:
-		placer.NextAvailableObject(container[0])
+		placer.NextAvailableObject(container[0], nil)
 		for i := 0; i < 4; i++ {
 			placer.TouchObject(container[i])
 		}
@@ -74,7 +75,7 @@ func initGroupPlacer(numCluster int, capacity int) *LRUPlacer {
 	im := &TestInstanceManager{all: make([]*lambdastore.Instance, numCluster)}
 	for i := 0; i < numCluster; i++ {
 		ins := lambdastore.NewInstance("TestInstance", uint64(i))
-		ins.Meta.Capacity = uint64(capacity)
+		ins.Meta.ResetCapacity(uint64(capacity), uint64(0))
 		im.all[i] = ins
 	}
 	return NewLRUPlacer(New(), im)
@@ -114,7 +115,8 @@ func proxySimulator(incomes chan interface{}, p *LRUPlacer, done *sync.WaitGroup
 		switch m := income.(type) {
 		case *Meta:
 			chunk := m.lastChunk
-			meta, _, _ := p.GetOrInsert(m.Key, m)
+			fmt.Printf("Processing %d@%s\n", m.lastChunk, m.Key)
+			meta, _, _ := p.Insert(m.Key, m)
 			fmt.Printf("Set %d@%s: %v\n", chunk, meta.Key, meta.Placement)
 		case func():
 			m()
@@ -136,7 +138,7 @@ var _ = Describe("Placer", func() {
 		idx := len(container)
 		container = append(container, newTestMeta(idx))
 
-		found := placer.NextAvailableObject(container[idx])
+		_, found := placer.NextAvailableObject(container[idx], nil)
 		Expect(found).To(Equal(true))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-1,6-1,7-1,8-1,9-1", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1", idx)))
@@ -153,7 +155,7 @@ var _ = Describe("Placer", func() {
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-1,1-1,2-1,3-1,4-0,5-1,6-1,7-1,8-1,9-1,%d-1", idx)))
 		Expect(container[idx].placerMeta.(*LRUPlacerMeta).pos).To(Equal([2]int{0, idx + 1}))
 
-		found := placer.NextAvailableObject(container[idx])
+		_, found := placer.NextAvailableObject(container[idx], nil)
 		Expect(found).To(Equal(true))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-1,6-1,7-1,8-1,9-1,nil", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1", idx)))
@@ -167,14 +169,14 @@ var _ = Describe("Placer", func() {
 		container = append(container, newTestMeta(idx), newTestMeta(idx+1))
 
 		placer.AddObject(container[idx])
-		placer.NextAvailableObject(container[idx])
+		placer.NextAvailableObject(container[idx], nil)
 
-		found := placer.NextAvailableObject(container[idx+1])
+		_, found := placer.NextAvailableObject(container[idx+1], nil)
 		Expect(found).To(Equal(false))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0", idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("0-0,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0,nil", idx)))
 
-		found = placer.NextAvailableObject(container[idx+1])
+		_, found = placer.NextAvailableObject(container[idx+1], nil)
 		Expect(found).To(Equal(true))
 		Expect(dumpPlacer(placer)).To(Equal(fmt.Sprintf("%d-1,1-0,2-0,3-0,%d-1,5-0,6-0,7-0,8-0,9-0", idx+1, idx)))
 		Expect(dumpPlacer(placer, true)).To(Equal(fmt.Sprintf("%d-1", idx+1)))
@@ -254,7 +256,7 @@ var _ = Describe("Placer", func() {
 				lambdaId := sess % numCluster
 				queues[lambdaId] <- func(m *Meta) func() {
 					return func() {
-						meta, _, _ := placer.GetOrInsert(m.Key, m)
+						meta, _, _ := placer.Insert(m.Key, m)
 						fmt.Printf("Set %d@%s: %v\n", m.lastChunk, meta.Key, meta.Placement)
 						conns.Done()
 					}
@@ -273,7 +275,6 @@ var _ = Describe("Placer", func() {
 		Expect(ok).To(Equal(true))
 		Expect(meta.Key).To(Equal("1"))
 		Expect(meta.placerMeta.(*LRUPlacerMeta).confirmed).To(Equal([]bool{true, true, true, true, true, true}))
-		Expect(meta.Placement).To(Equal(Placement{16, 17, 18, 19, 10, 11}))
+		Expect(meta.Placement).To(Equal(Placement{6, 7, 8, 9, 0, 1}))
 	})
-
 })
