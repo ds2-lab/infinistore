@@ -18,11 +18,10 @@ source $PWD/util.sh
 function perform(){
 	FILE=$1
 	CLUSTER=$2
-	DATANUM=$3
-	PARITYNUM=$4
-	SCALE=$5
-	COMPACT=$6
-	DASHBOARD=$7
+	PROXY_PARAMS=$3
+	PLAY_PARAMS=$4
+	COMPACT=$5
+	DASHBOARD=$6
 
 	if [ "$COMPACT" == "-enable-dashboard" ] ; then
 		DASHBOARD=$COMPACT
@@ -31,7 +30,7 @@ function perform(){
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
-	start_proxy $PREPROXY $DASHBOARD
+	start_proxy $PREPROXY $DASHBOARD "$PROXY_PARAMS"
   # Wait for proxy is ready
 	while [ ! -f /tmp/infinicache.pid ]
 	do
@@ -40,7 +39,7 @@ function perform(){
 	cat /tmp/infinicache.pid
 	# playback
 	sleep 1s
-	playback $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE $PREPROXY $COMPACT $OUTPUT
+	playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS" $FILE
 	kill -2 `cat $PID`
   # Wait for proxy cleaned up
 	TIMEOUT=60
@@ -64,21 +63,18 @@ function perform(){
 function dry_perform(){
 	FILE=$1
 	CLUSTER=$2
-	DATANUM=$3
-	PARITYNUM=$4
-	SCALE=$5
-	COMPACT=$6
+	PARAMS=$3
 
-	dryrun $DATANUM $PARITYNUM $SCALE $CLUSTER $FILE dryrun $COMPACT
+	dryrun "-cluster=$CLUSTER $PARAMS" $FILE
 }
 
-if [ "$7" == "dryrun" ]; then
-	dry_perform $1 $2 $3 $4 $5 $6
+if [ "$1" == "dryrun" ]; then
+	dry_perform $2 $3 $4
 else
 	mkdir -p $PWD/$ENTRY
 
 	START=`date +"%Y-%m-%d %H:%M:%S"`
-	perform $1 $2 $3 $4 $5 $6 $7
+	perform $1 $2 $3 $4 $5 $6
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 	
