@@ -39,11 +39,11 @@ function start_proxy() {
     echo "running proxy server"
     PREFIX=$1
     DASHBOARD=$2
-    DEBUG=
+    PARAMS=$3
     if [ "$DASHBOARD" != "" ] ; then
-        echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -ip=\${PUBLICIP} -log=proxy.log $DASHBOARD"
+        echo "Run: GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -ip=\${PUBLICIP} -log=proxy.log $DASHBOARD $PARAMS"
     else
-        GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -lambda-prefix=${LAMBDAPREFIX} -ip=${PUBLICIP} $DASHBOARD &
+        GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=${LAMBDAPREFIX} -ip=${PUBLICIP} $PARAMS &
     fi
 }
 
@@ -62,28 +62,13 @@ function bench() {
 }
 
 function playback() {
-    D=$1
-    P=$2
-    SCALE=$3
-    CLUSTER=$4
-    FILE=$5
-    NANOLOG=$7
-    COMPACT=$6
-    OUTPUT=$8
-    if [ "$OUTPUT" != "" ] ; then
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE 1>$OUTPUT 2>&1
-    else
-        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE
-    fi
+    PARAMS=$1
+    FILE=$2
+    $BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE
 }
 
 function dryrun() {
-    D=$1
-    P=$2
-    SCALE=$3
-    CLUSTER=$4
-    FILE=$5
-    NANOLOG=$7
-    COMPACT=$6
-    $BINDIR/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER -file $NANOLOG $COMPACT $FILE
+    PARAMS=$1
+    FILE=$2
+    $BINDIR/playback -dryrun $PARAMS $FILE
 }

@@ -22,19 +22,25 @@ build-simulator: prepare
 	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
 dryrun: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 -compact dryrun
+	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2"
 
 simulate: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 10 2 1 -compact 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
 
 simulate-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 10 2 1 -compact -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
 
 playback: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
 
 playback-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h_fullObj.csv 1000 10 2 1 -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+
+playback-static: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2" 1>./log 2>&1 &
+
+playback-static-norecovery: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
