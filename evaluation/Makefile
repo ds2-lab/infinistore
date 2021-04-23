@@ -22,7 +22,7 @@ build-simulator: prepare
 	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
 dryrun: build build-simulator
-	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2"
+	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
 
 simulate: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &

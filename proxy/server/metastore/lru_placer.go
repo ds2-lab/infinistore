@@ -197,7 +197,7 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 	if meta.slice != nil {
 		assigned = meta.slice.GetIndex(meta.Placement[chunkId])
 	}
-	instance := p.cluster.Instance(meta.Placement[chunkId])
+	instance := p.cluster.Instance(assigned)
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunkId] = assigned
 		placerMeta.confirm(chunkId)
