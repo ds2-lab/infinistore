@@ -259,24 +259,8 @@ func (p *LRUPlacer) Get(key string, chunk int) (*Meta, bool) {
 		return nil, ok
 	}
 
-	meta.mu.Lock()
-	defer meta.mu.Unlock()
-
-	if meta.Deleted {
-		return meta, ok
-	}
-
 	if meta.placerMeta == nil || !meta.placerMeta.(*LRUPlacerMeta).confirmed[chunk] {
 		return nil, false
-	}
-
-	// Ensure availability
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Object may be evicted just before locking.
-	if meta.Deleted {
-		return meta, ok
 	}
 
 	p.TouchObject(meta)
@@ -294,9 +278,8 @@ func (p *LRUPlacer) AddObject(meta *Meta) {
 }
 
 func (p *LRUPlacer) TouchObject(meta *Meta) {
-	placerMeta := meta.placerMeta.(*LRUPlacerMeta)
-	placerMeta.visited = true
-	placerMeta.visitedAt = time.Now()
+	meta.placerMeta.(*LRUPlacerMeta).visited = true
+	meta.placerMeta.(*LRUPlacerMeta).visitedAt = time.Now()
 }
 
 func (p *LRUPlacer) NextAvailableObject(meta *Meta, candidate *Meta) (*Meta, bool) {

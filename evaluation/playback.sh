@@ -10,9 +10,6 @@ ENTRY="/data/$DATE"
 NODE_PREFIX="Store1VPCNode"
 PID=/tmp/infinicache.pid
 
-CLUSTER=$2
-((MAXLAMBDAID=CLUSTER-1))
-
 source $PWD/util.sh
 
 function perform(){
@@ -69,12 +66,14 @@ function dry_perform(){
 }
 
 if [ "$1" == "dryrun" ]; then
-	dry_perform $2 $3 $4
+	dry_perform $2 $3 "$4"
 else
 	mkdir -p $PWD/$ENTRY
+	CLUSTER=$2
+	((MAXLAMBDAID=CLUSTER-1))
 
 	START=`date +"%Y-%m-%d %H:%M:%S"`
-	perform $1 $2 $3 $4 $5 $6
+	perform $1 $2 "$3" "$4" $5 $6
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 	
