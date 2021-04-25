@@ -137,7 +137,7 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 	return nanolog.Log(handle, args...)
 }
 
-func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}) (*DataEntry, error) {
+func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (interface{}, error) {
 	lastActivity = time.Now()
 	if !Enable {
 		return nil, nil
@@ -150,10 +150,17 @@ func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}
 		entry.chunkId = args[2].(string)
 		entry.start = args[3].(int64)
 		return entry, nil
-	} else if handle == LogValidate {
+	}
+
+	entry, ok := e.(*DataEntry)
+	if !ok {
+		return nil, ErrUnexpectedEntry
+	}
+	switch handle {
+	case LogValidate:
 		entry.validate = args[0].(int64)
 		return entry, nil
-	} else if handle == LogProxy {
+	case LogProxy:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 		entry.firstByte = args[0].(int64) - entry.start
@@ -166,7 +173,7 @@ func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}
 			return entry, nil
 		}
 		// Duration has been set, because the request is late and finished. Continue and complete LogChunk
-	} else if handle == LogServer2Client {
+	case LogServer2Client:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 		entry.server2Client = args[0].(int64)
@@ -179,7 +186,7 @@ func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}
 			return entry, nil
 		}
 		// All done. Continue and complete LogChunk
-	} else {
+	default:
 		return nil, ErrUnexpectedEntry
 	}
 
