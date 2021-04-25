@@ -27,7 +27,7 @@ function perform(){
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
-	start_proxy $PREPROXY $DASHBOARD "$PROXY_PARAMS"
+	start_proxy $PREPROXY "$DASHBOARD" "$PROXY_PARAMS"
   # Wait for proxy is ready
 	while [ ! -f /tmp/infinicache.pid ]
 	do

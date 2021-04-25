@@ -250,7 +250,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		//	"Server Flush time is", time2,
 		//	"Chunk body len is ", len(rsp.Body))
 		tgg := time.Now()
-		if _, err := collector.CollectRequest(collector.LogServer2Client, wrapper.Request.CollectorEntry.(*collector.DataEntry),
+		if _, err := collector.CollectRequest(collector.LogServer2Client, wrapper.Request.CollectorEntry,
 			int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano()); err != nil {
 			p.log.Warn("LogServer2Client err %v", err)
 		}

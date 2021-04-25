@@ -866,7 +866,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		Payload:      payload,
 	}
 
-	ins.Meta.Stale = true
+	ins.Meta.Stale = event.IsRecoveryEnabled() // Reset to stale if recovery is enabled.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ins.mu.Lock()
@@ -886,7 +886,9 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	} else {
 		ins.log.Debug("[%v]Lambda instance deactivated.", ins)
 	}
-	if output != nil && len(output.Payload) > 0 {
+	if !event.IsRecoveryEnabled() {
+		// Ignore output
+	} else if output != nil && len(output.Payload) > 0 {
 		var outputStatus protocol.Status
 		var outputError protocol.OutputError
 		if err := json.Unmarshal(output.Payload, &outputError); err == nil {
@@ -915,7 +917,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 			}
 		}
-	} else if event.IsRecoveryEnabled() {
+	} else {
+		// Recovery enabled but no output
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 	return nil
@@ -1218,7 +1221,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 	cmdName := strings.ToLower(cmd.String())
 	switch req := cmd.(type) {
 	case *types.Request:
-		collector.CollectRequest(collector.LogValidate, req.CollectorEntry.(*collector.DataEntry), int64(validateDuration))
+		collector.CollectRequest(collector.LogValidate, req.CollectorEntry, int64(validateDuration))
 
 		// Select link
 		link := ctrlLink
