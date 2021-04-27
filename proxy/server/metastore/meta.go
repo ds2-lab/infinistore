@@ -32,8 +32,10 @@ type Meta struct {
 	NumChunks int
 	Placement
 	ChunkSize int64
-	Reset     bool
-	Deleted   bool
+	// Flag object has been reset by same value
+	Reset bool
+	// Flag object has been deleted
+	Deleted bool
 
 	slice      Slice
 	placerMeta interface{}
