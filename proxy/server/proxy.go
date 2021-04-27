@@ -178,17 +178,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	// Update counter
 	counter.Requests[dChunkId] = req
 
-	// Send request to lambda channel
-	if counter.IsFulfilled() {
-		// Unlikely, just to be safe
-		p.log.Debug("late request %v", reqId)
-		status := counter.AddReturned(int(dChunkId))
-		req.Abandon()
-		counter.ReleaseIfAllReturned(status)
-		return
-	}
-
-	// Validate the status of meta
+	// Validate the status of meta. If evicted, replace. All chunks will be replaced, so fulfill shortcut is not applicable here.
+	// Not all placers support eviction.
 	if meta.Deleted {
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
@@ -199,6 +190,16 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		if postProcess != nil {
 			postProcess(p.dropEvicted)
 		}
+		return
+	}
+
+	// Send request to lambda channel
+	if counter.IsFulfilled() {
+		// Unlikely, just to be safe
+		p.log.Debug("late request %v", reqId)
+		status := counter.AddReturned(int(dChunkId))
+		req.Abandon()
+		counter.ReleaseIfAllReturned(status)
 		return
 	}
 
