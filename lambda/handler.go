@@ -81,22 +81,23 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
 	if Store == nil || Store.Id() != input.Id {
-		Persist = (types.PersistentStorage)(nil)
-		Lineage = (types.Lineage)(nil)
+		Persist = nil
+		Lineage = nil
 		if input.IsRecoveryEnabled() {
 			store := storage.NewLineageStorage(input.Id)
-			store.ConfigS3(S3_BACKUP_BUCKET, "")
 			Store = store
 			Persist = store
 			Lineage = store
 		} else if input.IsPersistencyEnabled() {
 			store := storage.NewPersistentStorage(input.Id)
-			store.ConfigS3(S3_BACKUP_BUCKET, "")
 			Store = store
 			Persist = store
 		} else {
 			Store = storage.NewStorage(input.Id)
 		}
+	}
+	if Persist != nil {
+		Persist.ConfigS3(S3_BACKUP_BUCKET, "")
 	}
 
 	// Initialize session.
