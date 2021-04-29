@@ -179,25 +179,22 @@ func (conn *Connection) ServeLambda() {
 			respType = ret
 		}
 
+		var readErr error
 		start := time.Now()
 		switch respType {
 		case resp.TypeError:
 			strErr, err := conn.r.ReadError()
 			if err != nil {
-				err = fmt.Errorf("response error (Unknown): %v", err)
-			} else {
-				err = fmt.Errorf("response error: %s", strErr)
+				readErr = err
+				break
 			}
+			err = fmt.Errorf("response error: %s", strErr)
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
-		default:
+		case resp.TypeBulk:
 			cmd, err := conn.r.ReadBulkString()
-			if err != nil && err == io.EOF {
-				conn.log.Warn("Lambda store disconnected.")
-				conn.close()
-				break
-			} else if err != nil {
-				conn.log.Warn("Error on read response type: %v", err)
+			if err != nil {
+				readErr = err
 				break
 			}
 
@@ -229,12 +226,58 @@ func (conn *Connection) ServeLambda() {
 			default:
 				conn.log.Warn("Unsupported response type: %s", cmd)
 			}
+		default:
+			if err := conn.skipField(respType); err != nil {
+				readErr = err
+			}
+		}
+
+		if readErr != nil && readErr == io.EOF {
+			conn.log.Warn("Lambda store disconnected.")
+			conn.close()
+			return
+		} else if readErr != nil {
+			conn.log.Warn("Error on handle response %s: %v", respType, readErr)
 		}
 
 		if conn.instance != nil {
 			conn.instance.flagWarmed()
 		}
 	}
+}
+
+func (conn *Connection) skipField(t resp.ResponseType) error {
+	if t == resp.TypeUnknown {
+		t, err := conn.r.PeekType()
+		if err != nil {
+			return err
+		}
+	}
+
+	switch t {
+	case resp.TypeArray:
+		if arrLen, err := conn.r.ReadArrayLen(); err != nil {
+			return err
+		} else {
+			conn.log.Warn("Skipping %s of len %d", t, arrLen)
+			for i := 0; i < arrLen; i++ {
+				if err := conn.skipField(resp.TypeUnknown); err != nil {
+					return err
+				}
+			}
+		}
+	case resp.TypeBulk:
+		conn.log.Warn("Skipping %s", t)
+		if err := conn.r.SkipBulk(); err != nil {
+			return err
+		}
+	default:
+		conn.log.Warn("Skipping %s", t)
+		if err := conn.r.ReadLine(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (conn *Connection) Ping(payload []byte) {
