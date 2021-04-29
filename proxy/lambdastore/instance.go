@@ -883,17 +883,20 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 
 	if err != nil {
 		ins.log.Error("[%v]Error on activating lambda store: %v", ins, err)
-	} else {
-		ins.log.Debug("[%v]Lambda instance deactivated.", ins)
+		return err
 	}
+
+	ins.log.Debug("[%v]Lambda instance deactivated.", ins)
+	if ins.checkError(output) {
+		return nil
+	}
+
+	// Handle output
 	if !event.IsRecoveryEnabled() {
 		// Ignore output
-	} else if output != nil && len(output.Payload) > 0 {
+	} else if len(output.Payload) > 0 {
 		var outputStatus protocol.Status
-		var outputError protocol.OutputError
-		if err := json.Unmarshal(output.Payload, &outputError); err == nil {
-			ins.log.Error("[Lambda deactivated with error]: %v", outputError)
-		} else if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
+		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
 		} else if len(outputStatus) > 0 {
 			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
@@ -922,6 +925,28 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		ins.log.Error("No instance lineage returned, output: %v", output)
 	}
 	return nil
+}
+
+func (ins *Instance) checkError(output *lambda.InvokeOutput) bool {
+	var failed bool
+	var outputError *protocol.OutputError
+	if *output.StatusCode >= 400 {
+		failed = true
+	}
+
+	if output.FunctionError != nil && output.Payload != nil {
+		outputError = &protocol.OutputError{}
+		if err := json.Unmarshal(output.Payload, outputError); err != nil {
+			outputError.Type = "Unmarshal error payload failed"
+			outputError.Message = err.Error()
+		}
+		failed = true
+		ins.log.Error("Lambda deactivated with error(statuscode: %d, %s:%s)", *output.StatusCode, outputError.Type, outputError.Message)
+	} else if failed {
+		ins.log.Error("Lambda deactivated with error(statuscode: %d)", *output.StatusCode)
+	}
+
+	return failed
 }
 
 func (ins *Instance) AbandonLambda() {

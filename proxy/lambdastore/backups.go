@@ -1,8 +1,6 @@
 package lambdastore
 
 import (
-	"strconv"
-
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
@@ -249,10 +247,10 @@ func (b *Backups) getInstance(backer Backer, i int) *Instance {
 	return backer.(*Instance)
 }
 
-func (b *Backups) describeInstance(ins *Instance) string {
-	if ins == nil {
-		return "<nil>"
-	} else {
-		return strconv.FormatUint(ins.Id(), 10)
-	}
-}
+// func (b *Backups) describeInstance(ins *Instance) string {
+// 	if ins == nil {
+// 		return "<nil>"
+// 	} else {
+// 		return strconv.FormatUint(ins.Id(), 10)
+// 	}
+// }

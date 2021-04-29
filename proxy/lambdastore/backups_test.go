@@ -1,7 +1,6 @@
 package lambdastore
 
 import (
-	"fmt"
 	"log"
 	"math/rand"
 	"time"
@@ -231,10 +230,10 @@ var _ = Describe("Backups", func() {
 	})
 })
 
-func dumpInstance(all []*Instance) {
-	ids := make([]uint64, len(all))
-	for i := 0; i < len(all); i++ {
-		ids[i] = all[i].Id()
-	}
-	fmt.Println(ids)
-}
+// func dumpInstance(all []*Instance) {
+// 	ids := make([]uint64, len(all))
+// 	for i := 0; i < len(all); i++ {
+// 		ids[i] = all[i].Id()
+// 	}
+// 	fmt.Println(ids)
+// }
