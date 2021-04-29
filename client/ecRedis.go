@@ -346,7 +346,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 
 	// Match reqId and chunk
 	if respId != reqId || chunkId != strconv.Itoa(i) {
-		log.Warn("Unexpected response %s(%s), expects %s(%d)", respId, chunkId, reqId, i)
+		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(reqId)), logger.SafeString(chunkId, 2), reqId, i)
 		ret.SetError(i, ErrUnexpectedResponse)
 		return
 	}
@@ -403,7 +403,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 
 	// Matching reqId and chunk
 	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
-		log.Warn("Unexpected response %s(%s), expects %s(%d)", respId, chunkId, reqId, i)
+		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(reqId)), logger.SafeString(chunkId, 2), reqId, i)
 		ret.SetError(i, ErrUnexpectedResponse)
 		return
 	}

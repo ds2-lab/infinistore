@@ -39,22 +39,26 @@ make deploy
 
 For specified experiment prefix in date format: e.g. 202011070320
 
+~~~
+export EXPERIMENT=202011070320
+~~~
+
 To collect logs on the proxy:
 
 ~~~
-./download 202011070320
+./download ${EXPERIMENT}
 ~~~
 
 To collect data collected in lambda nodes from S3, such as lambda side request logs, and recovery performance data.
 
 ~~~
-cloudwatch/download.sh 202011070320 data
+cloudwatch/download.sh ${EXPERIMENT} data
 ~~~
 
 To collect exported cloudwatch logs from S3
 
 ~~~
-cloudwatch/download.sh 202011070320 log
+cloudwatch/download.sh ${EXPERIMENT} log
 ~~~
 
 ### Preprocessing
@@ -64,19 +68,19 @@ cloudwatch/download.sh 202011070320 log
 
 ~~~
 # Unzip
-mkdir -p downloaded/proxy/202011070320
-tar -xzf downloaded/proxy/202011070320.tar.gz -C downloaded/proxy/202011070320/
+mkdir -p downloaded/proxy/${EXPERIMENT}
+tar -xzf downloaded/proxy/${EXPERIMENT}.tar.gz -C downloaded/proxy/${EXPERIMENT}/
 
 # Decode .clog file
-./infla.sh 202011070320
+./infla.sh ${EXPERIMENT}
 
 # Extract cluster data from proxy output
-cat downloaded/202011070320/simulate-400_proxy.csv | grep cluster, > downloaded/202011070320/cluster.csv
-cat downloaded/202011070320/simulate-400_proxy.csv | grep bucket, > downloaded/202011070320/bucket.csv
+cat downloaded/${EXPERIMENT}/simulate-400_proxy.csv | grep cluster, > downloaded/${EXPERIMENT}/cluster.csv
+cat downloaded/${EXPERIMENT}/simulate-400_proxy.csv | grep bucket, > downloaded/${EXPERIMENT}/bucket.csv
 
 # Extract billing info from cloudwatch log
-cloudwatch/parse.sh downloaded/log/202011070320
-cat downloaded/log/202011070320_bill.csv | grep invocation > downloaded/202011070320/bill.csv
+cloudwatch/parse.sh downloaded/log/${EXPERIMENT}
+cat downloaded/log/${EXPERIMENT}_bill.csv | grep invocation > downloaded/${EXPERIMENT}/bill.csv
 make build-data
-bin/preprocess -o downloaded/202011070320/recovery.csv -processor workload downloaded/data/202011070320
+bin/preprocess -o downloaded/${EXPERIMENT}/recovery.csv -processor workload downloaded/data/${EXPERIMENT}
 ~~~

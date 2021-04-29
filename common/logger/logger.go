@@ -40,3 +40,12 @@ func NewFuncWithArgs(f func(arg ...interface{}) string, args ...interface{}) Fun
 		return f(args...)
 	}
 }
+
+// String helper that ensure safely output
+func SafeString(msg string, sz int) string {
+	if len(msg) < sz {
+		return msg
+	} else {
+		return msg[:sz]
+	}
+}
