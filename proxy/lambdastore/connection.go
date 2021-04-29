@@ -248,7 +248,8 @@ func (conn *Connection) ServeLambda() {
 
 func (conn *Connection) skipField(t resp.ResponseType) error {
 	if t == resp.TypeUnknown {
-		t, err := conn.r.PeekType()
+		var err error
+		t, err = conn.r.PeekType()
 		if err != nil {
 			return err
 		}
@@ -273,7 +274,8 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 		}
 	default:
 		conn.log.Warn("Skipping %s", t)
-		if err := conn.r.ReadLine(); err != nil {
+		// We just want read a line, ignore other error
+		if _, err := conn.r.ReadInlineString(); err != nil && !resp.IsProtocolError(err) {
 			return err
 		}
 	}
