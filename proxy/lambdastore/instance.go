@@ -882,12 +882,14 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	// Don't reset links here, fronzen but not dead.
 
 	if err != nil {
+		ins.Meta.Stale = false
 		ins.log.Error("[%v]Error on activating lambda store: %v", ins, err)
 		return err
 	}
 
 	ins.log.Debug("[%v]Lambda instance deactivated.", ins)
 	if ins.checkError(output) {
+		ins.Meta.Stale = false
 		return nil
 	}
 
