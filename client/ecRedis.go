@@ -57,6 +57,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	// Debuging options
 	var dryrun int
 	var placements []int
+	reset := false
 	if len(args) > 0 {
 		dryrun, _ = args[0].(int)
 	}
@@ -65,6 +66,9 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 		if ok && len(p) >= c.Shards {
 			placements = p
 		}
+	}
+	if len(args) > 2 {
+		reset = args[2] == "Reset"
 	}
 
 	stats := &c.logEntry
@@ -78,7 +82,9 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	}
 	index := random(numClusters, c.Shards)
 	if dryrun > 0 && placements != nil {
-		copy(placements, index)
+		if !reset {
+			copy(placements, index)
+		}
 		return stats.ReqId, true
 	}
 	//addr, ok := c.getHost(key)
