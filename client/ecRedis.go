@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cespare/xxhash"
@@ -178,7 +179,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	}
 
 	decodeStart := time.Now()
-	reader, err := c.decode(stats, chunks, ret.Size)
+	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
 		return stats.ReqId, nil, false
 	}
@@ -192,7 +193,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 
 	// Try recover
 	if len(failed) > 0 {
-		c.recover(host, key, uuid.New().String(), ret.Size, failed, chunks)
+		c.recover(host, key, uuid.New().String(), int(ret.Size), failed, chunks)
 	}
 
 	return stats.ReqId, reader, true
@@ -400,12 +401,14 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	respId, _ := c.conns[addr][i].R.ReadBulkString()
 	strSize, _ := c.conns[addr][i].R.ReadBulkString()
 	chunkId, _ := c.conns[addr][i].R.ReadBulkString()
+	abandon := false
 
 	// Matching reqId and chunk
 	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
 		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(reqId)), logger.SafeString(chunkId, 2), reqId, i)
 		ret.SetError(i, ErrUnexpectedResponse)
-		return
+		abandon = true
+		// Continue to drain body.
 	}
 
 	// Abandon?
@@ -417,6 +420,9 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// Read value
 	cn.conn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := c.conns[addr][i].R.StreamBulk()
+	if abandon {
+		return
+	}
 	if err != nil {
 		log.Warn("Error on getting reader of received chunk %d: %v", i, err)
 		c.setError(ret, addr, i, err)
@@ -429,8 +435,9 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 		return
 	}
 
-	if ret.Size == 0 {
-		ret.Size, _ = strconv.Atoi(strSize) // If err, we can try in another chunk
+	size, err := strconv.ParseInt(strSize, 10, 64) // If err, we can try in another chunk
+	if err == nil {
+		atomic.CompareAndSwapInt64(&ret.Size, 0, size)
 	}
 
 	log.Debug("%s chunk %d", prompt, i)
