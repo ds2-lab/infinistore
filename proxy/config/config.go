@@ -39,7 +39,7 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 100 * 1000000 // 100MB
+const InstanceOverhead = 300 * 1000000 // 100MB
 
 // Threshold Scaling out avg instance size threshold
 const Threshold = 0.8 // Don't set beyond 0.8

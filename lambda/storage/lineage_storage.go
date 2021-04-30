@@ -780,17 +780,20 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	servingKey := meta.Tips.Get(protocol.TIP_SERVING_KEY)
 	if servingKey != "" {
 		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
-		if _, existed := s.get(servingKey); !existed {
-			chunk := &types.Chunk{
+		chunk, existed := s.get(servingKey)
+		if !existed {
+			chunk = &types.Chunk{
 				Key:    servingKey,
 				Body:   nil,
 				Backup: meta.Backup,
 			}
 			// Occupy the repository, details will be filled later.
 			s.set(servingKey, chunk)
-			// Add to head so it will be load first, no duplication is possible because it is inserted to repository.
-			tbds = append(tbds, chunk)
 		}
+
+		// Add to head so it will be load first, no duplication is possible because it has been inserted to the repository.
+		// Regardless new or existed, we add chunk to download list for possible RESET (unlikely).
+		tbds = append(tbds, chunk)
 	}
 
 	// Replay operations
@@ -830,11 +833,16 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 					chunk.Term = term.Term
 					chunk.Accessed = op.Accessed
 					chunk.Bucket = op.Bucket
+					// Unlikely, the servingKey can be RESET (see comments below)
+					// For servingKey, the chunk is always added as the first one in the download list and it can't be moved, we simple set Body to nil to free space.
+					// The bottom line, setting Body to nil doesn't hurt if servingKey is new.
+					chunk.Body = nil
 				} else {
 					// Reset
 					// Although unlikely, dealing reset by deleting it first and add it later.
 					chunk.Deleted = true
-					chunk = nil // Reset so it can be added back later.
+					chunk.Body = nil
+					chunk = nil // Reset to nil, so it can be added back later.
 				}
 			}
 			// New or reset chunk
@@ -856,6 +864,10 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 					s.set(op.Key, chunk)
 				}
 			}
+		}
+		// Remove servingKey from the download list if it is not new and no reset is required.
+		if servingKey != "" && tbds[0].Term <= s.lineage.Term {
+			tbds = tbds[1:]
 		}
 
 		// Passing by, update local snapshot
