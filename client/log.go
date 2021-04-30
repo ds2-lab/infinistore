@@ -26,7 +26,7 @@ type logEntry struct {
 
 func init() {
 	// cmd, reqId, begin, duration, get/set req latency, rec latency, decoding latency, all good, corrupted, size
-	logClient = nanolog.AddLogger("%s,%s,%i64,%i64,%i64,%i64,%i64,%b,%b,%i")
+	logClient = nanolog.AddLogger("%s,%s,%i64,%i64,%i64,%i64,%i64,%b,%b,%i64")
 }
 
 // CreateLog Enabling evaluation log in client lib.
