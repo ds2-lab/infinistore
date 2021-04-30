@@ -117,7 +117,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 	nanoLog(logClient, "set", stats.ReqId, stats.Begin.UnixNano(),
 		int64(stats.Duration), int64(stats.ReqLatency), int64(0), int64(0),
-		false, false, len(val))
+		false, false, int64(len(val)))
 	log.Info("Set %s %d %d", key, len(val), int64(stats.Duration))
 
 	if placements != nil {
