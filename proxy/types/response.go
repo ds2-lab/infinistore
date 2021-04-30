@@ -38,7 +38,8 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter) {
 	} else {
 		w.AppendBulkString(rsp.Id.ChunkId)
 	}
-	if rsp.Body != nil {
+	// Only one body field is returned, stream is prefered.
+	if rsp.BodyStream == nil && rsp.Body != nil {
 		w.AppendBulk(rsp.Body)
 	}
 	rsp.w = w

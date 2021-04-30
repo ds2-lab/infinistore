@@ -184,7 +184,7 @@ type ecRet struct {
 	Shards int
 	Rets   []interface{}
 	Err    error
-	Size   int // only for get chunk
+	Size   int64 // only for get chunk
 }
 
 func newEcRet(shards int) *ecRet {
