@@ -682,27 +682,28 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
 			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
 			if triggered {
-				// Waiting to be validated
-				return castValidatedConnection(ins.validated)
+				// Pass to timeout check.
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				// Instance is warm, skip unnecssary warming up.
 				return ins.flagValidatedLocked(ins.ctrlLink) // Skip any check in the "FlagValidated".
+			} else {
+				// If instance is active, PING is issued to ensure active
+				// Closed safe: On closing, ctrlLink will be nil. By keeping a local copy and checking it is not nil, it is safe to make PING request.
+				//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
+				ctrl := ins.ctrlLink // Make a reference copy of ctrlLink to avoid it being changed.
+				if ctrl != nil {
+					if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
+						ins.log.Debug("Ping with payload")
+						ctrl.Ping(opt.Command.(*types.Control).Payload)
+					} else {
+						ctrl.Ping(DefaultPingPayload)
+					}
+				} // Ctrl can be nil if disconnected, simply wait for timeout and retry
 			}
 
-			// If instance is active, PING is issued to ensure active
-			// Closed safe: On closing, ctrlLink will be nil. By keep a local copy and check it is not nil, it is safe to make PING request.
-			//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
-			ctrl := ins.ctrlLink
-			if ctrl != nil {
-				if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
-					ins.log.Debug("Ping with payload")
-					ctrl.Ping(opt.Command.(*types.Control).Payload)
-				} else {
-					ctrl.Ping(DefaultPingPayload)
-				}
-			} // Ctrl can be nil if disconnected, simply wait for timeout and retry
-
-			// Start timeout, ping may get stucked anytime.
+			// Start timeout, possibitilities are:
+			// 1. ping may get stucked anytime.
+			// 2. pong may lost (both after triggered or after ping), especially pong retrial has been disabled at lambda side.
 			// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
 			ins.validated.SetTimeout(connectTimeout)
 
