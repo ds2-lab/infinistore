@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,10 @@ type Control struct {
 
 func (req *Control) String() string {
 	return req.Cmd
+}
+
+func (req *Control) Name() string {
+	return strings.ToLower(req.Cmd)
 }
 
 func (req *Control) GetRequest() *Request {

@@ -62,11 +62,12 @@ const (
 	PHASE_RECLAIMED    = 2 // Instance has been reclaimed.
 	PHASE_EXPIRED      = 3 // Instance is expired, no invocation will be made, and it is safe to recycle.
 
-	MAX_ATTEMPTS     = 3
-	TEMP_MAP_SIZE    = 10
-	BACKING_DISABLED = 0
-	BACKING_RESERVED = 1
-	BACKING_ENABLED  = 2
+	MAX_CMD_QUEUE_LEN = 10
+	MAX_ATTEMPTS      = 3
+	TEMP_MAP_SIZE     = 10
+	BACKING_DISABLED  = 0
+	BACKING_RESERVED  = 1
+	BACKING_ENABLED   = 2
 
 	DESCRIPTION_UNSTARTED  = "unstarted"
 	DESCRIPTION_CLOSED     = "closed"
@@ -184,7 +185,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 			size:     config.InstanceOverhead,
 		}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awakeness:    INSTANCE_SLEEPING,
-		chanCmd:      make(chan types.Command),
+		chanCmd:      make(chan types.Command, MAX_CMD_QUEUE_LEN),
 		chanPriorCmd: make(chan types.Command, 1),
 		validated:    promise.Resolved(), // Initialize with a resolved promise.
 		closed:       make(chan struct{}),
@@ -277,6 +278,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		// wait to be inserted and continue after select
 		ins.chanCmd <- cmd
 	}
+	ins.log.Debug("%v dispatched, %d queued", cmd, len(ins.chanCmd))
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
@@ -692,7 +694,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
 			ctrl := ins.ctrlLink
 			if ctrl != nil {
-				if opt.Command != nil && opt.Command.String() == protocol.CMD_PING {
+				if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
 					ins.log.Debug("Ping with payload")
 					ctrl.Ping(opt.Command.(*types.Control).Payload)
 				} else {
@@ -810,7 +812,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
 
 	tips := &url.Values{}
-	if opt.Command != nil && opt.Command.String() == protocol.CMD_GET {
+	if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET {
 		tips.Set(protocol.TIP_SERVING_KEY, opt.Command.GetRequest().Key)
 	}
 
@@ -825,7 +827,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 			*ins.Meta.ToProtocolMeta(ins.Id()),
 			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
 		}
-		if opt.Command != nil && opt.Command.String() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
+		if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
 			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
 			status[0].Tip = tips.Encode()
 			tips = &url.Values{}
@@ -853,7 +855,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	// CMD_PING is used for preflight requests. CMD_WARMUP is used for keeping node warmed, which involves no further action.
 	// While requests do not use CMD_PING, CMD_PING request is used to piggy-back messages in the cases like starting backing.
 	// In such case, no further action is required. So we use CMD_WARMUP to invoke node when requests command is CMD_PING.
-	if opt.WarmUp || opt.Command.String() == protocol.CMD_PING {
+	if opt.WarmUp || opt.Command.Name() == protocol.CMD_PING {
 		event.Cmd = protocol.CMD_WARMUP
 		opt.WarmUp = true
 	}
@@ -1136,7 +1138,7 @@ func (ins *Instance) FlagClosed(conn *Connection) {
 
 func (ins *Instance) handleRequest(cmd types.Command) {
 	// On parallel recovering, we will try reroute get requests.
-	if cmd.String() == protocol.CMD_GET && ins.IsRecovering() && ins.rerouteGetRequest(cmd.GetRequest()) {
+	if cmd.Name() == protocol.CMD_GET && ins.IsRecovering() && ins.rerouteGetRequest(cmd.GetRequest()) {
 		return
 	}
 
@@ -1162,7 +1164,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Two options available to handle reclaiming event:
 		// 1. Recover to prevail node and reroute to the node. (current implementation)
 		// 2. Report not found
-		if cmd.String() == protocol.CMD_GET && ins.IsReclaimed() && ins.relocateGetRequest(cmd.GetRequest()) {
+		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() && ins.relocateGetRequest(cmd.GetRequest()) {
 			return
 		} else if err != nil {
 			// Handle errors
@@ -1245,7 +1247,7 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 }
 
 func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {
-	cmdName := strings.ToLower(cmd.String())
+	cmdName := cmd.Name()
 	switch req := cmd.(type) {
 	case *types.Request:
 		collector.CollectRequest(collector.LogValidate, req.CollectorEntry, int64(validateDuration))
