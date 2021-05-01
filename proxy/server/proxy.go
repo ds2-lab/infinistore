@@ -103,6 +103,8 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 
+	p.log.Debug("HandleSet %s: %d@%s", reqId, dChunkId, key)
+
 	// Start counting time.
 	collectEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano())
 
@@ -162,6 +164,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		w.Flush()
 		return
 	}
+
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
@@ -178,9 +181,14 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	// Update counter
 	counter.Requests[dChunkId] = req
 
+	p.log.Debug("HandleGet %s: %s from %d", reqId, chunkKey, lambdaDest)
+
 	// Validate the status of meta. If evicted, replace. All chunks will be replaced, so fulfill shortcut is not applicable here.
 	// Not all placers support eviction.
 	if meta.Deleted {
+		// Unlikely, just to be safe
+		p.log.Debug("replace evicted chunk %s", chunkKey)
+
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
 			w.AppendError(err.Error())

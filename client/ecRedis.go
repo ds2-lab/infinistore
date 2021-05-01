@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -187,6 +188,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
+		log.Warn("Failed chucks %d", len(failed))
 		return stats.ReqId, nil, false
 	}
 
@@ -247,7 +249,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	w := cn.W
 
 	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
-	defer cn.conn.SetWriteDeadline(time.Time{})
+	defer cn.conn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
 
 	w.WriteMultiBulkSize(10)
 	w.WriteBulkString(protocol.CMD_SET_CHUNK)
@@ -322,14 +324,15 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	cn := c.conns[addr][i]
-	cn.conn.SetReadDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for response
+	// Set deadline for response. Noted writing can be buffered, we use a long timeout to wait for long enough for transmission.
+	cn.conn.SetReadDeadline(time.Now().Add(Timeout))
 	defer cn.conn.SetReadDeadline(time.Time{})
 
 	// peeking response type and receive
 	// chunk id
 	type0, err := cn.R.PeekType()
 	if err != nil {
-		log.Warn("PeekType error on receiving chunk %d: %v", i, err)
+		log.Warn("PeekType error on receiving chunk  %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
@@ -337,24 +340,35 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 	// Check error
 	switch type0 {
 	case resp.TypeError:
-		strErr, err := c.conns[addr][i].R.ReadError()
+		strErr, err := cn.R.ReadError()
 		if err == nil {
 			err = errors.New(strErr)
 		}
-		log.Warn("Error on receiving chunk %d: %v", i, err)
+		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
+		return
+	case resp.TypeBulk:
+		// This is what expected
+		break
+	default:
+		// cn.R.ReadInlineString() // Drain the field
+		err := fmt.Errorf("nexpected response type %v", type0)
+		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
+		c.setError(ret, addr, i, err)
+		c.disconnect(addr, i)
 		return
 	}
 
 	// Read fields
-	respId, _ := c.conns[addr][i].R.ReadBulkString()
-	chunkId, _ := c.conns[addr][i].R.ReadBulkString()
-	storeId, _ := c.conns[addr][i].R.ReadBulkString()
+	respId, _ := cn.R.ReadBulkString()
+	chunkId, _ := cn.R.ReadBulkString()
+	storeId, _ := cn.R.ReadBulkString()
 
 	// Match reqId and chunk
 	if respId != reqId || chunkId != strconv.Itoa(i) {
 		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(reqId)), logger.SafeString(chunkId, 2), reqId, i)
-		ret.SetError(i, ErrUnexpectedResponse)
+		c.setError(ret, addr, i, ErrUnexpectedResponse)
+		c.disconnect(addr, i)
 		return
 	}
 
@@ -375,7 +389,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// chunk id
 	type0, err := cn.R.PeekType()
 	if err != nil {
-		log.Warn("PeekType error on receiving chunk %d: %v", i, err)
+		log.Warn("PeekType error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
@@ -384,37 +398,45 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// Check error
 	switch type0 {
 	case resp.TypeError:
-		strErr, err := c.conns[addr][i].R.ReadError()
+		strErr, err := cn.R.ReadError()
 		if err == nil {
 			err = errors.New(strErr)
 		}
-		log.Warn("Error on receiving chunk %d: %v", i, err)
+		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	case resp.TypeNil:
-		err := c.conns[addr][i].R.ReadNil()
+		err := cn.R.ReadNil()
 		if err != nil {
-			log.Warn("Error on receiving chunk %d: %v", i, err)
+			log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 			c.setError(ret, addr, i, err)
 			return
 		}
 		log.Debug("Not found: chunk %d", i)
 		ret.Set(i, nil)
 		return
+	case resp.TypeBulk:
+		// This is what expected
+		break
+	default:
+		err := fmt.Errorf("nexpected response type %v", type0)
+		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
+		c.setError(ret, addr, i, err)
+		c.disconnect(addr, i)
+		return
 	}
 
 	// Read header fields
-	respId, _ := c.conns[addr][i].R.ReadBulkString()
-	strSize, _ := c.conns[addr][i].R.ReadBulkString()
-	chunkId, _ := c.conns[addr][i].R.ReadBulkString()
-	abandon := false
+	respId, _ := cn.R.ReadBulkString()
+	strSize, _ := cn.R.ReadBulkString()
+	chunkId, _ := cn.R.ReadBulkString()
 
 	// Matching reqId and chunk
 	if respId != reqId || (chunkId != strconv.Itoa(i) && chunkId != "-1") {
 		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(reqId)), logger.SafeString(chunkId, 2), reqId, i)
-		ret.SetError(i, ErrUnexpectedResponse)
-		abandon = true
-		// Continue to drain body.
+		c.setError(ret, addr, i, ErrUnexpectedResponse)
+		c.disconnect(addr, i)
+		return
 	}
 
 	// Abandon?
@@ -425,10 +447,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 
 	// Read value
 	cn.conn.SetReadDeadline(time.Now().Add(Timeout))
-	valReader, err := c.conns[addr][i].R.StreamBulk()
-	if abandon {
-		return
-	}
+	valReader, err := cn.R.StreamBulk()
 	if err != nil {
 		log.Warn("Error on getting reader of received chunk %d: %v", i, err)
 		c.setError(ret, addr, i, err)
