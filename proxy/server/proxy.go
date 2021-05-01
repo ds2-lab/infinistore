@@ -82,7 +82,7 @@ func (p *Proxy) Release() {
 }
 
 // HandleSet "set chunk" handler
-func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
+func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
 
 	// Get args
@@ -146,7 +146,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 }
 
 // HandleGet "get chunk" handler
-func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
+func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	key := c.Arg(0).String()
 	reqId := c.Arg(1).String()

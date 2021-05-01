@@ -95,8 +95,8 @@ func main() {
 	}
 
 	// config server
-	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSet)
-	srv.HandleFunc(protocol.CMD_GET_CHUNK, prxy.HandleGet)
+	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSetChunk)
+	srv.HandleFunc(protocol.CMD_GET_CHUNK, prxy.HandleGetChunk)
 	srv.HandleCallbackFunc(prxy.HandleCallback)
 
 	// Log goroutine

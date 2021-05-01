@@ -2,7 +2,9 @@ package types
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -40,7 +42,11 @@ type Request struct {
 }
 
 func (req *Request) String() string {
-	return req.Cmd
+	return fmt.Sprintf("%s %v", req.Cmd, req.Id)
+}
+
+func (req *Request) Name() string {
+	return strings.ToLower(req.Cmd)
 }
 
 func (req *Request) GetRequest() *Request {
