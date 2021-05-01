@@ -221,10 +221,10 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 		}
 		// We can add size to instance safely, the allocated space is reserved for this chunk even set operation may fail.
 		// This allow the client to reset the chunk without affecting the placement.
-		instance.Meta.IncreaseSize(meta.ChunkSize)
-		// size := instance.Meta.IncreaseSize(meta.ChunkSize)
-		// p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-		// 	assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
+		// instance.Meta.IncreaseSize(meta.ChunkSize)
+		size := instance.Meta.IncreaseSize(meta.ChunkSize)
+		p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
+			assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
 
 		// Added by Tianium: 20210427
 		// Remove eviction flag on all confirmed

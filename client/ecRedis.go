@@ -22,7 +22,7 @@ import (
 var (
 	log = &logger.ColorLogger{
 		Prefix: "EcRedis ",
-		Level:  logger.LOG_LEVEL_INFO,
+		Level:  logger.LOG_LEVEL_ALL,
 		Color:  false,
 	}
 	// ErrUnexpectedResponse Unexplected response
@@ -442,6 +442,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// Abandon?
 	if chunkId == "-1" {
 		log.Debug("Abandon late chunk %d", i)
+		ret.Set(i, nil)
 		return
 	}
 
