@@ -107,7 +107,10 @@ func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command)
 
 	meta, got, _ := p.store.GetOrInsert(key, newMeta)
 	if got {
-		meta.Placement[chunkId] = newMeta.Placement[chunkId]
+		// Only copy placement assignment if the chunk has not been confirm.
+		if meta.placerMeta == nil || !meta.placerMeta.(*LRUPlacerMeta).confirmed[chunkId] {
+			meta.Placement[chunkId] = newMeta.Placement[chunkId]
+		}
 		newMeta.close()
 	}
 	cmd.GetRequest().Info = meta

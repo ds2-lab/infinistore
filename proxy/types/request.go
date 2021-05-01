@@ -167,7 +167,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return false
 	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
+		ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
