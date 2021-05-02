@@ -81,7 +81,8 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
+	TriggerTimeout        = 100 * time.Millisecond // Triggering cost is about 20ms, use 100ms to avoid exceeded timeout
+	DefaultConnectTimeout = 20 * time.Millisecond  // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
@@ -267,6 +268,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		return ErrInstanceClosed
 	}
 
+	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
 	select {
 	case ins.chanCmd <- cmd:
 		// continue after select
@@ -278,7 +280,6 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		// wait to be inserted and continue after select
 		ins.chanCmd <- cmd
 	}
-	ins.log.Debug("%v dispatched, %d queued", cmd, len(ins.chanCmd))
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
@@ -685,6 +686,8 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
 			if triggered {
 				// Pass to timeout check.
+				ins.validated.SetTimeout(TriggerTimeout)
+				connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				// Instance is warm, skip unnecssary warming up.
 				return ins.flagValidatedLocked(ins.ctrlLink) // Skip any check in the "FlagValidated".
@@ -701,13 +704,15 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 						ctrl.Ping(DefaultPingPayload)
 					}
 				} // Ctrl can be nil if disconnected, simply wait for timeout and retry
+
+				ins.validated.SetTimeout(connectTimeout)
 			}
 
 			// Start timeout, possibitilities are:
 			// 1. ping may get stucked anytime.
 			// 2. pong may lost (both after triggered or after ping), especially pong retrial has been disabled at lambda side.
 			// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
-			ins.validated.SetTimeout(connectTimeout)
+			// ins.validated.SetTimeout(connectTimeout) // moved to above for different circumstances.
 
 			// Wait for timeout or validation get concluded
 			// Closed safe: On closing, validation will be concluded.
@@ -1163,6 +1168,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		ctrlLink, err := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
+		ins.log.Debug("Ready to %v", cmd)
+
 		// Only after validated, we know whether the instance is reclaimed.
 		// If instance is expiring and reclaimed, we will relocate objects in main repository while backing objects are not affected.
 		// Two options available to handle reclaiming event:
@@ -1292,6 +1299,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		}
 
 		// In case there is a request already, wait to be consumed (for response).
+		ins.log.Debug("Waiting for sending %v(datalink: %v, wait: %d)", cmd, link != ctrlLink, len(link.chanWait))
 		link.chanWait <- req
 		if err := req.Flush(RequestTimeout); err != nil {
 			ins.log.Warn("Flush request error: %v", err)
