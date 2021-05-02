@@ -81,11 +81,11 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	TriggerTimeout        = 200 * time.Millisecond // Triggering cost is about 20ms, use 200ms to avoid exceeded timeout
-	DefaultConnectTimeout = 20 * time.Millisecond  // Decide by RTT.
+	TriggerTimeout        = 1 * time.Second       // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
-	ResponseTimeout       = 1 * time.Second
+	ResponseTimeout       = 2 * time.Second
 	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
@@ -1317,14 +1317,18 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			return err
 		}
 		req.SetTimeout(ResponseTimeout)
-		if err := req.Timeout(); err == promise.ErrTimeout {
-			// Remove request.
-			select {
-			case <-link.chanWait:
-			default:
+		// Timeout check
+		go func() {
+			if err := req.Timeout(); err != promise.ErrTimeout {
+				return
+			} else if req.SetResponse(err) {
+				// Remove request block.
+				select {
+				case <-link.chanWait:
+				default:
+				}
 			}
-			return err
-		}
+		}()
 
 	case *types.Control:
 		isDataRequest := false
