@@ -81,7 +81,8 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
+	TriggerTimeout        = 100 * time.Millisecond // Triggering cost is about 20ms, use 100ms to avoid exceeded timeout
+	DefaultConnectTimeout = 20 * time.Millisecond  // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
@@ -685,6 +686,8 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
 			if triggered {
 				// Pass to timeout check.
+				ins.validated.SetTimeout(TriggerTimeout)
+				connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				// Instance is warm, skip unnecssary warming up.
 				return ins.flagValidatedLocked(ins.ctrlLink) // Skip any check in the "FlagValidated".
@@ -701,13 +704,15 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 						ctrl.Ping(DefaultPingPayload)
 					}
 				} // Ctrl can be nil if disconnected, simply wait for timeout and retry
+
+				ins.validated.SetTimeout(connectTimeout)
 			}
 
 			// Start timeout, possibitilities are:
 			// 1. ping may get stucked anytime.
 			// 2. pong may lost (both after triggered or after ping), especially pong retrial has been disabled at lambda side.
 			// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
-			ins.validated.SetTimeout(connectTimeout)
+			// ins.validated.SetTimeout(connectTimeout) // moved to above for different circumstances.
 
 			// Wait for timeout or validation get concluded
 			// Closed safe: On closing, validation will be concluded.
