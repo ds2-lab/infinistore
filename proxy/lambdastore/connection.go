@@ -415,7 +415,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
 	recovered, _ := conn.r.ReadInt()
-	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
 		// exhaust value field
