@@ -103,7 +103,7 @@ var (
 	ErrNotCtrlLink       = errors.New("not control link")
 	ErrInstanceValidated = errors.New("instance has been validated by another connection")
 	ErrInstanceBusy      = errors.New("instance busy")
-	ErrUnexpectedReturn  = errors.New("unexpected return from validation")
+	ErrWarmupReturn      = errors.New("return from warmup")
 	ErrUnknown           = errors.New("unknown error")
 	ErrValidationTimeout = errors.New("funciton validation timeout")
 )
@@ -802,7 +802,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			// Does not affect the MAYBE status.
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 			// No need to return a validated connection. If someone do require the connection, it is an unexpected error.
-			ins.flagValidatedLocked(nil, ErrUnexpectedReturn)
+			ins.flagValidatedLocked(nil, ErrWarmupReturn)
 			ins.mu.Unlock()
 
 			ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
@@ -1098,17 +1098,21 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		err = errs[0]
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
-		if err != nil {
+		if err != nil && err != ErrWarmupReturn {
 			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
 			if int(numFailure) >= MaxValidationFailure || err == ErrValidationTimeout {
 				ins.log.Warn("Maxed validation failure reached, abandon active instance...")
-				atomic.AddUint32(&ins.numFailure, 0)
+				atomic.StoreUint32(&ins.numFailure, 0)
 				go ins.AbandonLambda()
 			}
 		} else {
-			atomic.AddUint32(&ins.numFailure, 0)
-			ins.log.Debug("[%v]Validated", ins)
+			atomic.StoreUint32(&ins.numFailure, 0)
+			if err != nil {
+				ins.log.Debug("[%v]%v", err)
+			} else {
+				ins.log.Debug("[%v]Validated", ins)
+			}
 		}
 	}
 	return castValidatedConnection(ins.validated)
