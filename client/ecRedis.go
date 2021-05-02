@@ -26,7 +26,10 @@ var (
 		Color:  false,
 	}
 	// ErrUnexpectedResponse Unexplected response
-	ErrUnexpectedResponse = errors.New("unexpected response")
+	ErrUnexpectedResponse      = errors.New("unexpected response")
+	ErrUnexpectedPreflightPong = errors.New("unexpected preflight pong")
+	ErrMaxPreflightsReached    = errors.New("max preflight attemps reached")
+	PreflightAttempts          = 3
 )
 
 func init() {
@@ -175,20 +178,18 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 
 	// Filter results
 	chunks := make([][]byte, ret.Len())
-	failed := make([]int, 0, ret.Len())
+	failed := 0
 	for i := range ret.Rets {
-		err := ret.Error(i)
-		if err != nil {
-			failed = append(failed, i)
-		} else {
-			chunks[i] = ret.Ret(i)
+		chunks[i] = ret.Ret(i)
+		if chunks[i] == nil {
+			failed++
 		}
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d", len(failed))
+		log.Warn("Failed chucks %d", failed)
 		return stats.ReqId, nil, false
 	}
 
@@ -198,11 +199,6 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 		int64(stats.Duration), int64(0), int64(stats.RecLatency), int64(end.Sub(decodeStart)),
 		stats.AllGood, stats.Corrupted, ret.Size)
 	log.Info("Got %s %d %d ( %d %d )", key, ret.Size, int64(stats.Duration), int64(stats.RecLatency), int64(end.Sub(decodeStart)))
-
-	// Try recover
-	if len(failed) > 0 {
-		c.recover(host, key, uuid.New().String(), int(ret.Size), failed, chunks)
-	}
 
 	return stats.ReqId, reader, true
 }
@@ -291,31 +287,62 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		defer wg.Done()
 	}
 
-	if err := c.validate(addr, i); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
-		return
+	for attemp := 0; attemp < PreflightAttempts; attemp++ {
+		if err := c.validate(addr, i); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		cn := c.conns[addr][i]
+		cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
+		defer cn.conn.SetWriteDeadline(time.Time{})
+
+		// tGet := time.Now()
+		// fmt.Println("Client send GET req timeStamp", tGet, "chunkId is", i)
+		// cmd key reqId chunkId
+		cn.W.WriteCmdString(protocol.CMD_GET_CHUNK, key, reqId, strconv.Itoa(i))
+
+		// Flush pipeline
+		//if err := c.W[i].Flush(); err != nil {
+		if err := cn.W.Flush(); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		cn.conn.SetWriteDeadline(time.Time{})
+
+		if attemp == 0 {
+			log.Debug("Initiated getting %d@%s(%s), attempt $d", i, key, addr, attemp+1)
+		} else {
+			log.Info("Retry getting %d@%s(%s), %s, attempt $d", i, key, addr, reqId, attemp+1)
+		}
+
+		if c.recvPong("", addr, reqId, i) {
+			c.recvGet("Got", addr, reqId, i, ret, nil)
+			return
+		}
 	}
+
+	log.Warn("Stop attempts %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
+	c.setError(ret, addr, i, ErrMaxPreflightsReached)
+}
+
+func (c *Client) recvPong(prompt string, addr string, reqId string, i int) bool {
 	cn := c.conns[addr][i]
-	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
-	defer cn.conn.SetWriteDeadline(time.Time{})
+	// Set deadline for preflight pong
+	cn.conn.SetReadDeadline(time.Now().Add(PreflightTimeout))
+	defer cn.conn.SetReadDeadline(time.Time{})
 
-	// tGet := time.Now()
-	// fmt.Println("Client send GET req timeStamp", tGet, "chunkId is", i)
-	// cmd key reqId chunkId
-	cn.W.WriteCmdString(protocol.CMD_GET_CHUNK, key, reqId, strconv.Itoa(i))
-
-	// Flush pipeline
-	//if err := c.W[i].Flush(); err != nil {
-	if err := cn.W.Flush(); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
-		return
+	// Check error
+	pong, err := cn.R.ReadBulkString()
+	if err == nil && pong != protocol.CMD_PONG {
+		err = ErrUnexpectedPreflightPong
 	}
-	cn.conn.SetWriteDeadline(time.Time{})
-
-	log.Debug("Initiated getting %d@%s(%s)", i, key, addr)
-	c.recvGet("Got", addr, reqId, i, ret, nil)
+	if err != nil {
+		log.Debug("Error on receiving preflight pong %s(%d): %v", reqId, i, err)
+		c.disconnect(addr, i)
+	}
+	return err == nil
 }
 
 func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
@@ -332,7 +359,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 	// chunk id
 	type0, err := cn.R.PeekType()
 	if err != nil {
-		log.Warn("PeekType error on receiving chunk  %s(%d): %v", reqId, i, err)
+		log.Warn("PeekType error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
@@ -413,7 +440,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 			return
 		}
 		log.Debug("Not found: chunk %d", i)
-		ret.Set(i, nil)
+		c.setError(ret, addr, i, ErrNotFound)
 		return
 	case resp.TypeBulk:
 		// This is what expected
@@ -442,6 +469,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	// Abandon?
 	if chunkId == "-1" {
 		log.Debug("Abandon late chunk %d", i)
+		ret.Set(i, nil)
 		return
 	}
 
@@ -469,22 +497,22 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	ret.Set(i, val)
 }
 
-func (c *Client) recover(addr string, key string, reqId string, size int, failed []int, shards [][]byte) {
-	var wg sync.WaitGroup
-	ret := newEcRet(c.Shards)
-	for _, i := range failed {
-		wg.Add(1)
-		// lambdaId = 0, for lambdaID of a specified key is fixed on setting.
-		go c.set(addr, key, reqId, size, i, shards[i], 0, ret, &wg)
-	}
-	wg.Wait()
+// func (c *Client) recover(addr string, key string, reqId string, size int, failed []int, shards [][]byte) {
+// 	var wg sync.WaitGroup
+// 	ret := newEcRet(c.Shards)
+// 	for _, i := range failed {
+// 		wg.Add(1)
+// 		// lambdaId = 0, for lambdaID of a specified key is fixed on setting.
+// 		go c.set(addr, key, reqId, size, i, shards[i], 0, ret, &wg)
+// 	}
+// 	wg.Wait()
 
-	if ret.Err != nil {
-		log.Warn("Failed to recover shards of %s: %v", key, failed)
-	} else {
-		log.Info("Succeeded to recover shards of %s: %v", key, failed)
-	}
-}
+// 	if ret.Err != nil {
+// 		log.Warn("Failed to recover shards of %s: %v", key, failed)
+// 	} else {
+// 		log.Info("Succeeded to recover shards of %s: %v", key, failed)
+// 	}
+// }
 
 func (c *Client) encode(obj []byte) ([][]byte, error) {
 	// split obj first

@@ -1112,9 +1112,10 @@ func (ins *Instance) bye(conn *Connection) {
 
 	if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_MAYBE, INSTANCE_SLEEPING) {
 		ins.log.Info("[%v]Bye from unmanaged instance, flag as sleeping.", ins)
-	} else {
-		ins.log.Debug("[%v]Bye ignored, waiting for return of synchronous invocation.", ins)
 	}
+	// } else {
+	// 	ins.log.Debug("[%v]Bye ignored, waiting for return of synchronous invocation.", ins)
+	// }
 }
 
 // FlagClosed Notify instance that a connection is closed.
