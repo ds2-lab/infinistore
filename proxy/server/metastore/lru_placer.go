@@ -134,6 +134,7 @@ func (p *LRUPlacer) Insert(key string, newMeta *Meta) (*Meta, MetaPostProcess, e
 }
 
 func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, MetaPostProcess, error) {
+	p.log.Debug("Placing %s", meta.ChunkKey(chunkId))
 	instance, post, err := p.FindPlacement(meta, chunkId)
 	if err != nil {
 		return instance, post, err
@@ -152,6 +153,8 @@ func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdast
 // 4. Remap to smaller "Size" of instance between target instance and remapped instance according to "chunk" in
 //    relocation array.
 func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instance, MetaPostProcess, error) {
+	p.log.Debug("Finding placement %s", meta.ChunkKey(chunkId))
+
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
@@ -178,20 +181,6 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 		return p.cluster.Instance(meta.Placement[chunkId]), nil, nil
 	}
 
-	// Check availability
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Commented by Tianium: 20210427, because
-	// 1. Unconfirmed object will not be evicted
-	// 2. On re-placing, the object is flaged as deleted until all chunks are confirmed.
-	// Start of commented
-	// Double check if it is evicted.
-	// if meta.Deleted {
-	// 	return nil, nil, ErrPlacementConflict
-	// }
-	// End of commented
-
 	// Check if a replacement decision has been made.
 	if !IsPlacementEmpty(placerMeta.swapMap) {
 		meta.Placement[chunkId] = placerMeta.swapMap[chunkId]
@@ -212,26 +201,52 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 		assigned = meta.slice.GetIndex(meta.Placement[chunkId])
 	}
 	instance := p.cluster.Instance(assigned)
+	confirmed := false
 	if instance.Meta.Size()+uint64(meta.ChunkSize) < instance.Meta.Capacity {
-		meta.Placement[chunkId] = assigned
-		placerMeta.confirm(chunkId)
-		// If the object has not seen.
-		if placerMeta.pos[p.primary] == 0 {
-			p.AddObject(meta)
-		}
-		// We can add size to instance safely, the allocated space is reserved for this chunk even set operation may fail.
-		// This allow the client to reset the chunk without affecting the placement.
-		instance.Meta.IncreaseSize(meta.ChunkSize)
-		// size := instance.Meta.IncreaseSize(meta.ChunkSize)
-		// p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
-		// 	assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
+		size := instance.Meta.IncreaseSize(meta.ChunkSize)
+		if size < instance.Meta.Capacity {
+			meta.Placement[chunkId] = assigned
+			placerMeta.confirm(chunkId)
+			confirmed = true
 
-		// Added by Tianium: 20210427
-		// Remove eviction flag on all confirmed
-		if placerMeta.allConfirmed() {
-			meta.Deleted = false
-		}
+			// We can add size to instance safely, the allocated space is reserved for this chunk even set operation may fail.
+			// This allow the client to reset the chunk without affecting the placement.
+			p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
+				assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
 
+			// Added by Tianium: 20210427
+			// Remove eviction flag on all confirmed
+			if placerMeta.allConfirmed() {
+				meta.Deleted = false
+			}
+
+			// LOCK FREE: Regardless the value of p.primary, if meta has been in the placer already, either position should be non-zero.
+			if placerMeta.pos[p.primary] > 0 || placerMeta.pos[p.secondary] > 0 {
+				return instance, nil, nil
+			} // else: No return until meta has been added to the placer.
+		} else {
+			// Roll back and continue
+			instance.Meta.DecreaseSize(meta.ChunkSize)
+		}
+	}
+
+	// Lock the placer
+	p.mu.Lock()
+
+	// Commented by Tianium: 20210427, because
+	// 1. Unconfirmed object will not be evicted
+	// 2. On re-placing, the object is flaged as deleted until all chunks are confirmed.
+	// Start of commented
+	// Double check if it is evicted.
+	// if meta.Deleted {
+	// 	return nil, nil, ErrPlacementConflict
+	// }
+	// End of commented
+
+	// If confirmed and we get here, meta is not in the placer.
+	if confirmed {
+		p.AddObject(meta)
+		p.mu.Unlock()
 		return instance, nil, nil
 	}
 
@@ -249,6 +264,8 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 		numScaned++
 	}
 	// p.log.Debug("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement)
+
+	p.mu.Unlock()
 
 	for i, tbe := range placerMeta.swapMap { // To be evicted
 		instance := p.cluster.Instance(tbe)

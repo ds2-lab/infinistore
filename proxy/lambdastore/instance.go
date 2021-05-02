@@ -268,6 +268,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		return ErrInstanceClosed
 	}
 
+	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
 	select {
 	case ins.chanCmd <- cmd:
 		// continue after select
@@ -279,7 +280,6 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 		// wait to be inserted and continue after select
 		ins.chanCmd <- cmd
 	}
-	ins.log.Debug("%v dispatched, %d queued", cmd, len(ins.chanCmd))
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
@@ -1168,6 +1168,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		ctrlLink, err := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
+		ins.log.Debug("Ready to %v", cmd)
+
 		// Only after validated, we know whether the instance is reclaimed.
 		// If instance is expiring and reclaimed, we will relocate objects in main repository while backing objects are not affected.
 		// Two options available to handle reclaiming event:
@@ -1297,6 +1299,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		}
 
 		// In case there is a request already, wait to be consumed (for response).
+		ins.log.Debug("Waiting for sending %v(datalink: %v, wait: %d)", cmd, link != ctrlLink, len(link.chanWait))
 		link.chanWait <- req
 		if err := req.Flush(RequestTimeout); err != nil {
 			ins.log.Warn("Flush request error: %v", err)

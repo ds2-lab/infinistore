@@ -142,7 +142,6 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		postProcess(p.dropEvicted)
 		// continue
 	}
-	p.log.Debug("Requested to set %s to node %d", chunkKey, meta.Placement[dChunkId])
 }
 
 // HandleGet "get chunk" handler
