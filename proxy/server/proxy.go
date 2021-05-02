@@ -147,6 +147,13 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 
 // HandleGet "get chunk" handler
 func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
+	// Response with pong to confirm the preflight test.
+	w.AppendBulkString(protocol.CMD_PONG)
+	if err := w.Flush(); err != nil {
+		// Network error, abandon request
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 	key := c.Arg(0).String()
 	reqId := c.Arg(1).String()
