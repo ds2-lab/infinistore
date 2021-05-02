@@ -85,6 +85,7 @@ var (
 	DefaultConnectTimeout = 20 * time.Millisecond  // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
+	ResponseTimeout       = 1 * time.Second
 	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
@@ -1313,6 +1314,15 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				ctrlLink.RemoveDataLink(link)
 			}
 			link.Close()
+			return err
+		}
+		req.SetTimeout(ResponseTimeout)
+		if err := req.Timeout(); err == promise.ErrTimeout {
+			// Remove request.
+			select {
+			case <-link.chanWait:
+			default:
+			}
 			return err
 		}
 

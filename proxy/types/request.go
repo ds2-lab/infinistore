@@ -12,6 +12,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
 const (
@@ -39,6 +40,7 @@ type Request struct {
 	conn             Conn
 	status           uint32
 	streamingStarted bool
+	responded        promise.Promise
 }
 
 func (req *Request) String() string {
@@ -172,6 +174,9 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return false
 	}
+	if req.responded != nil {
+		req.responded.Resolve(rsp)
+	}
 	if req.Client != nil {
 		ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 
@@ -180,7 +185,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return ret == nil
 	}
 
-	return false
+	return true
 }
 
 // Only appliable to GET so far.
@@ -189,4 +194,19 @@ func (req *Request) Abandon() bool {
 		return false
 	}
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
+}
+
+func (req *Request) SetTimeout(timeout time.Duration) {
+	req.initPromise().SetTimeout(timeout)
+}
+
+func (req *Request) Timeout() error {
+	return req.initPromise().Timeout()
+}
+
+func (req *Request) initPromise() promise.Promise {
+	if req.responded == nil {
+		req.responded = promise.NewPromise()
+	}
+	return req.responded
 }
