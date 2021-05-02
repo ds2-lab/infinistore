@@ -442,6 +442,7 @@ func (ins *Instance) ReserveBacking() bool {
 	// Double check, or restore if failed.
 	if ins.IsClosed() || ins.IsRecovering() {
 		atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
+		return false
 	}
 	return true
 }

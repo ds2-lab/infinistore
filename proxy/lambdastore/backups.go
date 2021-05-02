@@ -159,7 +159,7 @@ func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
 	if i >= len(backups) || backups[i] == nil {
 		return nil, false
 	} else {
-		backups[i].StartBacking(target, i, b.required)
+		go backups[i].StartBacking(target, i, b.required) // Use go routing to avoid deadlock
 		return b.getInstance(backups[i], i), true
 	}
 }
