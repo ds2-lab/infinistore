@@ -170,6 +170,7 @@ func (v *ClusterView) getColorByStatus(status uint64) ui.Color {
 }
 
 func (v *ClusterView) Draw(buf *ui.Buffer) {
+	v.invalidate = true
 	v.update()
 	v.Block.Draw(buf)
 	var defaultRune rune
