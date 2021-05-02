@@ -105,7 +105,7 @@ var (
 	ErrInstanceBusy      = errors.New("instance busy")
 	ErrUnexpectedReturn  = errors.New("unexpected return from validation")
 	ErrUnknown           = errors.New("unknown error")
-	ErrValidationFailed  = errors.New("funciton validation failed")
+	ErrValidationTimeout = errors.New("funciton validation timeout")
 )
 
 type InstanceManager interface {
@@ -722,7 +722,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 				connectTimeout *= time.Duration(BackoffFactor)
 				if connectTimeout > MaxConnectTimeout {
 					// Time to abandon
-					return ins.flagValidatedLocked(nil, ErrValidationFailed)
+					return ins.flagValidatedLocked(nil, ErrValidationTimeout)
 				}
 				ins.log.Warn("Timeout on validating, re-ping...")
 			} else {
@@ -784,7 +784,11 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 
 		if ins.validated.IsResolved() {
 			// Don't overwrite the MAYBE status.
-			if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVE, INSTANCE_SLEEPING) {
+			status := atomic.LoadUint32(&ins.awakeness)
+			if status == INSTANCE_MAYBE {
+				return
+			}
+			if atomic.CompareAndSwapUint32(&ins.awakeness, status, INSTANCE_SLEEPING) {
 				ins.log.Debug("[%v]Status updated.", ins)
 			} else {
 				ins.log.Error("[%v]Unexpected status.", ins)
@@ -1097,8 +1101,9 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		if err != nil {
 			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
-			if int(numFailure) >= MaxValidationFailure {
+			if int(numFailure) >= MaxValidationFailure || err == ErrValidationTimeout {
 				ins.log.Warn("Maxed validation failure reached, abandon active instance...")
+				atomic.AddUint32(&ins.numFailure, 0)
 				go ins.AbandonLambda()
 			}
 		} else {

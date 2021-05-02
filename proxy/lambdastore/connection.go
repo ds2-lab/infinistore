@@ -25,6 +25,7 @@ var (
 	}
 	ErrConnectionClosed = errors.New("connection closed")
 	ErrMissingResponse  = errors.New("missing response")
+	ErrUnexpectedType   = errors.New("unexpected type")
 )
 
 type Connection struct {
@@ -224,7 +225,7 @@ func (conn *Connection) ServeLambda() {
 			case protocol.CMD_RECOVER:
 				conn.recoverHandler()
 			default:
-				conn.log.Warn("Unsupported response type: %s", cmd)
+				conn.log.Warn("Unsupported response type: %s", logger.SafeString(cmd, 20))
 			}
 		default:
 			if err := conn.skipField(respType); err != nil {
@@ -238,6 +239,8 @@ func (conn *Connection) ServeLambda() {
 			return
 		} else if readErr != nil {
 			conn.log.Warn("Error on handle response %s: %v", respType, readErr)
+			conn.close()
+			return
 		}
 
 		if conn.instance != nil {
@@ -272,6 +275,8 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 		if err := conn.r.SkipBulk(); err != nil {
 			return err
 		}
+	case resp.TypeUnknown:
+		return ErrUnexpectedType
 	default:
 		conn.log.Warn("Skipping %s", t)
 		// We just want read a line, ignore other error
@@ -291,6 +296,7 @@ func (conn *Connection) Ping(payload []byte) {
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush ping error: %v", err)
+		conn.close()
 	}
 }
 
