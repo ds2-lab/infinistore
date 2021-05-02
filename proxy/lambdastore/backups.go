@@ -167,7 +167,7 @@ func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
 func (b *Backups) Stop(target *Instance) {
 	for _, backup := range b.backups {
 		if backup != nil {
-			backup.StopBacking(target)
+			go backup.StopBacking(target) // Use go routing to avoid deadlock
 		}
 	}
 	// Ensure a second call to ResumeServing is safe

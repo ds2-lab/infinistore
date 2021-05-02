@@ -425,21 +425,23 @@ func (ins *Instance) IsRecovering() bool {
 // Check if the instance is available for serving as a backup for specified instance.
 // Return false if the instance is backing another instance.
 func (ins *Instance) ReserveBacking() bool {
-	if ins.IsClosed() {
+	// Keep this lock free, or it may deadlock sometime. eg. When two instances are trying to backing each other.
+	if ins.IsClosed() || ins.IsRecovering() {
 		return false
 	}
-
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
 
 	// We don't check phase because backing and closed due to reclaiming/expiring are exclusive.
 	// If instance is backing, reclaiming and expiring will not close instance.
 	// If instance is closed due to reclaiming/expiring, it is not backing.
-	if !ins.IsClosed() && !ins.IsRecovering() && atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED) {
-		return true
+	if !atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED) {
+		return false
 	}
 
-	return false
+	// Double check, or restore if failed.
+	if ins.IsClosed() || ins.IsRecovering() {
+		atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
+	}
+	return true
 }
 
 // Start serving as the backup for specified instance.
