@@ -81,7 +81,7 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	TriggerTimeout        = 100 * time.Millisecond // Triggering cost is about 20ms, use 100ms to avoid exceeded timeout
+	TriggerTimeout        = 200 * time.Millisecond // Triggering cost is about 20ms, use 200ms to avoid exceeded timeout
 	DefaultConnectTimeout = 20 * time.Millisecond  // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
@@ -742,7 +742,7 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	case INSTANCE_ACTIVATING:
 		// Cases:
 		// On validating, lambda deactivated and reactivating. Then validating timeouts and retries.
-		return true
+		return false // return false to allow issue ping, in case the pong is lost.
 	case INSTANCE_SLEEPING:
 		if !atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_SLEEPING, INSTANCE_ACTIVATING) {
 			return false
