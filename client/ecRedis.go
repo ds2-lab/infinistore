@@ -179,17 +179,20 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	// Filter results
 	chunks := make([][]byte, ret.Len())
 	failed := 0
-	for i := range ret.Rets {
+	succeed := 0
+	for i := 0; i < ret.Len(); i++ {
 		chunks[i] = ret.Ret(i)
 		if chunks[i] == nil {
 			failed++
+		} else {
+			succeed++
 		}
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d", failed)
+		log.Warn("Failed chucks %d, succeed %d", failed, succeed)
 		return stats.ReqId, nil, false
 	}
 
