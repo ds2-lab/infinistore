@@ -315,9 +315,9 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		cn.conn.SetWriteDeadline(time.Time{})
 
 		if attemp == 0 {
-			log.Debug("Initiated getting %d@%s(%s), attempt $d", i, key, addr, attemp+1)
+			log.Debug("Initiated getting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
 		} else {
-			log.Info("Retry getting %d@%s(%s), %s, attempt $d", i, key, addr, reqId, attemp+1)
+			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
 		}
 
 		if c.recvPong("", addr, reqId, i) {

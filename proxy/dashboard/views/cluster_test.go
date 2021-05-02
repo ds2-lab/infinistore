@@ -50,6 +50,6 @@ var _ = Describe("Views", func() {
 
 		// ins.phase = lambdastore.PHASE_EXPIRED
 		status = 0x3001
-		Expect(view.getColorByStatus(status)).To(Equal(ui.ColorMagenta))
+		Expect(view.getColorByStatus(status)).To(Equal(ui.ColorRed))
 	})
 })
