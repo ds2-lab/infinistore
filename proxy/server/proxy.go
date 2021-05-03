@@ -96,13 +96,6 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	lambdaId, _ := c.NextArg().Int()
 	randBase, _ := c.NextArg().Int()
 
-	// Response with pong to confirm the preflight test.
-	w.AppendBulkString(protocol.CMD_PONG)
-	if err := w.Flush(); err != nil {
-		// Network error, abandon request
-		return
-	}
-
 	bodyStream, err := c.Next()
 	if err != nil {
 		p.log.Error("Error on get value reader: %v", err)
