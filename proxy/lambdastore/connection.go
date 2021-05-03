@@ -116,8 +116,9 @@ func (conn *Connection) Close() error {
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
-	if conn.dataLink != nil {
-		conn.dataLink.Close()
+	dataLink := conn.dataLink
+	if dataLink != nil {
+		dataLink.Close()
 		conn.dataLink = nil
 	}
 
@@ -135,7 +136,7 @@ func (conn *Connection) close() {
 		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	}
 	conn.Conn.Close()
-	conn.clearResponses()
+	conn.ClearResponses()
 	conn.log.Debug("Closed.")
 }
 
@@ -332,7 +333,7 @@ func (conn *Connection) SetErrorResponse(err error) {
 	}
 }
 
-func (conn *Connection) clearResponses() {
+func (conn *Connection) ClearResponses() {
 	if len(conn.chanWait) == 0 {
 		return
 	}

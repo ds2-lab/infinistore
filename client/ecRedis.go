@@ -180,6 +180,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	chunks := make([][]byte, ret.Len())
 	failed := 0
 	succeed := 0
+	empties := 0
 	for i := 0; i < ret.Len(); i++ {
 		chunks[i] = ret.Ret(i)
 		if chunks[i] == nil {
@@ -187,12 +188,15 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 		} else {
 			succeed++
 		}
+		if len(chunks[i]) == 0 {
+			empties++
+		}
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d, succeed %d", failed, succeed)
+		log.Warn("Failed chucks %d, succeed %d, empties", failed, succeed, empties)
 		return stats.ReqId, nil, false
 	}
 
@@ -239,50 +243,64 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		defer wg.Done()
 	}
 
-	if err := c.validate(addr, i); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-	cn := c.conns[addr][i]
-	w := cn.W
+	for attemp := 0; attemp < PreflightAttempts; attemp++ {
+		if err := c.validate(addr, i); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		cn := c.conns[addr][i]
+		w := cn.W
 
-	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
-	defer cn.conn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
+		cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
+		defer cn.conn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
 
-	w.WriteMultiBulkSize(10)
-	w.WriteBulkString(protocol.CMD_SET_CHUNK)
-	w.WriteBulkString(key)
-	w.WriteBulkString(reqId)
-	w.WriteBulkString(strconv.Itoa(size))
-	w.WriteBulkString(strconv.Itoa(i))
-	w.WriteBulkString(strconv.Itoa(c.DataShards))
-	w.WriteBulkString(strconv.Itoa(c.ParityShards))
-	w.WriteBulkString(strconv.Itoa(lambdaId))
-	w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
-	if err := w.Flush(); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
-		return
+		w.WriteMultiBulkSize(10)
+		w.WriteBulkString(protocol.CMD_SET_CHUNK)
+		w.WriteBulkString(key)
+		w.WriteBulkString(reqId)
+		w.WriteBulkString(strconv.Itoa(size))
+		w.WriteBulkString(strconv.Itoa(i))
+		w.WriteBulkString(strconv.Itoa(c.DataShards))
+		w.WriteBulkString(strconv.Itoa(c.ParityShards))
+		w.WriteBulkString(strconv.Itoa(lambdaId))
+		w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
+		if err := w.Flush(); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+
+		if attemp == 0 {
+			log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
+		} else {
+			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
+		}
+
+		if !c.recvPong("", addr, reqId, i) {
+			continue
+		}
+
+		// Flush pipeline
+		//if err := c.W[i].Flush(); err != nil {
+		cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
+		if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		if err := w.Flush(); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		cn.conn.SetWriteDeadline(time.Time{})
+
+		c.recvSet("Set", addr, reqId, i, ret, nil)
 	}
 
-	// Flush pipeline
-	//if err := c.W[i].Flush(); err != nil {
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
-	if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-	if err := w.Flush(); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-	cn.conn.SetWriteDeadline(time.Time{})
-
-	log.Debug("Initiated setting %d@%s(%s)", i, key, addr)
-	c.recvSet("Set", addr, reqId, i, ret, nil)
+	log.Warn("Stop attempts %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
+	c.setError(ret, addr, i, ErrMaxPreflightsReached)
 }
 
 func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
@@ -382,7 +400,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 		break
 	default:
 		// cn.R.ReadInlineString() // Drain the field
-		err := fmt.Errorf("nexpected response type %v", type0)
+		err := fmt.Errorf("unexpected response type %v", type0)
 		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		c.disconnect(addr, i)
@@ -412,7 +430,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	cn := c.conns[addr][i]
-	cn.conn.SetReadDeadline(time.Now().Add(Timeout)) // Set deadline for response
+	cn.conn.SetReadDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for response
 	defer cn.conn.SetReadDeadline(time.Time{})
 
 	// peeking response type and receive

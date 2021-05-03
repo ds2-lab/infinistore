@@ -83,6 +83,12 @@ func (p *Proxy) Release() {
 
 // HandleSet "set chunk" handler
 func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
+	// Response with pong to confirm the preflight test.
+	w.AppendBulkString(protocol.CMD_PONG)
+	if err := w.Flush(); err != nil {
+		// Network error, abandon request
+		return
+	}
 	client := redeo.GetClient(c.Context())
 
 	// Get args
