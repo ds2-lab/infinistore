@@ -180,6 +180,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	chunks := make([][]byte, ret.Len())
 	failed := 0
 	succeed := 0
+	empties := 0
 	for i := 0; i < ret.Len(); i++ {
 		chunks[i] = ret.Ret(i)
 		if chunks[i] == nil {
@@ -187,12 +188,15 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 		} else {
 			succeed++
 		}
+		if len(chunks[i]) == 0 {
+			empties++
+		}
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d, succeed %d", failed, succeed)
+		log.Warn("Failed chucks %d, succeed %d, empties", failed, succeed, empties)
 		return stats.ReqId, nil, false
 	}
 
@@ -382,7 +386,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 		break
 	default:
 		// cn.R.ReadInlineString() // Drain the field
-		err := fmt.Errorf("nexpected response type %v", type0)
+		err := fmt.Errorf("unexpected response type %v", type0)
 		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		c.disconnect(addr, i)
