@@ -896,6 +896,14 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	ins.endSession(event.Sid)
 
 	// Don't reset links here, fronzen but not dead.
+	// Added by Tianium: Since lambda is stopped, clear any pending responses.
+	if ins.ctrlLink != nil {
+		ins.ctrlLink.ClearResponses()
+	}
+	dataLink := ins.ctrlLink.GetDataLink()
+	if dataLink != nil {
+		dataLink.ClearResponses()
+	}
 
 	if err != nil {
 		ins.Meta.Stale = false
