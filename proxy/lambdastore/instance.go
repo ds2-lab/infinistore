@@ -86,7 +86,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ResponseTimeout       = 2 * time.Second
-	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
+	MinValidationInterval = 80 * time.Millisecond // The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -667,9 +667,9 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 
 	lastResolved := ins.validated.ResolvedAt()
 	// 1. resolved
-	// 2. last validation succeeded and time since lastResolved >= ValidationTimeout
+	// 2. last validation succeeded and time since lastResolved >= MinValidationInterval
 	// 3. or something wrong on last validating (must be ignorable)
-	if (lastResolved != time.Time{} && (ins.validated.Error() != nil || time.Since(lastResolved) >= ValidationTimeout)) {
+	if (lastResolved != time.Time{} && (ins.validated.Error() != nil || time.Since(lastResolved) >= MinValidationInterval)) {
 		// For reclaimed instance, simply return the result of last validation.
 		// if ins.IsReclaimed() {
 		// 	return castValidatedConnection(ins.validated)
@@ -1337,9 +1337,8 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		req.SetTimeout(ResponseTimeout)
 		// Timeout check
 		go func() {
-			if err := req.Timeout(); err != promise.ErrTimeout {
-				return
-			} else if req.SetResponse(err) {
+			if err := req.Timeout(); err != nil && req.SetResponse(err) {
+				ins.log.Warn("%v timeout", cmd)
 				// Remove request block.
 				select {
 				case <-link.chanWait:
