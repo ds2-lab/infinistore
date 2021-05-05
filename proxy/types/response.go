@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/mason-leap-lab/redeo/resp"
@@ -21,6 +22,10 @@ type Response struct {
 	Status     int64
 
 	w resp.ResponseWriter
+}
+
+func (rsp *Response) String() string {
+	return fmt.Sprintf("%s %v", rsp.Cmd, rsp.Id)
 }
 
 func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -28,7 +27,7 @@ func (id *Id) Chunk() int {
 	return id.chunk
 }
 
-func (id *Id) String() string {
+func (id Id) String() string {
 	return fmt.Sprintf("%s(%s)", id.ReqId, id.ChunkId)
 }
 
@@ -42,7 +41,7 @@ type Command interface {
 	String() string
 	GetRequest() *Request
 	Retriable() bool
-	Flush(time.Duration) error
+	Flush() error
 }
 
 type LambdaDeployment interface {

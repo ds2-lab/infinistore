@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type ControlCallback func(*Control, interface{})
@@ -58,14 +57,12 @@ func (ctrl *Control) PrepareForRecover(conn Conn) {
 	ctrl.conn = conn
 }
 
-func (ctrl *Control) Flush(timeout time.Duration) (err error) {
+func (ctrl *Control) Flush() (err error) {
 	if ctrl.conn == nil {
 		return errors.New("connection for control not set")
 	}
 	conn := ctrl.conn
 	ctrl.conn = nil
 
-	conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
-	defer conn.SetWriteDeadline(time.Time{})
 	return conn.Writer().Flush()
 }

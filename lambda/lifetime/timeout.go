@@ -24,7 +24,7 @@ const TICK_5_ERROR = 10 * time.Millisecond
 const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
-const BANDWIDTH = 0.04 // 0.04B/ns = 40MB/s for single connection
+const BANDWIDTH_FACTOR = 25 // 1/bandwidth, while bandwidth = 40MB/s = 0.04B/ns for single connection
 const STREAMING_TIMEOUT_FACTOR = 10
 
 var (
@@ -75,7 +75,7 @@ func TimeoutAfterWithReturn(f func() (interface{}, error), timeout time.Duration
 }
 
 func GetStreamingDeadline(size int64) time.Time {
-	timeout := time.Duration(float64(size) / BANDWIDTH * STREAMING_TIMEOUT_FACTOR)
+	timeout := time.Duration(size * BANDWIDTH_FACTOR * STREAMING_TIMEOUT_FACTOR)
 	if timeout < time.Second {
 		timeout = time.Second
 	}

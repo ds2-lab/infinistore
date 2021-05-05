@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -33,15 +34,17 @@ type Connection struct {
 	workerId int32       // Identify a unique lambda worker
 	control  bool        // Identify if the connection is control link or not.
 	dataLink *Connection // Only works for the control link to find its data link.
+	ctrlLink *Connection // Only works for the data link to find its control link.
 
-	instance *Instance
-	log      logger.ILogger
-	w        *resp.RequestWriter
-	r        resp.ResponseReader
-	mu       sync.Mutex
-	chanWait chan *types.Request
-	respType chan interface{}
-	closed   chan struct{}
+	instance    *Instance
+	log         logger.ILogger
+	w           *resp.RequestWriter
+	r           resp.ResponseReader
+	mu          sync.Mutex
+	chanWait    chan *types.Request
+	headRequest *types.Request
+	respType    chan interface{}
+	closed      chan struct{}
 }
 
 func NewConnection(c net.Conn) *Connection {
@@ -90,7 +93,7 @@ func (conn *Connection) AddDataLink(link *Connection) bool {
 		return false
 	}
 
-	conn.dataLink = link
+	link.ctrlLink, conn.dataLink = conn, link
 	conn.log.Debug("Data link added:%v", link)
 	return true
 }
@@ -101,6 +104,74 @@ func (conn *Connection) RemoveDataLink(link *Connection) {
 	}
 }
 
+func (conn *Connection) SendControl(ctrl *types.Control) error {
+	if err := ctrl.Flush(); err != nil {
+		conn.log.Error("Flush control error: %v - %v", ctrl, err)
+
+		conn.close()
+
+		return err
+	}
+
+	return nil
+}
+
+func (conn *Connection) SendRequest(req *types.Request) error {
+	// In case there is a request already, wait to be consumed (for response).
+	// Lock free: request sent after headRequest get set.
+	conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
+	conn.chanWait <- req
+	conn.headRequest = req
+
+	// Updated by Tianium: 20210504
+	// Write timeout is meaningless: small data will be buffered and always success, blobs will be handled by both ends.
+	// TODO: If neccessary (like add support to multi-layer relay), add read timeout on client.
+	if err := req.Flush(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
+		conn.log.Warn("Flush request error: %v - %v", req, err)
+
+		// Remove request.
+		conn.popRequest()
+
+		// Close connection
+		conn.close()
+
+		return err
+	}
+	// Set timeout for response.
+	req.SetTimeout(ResponseTimeout)
+	go func() {
+		if err := req.Timeout(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
+			conn.log.Warn("Request timeout: %v", req)
+
+			// Remove request.
+			conn.popRequest()
+
+			// Late response will be ignored.
+		}
+	}()
+
+	return nil
+}
+
+func (conn *Connection) peekRequest() *types.Request {
+	return conn.headRequest
+}
+
+func (conn *Connection) popRequest() *types.Request {
+	conn.headRequest = nil
+	select {
+	case req := <-conn.chanWait:
+		return req
+	default:
+		return nil
+	}
+}
+
+func (conn *Connection) isRequestPending() bool {
+	return len(conn.chanWait) > 0
+}
+
+// Close Signal connection should be closed. Function close() will be called later for actural operation
 func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
@@ -116,6 +187,7 @@ func (conn *Connection) Close() error {
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
+	// Signal data link to close itself.
 	dataLink := conn.dataLink
 	if dataLink != nil {
 		dataLink.Close()
@@ -126,17 +198,27 @@ func (conn *Connection) Close() error {
 }
 
 func (conn *Connection) close() {
-	if conn.instance != nil {
+	// Data link: Try detach from control link.
+	// Control link: Notify instance.
+	if conn.ctrlLink != nil {
+		conn.ctrlLink.RemoveDataLink(conn)
+		conn.ctrlLink = nil
+	} else if conn.instance != nil {
 		conn.instance.FlagClosed(conn)
 	}
+
+	// Call signal function to avoid duplicated close.
 	conn.Close()
-	conn.bye()
+
 	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
 	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
 		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	}
 	conn.Conn.Close()
+
+	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()
+
 	conn.log.Debug("Closed.")
 }
 
@@ -154,7 +236,7 @@ func (conn *Connection) ServeLambda() {
 		var retPeek interface{}
 		select {
 		case <-conn.closed:
-			if len(conn.chanWait) > 0 {
+			if conn.isRequestPending() {
 				// Is there request waiting?
 				retPeek = <-conn.respType
 			} else {
@@ -301,47 +383,42 @@ func (conn *Connection) Ping(payload []byte) {
 	}
 }
 
+// SetResponse Set response for last request.
 func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
-	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected response: %v", rsp)
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req == nil || !req.IsResponse(rsp) {
+		// ignore
+		conn.log.Debug("response discarded: %v", rsp)
 		return nil, false
 	}
-	for req := range conn.chanWait {
-		if req.IsResponse(rsp) {
-			conn.log.Debug("response matched: %v", req.Id)
 
-			return req, req.SetResponse(rsp)
-		}
-		conn.log.Warn("passing req: %v, got %v", req, rsp)
-		req.SetResponse(ErrMissingResponse)
-
-		if len(conn.chanWait) == 0 {
-			break
-		}
+	// Lock free: double check that poped is what we peeked.
+	if poped := conn.popRequest(); poped == req {
+		conn.log.Debug("response matched: %v", req)
+		return req, req.SetResponse(rsp)
 	}
+
 	return nil, false
 }
 
-func (conn *Connection) SetErrorResponse(err error) {
-	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected error response: %v", err)
-		return
+func (conn *Connection) SetErrorResponse(err error) bool {
+	if req := conn.popRequest(); req != nil {
+		return req.SetResponse(err)
 	}
-	for req := range conn.chanWait {
-		req.SetResponse(err)
-		break
-	}
+
+	conn.log.Warn("Unexpected error response: no request pending. err: %v", err)
+	return false
 }
 
 func (conn *Connection) ClearResponses() {
-	if len(conn.chanWait) == 0 {
-		return
-	}
-	for req := range conn.chanWait {
+	req := conn.popRequest()
+	for req != nil {
 		req.SetResponse(ErrConnectionClosed)
-		if len(conn.chanWait) == 0 {
-			break
-		}
+		// Yield for pending req a chance to push.
+		runtime.Gosched()
+
+		req = conn.popRequest()
 	}
 }
 

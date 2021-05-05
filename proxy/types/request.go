@@ -120,22 +120,15 @@ func (req *Request) PrepareForRecover(conn Conn) {
 	req.conn = conn
 }
 
-func (req *Request) Flush(timeout time.Duration) error {
+func (req *Request) Flush() error {
 	if req.conn == nil {
 		return errors.New("connection for request not set")
 	}
 	conn := req.conn
 	req.conn = nil
 
-	conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
-	defer conn.SetWriteDeadline(time.Time{})
-	if err := conn.Writer().Flush(); err != nil {
-		return err
-	}
-
 	if req.BodyStream != nil {
 		req.streamingStarted = true
-		conn.SetWriteDeadline(time.Time{})
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
@@ -143,12 +136,9 @@ func (req *Request) Flush(timeout time.Duration) error {
 			}
 			return err
 		}
-
-		conn.SetWriteDeadline(time.Now().Add(timeout))
-		return conn.Writer().Flush()
 	}
 
-	return nil
+	return conn.Writer().Flush()
 }
 
 func (req *Request) IsReturnd() bool {
