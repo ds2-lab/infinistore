@@ -1128,6 +1128,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 	return castValidatedConnection(ins.validated)
 }
 
+// TODO: bye functionality is to be reviewed. For now, connection close should not trigger bye.
 func (ins *Instance) bye(conn *Connection) {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
@@ -1317,36 +1318,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			// Unrecoverable
 			return nil
 		}
-
-		// In case there is a request already, wait to be consumed (for response).
-		ins.log.Debug("Waiting for sending %v(datalink: %v, wait: %d)", cmd, link != ctrlLink, len(link.chanWait))
-		link.chanWait <- req
-		if err := req.Flush(RequestTimeout); err != nil {
-			ins.log.Warn("Flush request error: %v", err)
-			// Remove request.
-			select {
-			case <-link.chanWait:
-			default:
-			}
-			// link failed, close so it can be reconnected.
-			if link != ctrlLink {
-				ctrlLink.RemoveDataLink(link)
-			}
-			link.Close()
-			return err
-		}
-		req.SetTimeout(ResponseTimeout)
-		// Timeout check
-		go func() {
-			if err := req.Timeout(); err != nil && req.SetResponse(err) {
-				ins.log.Warn("%v timeout", cmd)
-				// Remove request block.
-				select {
-				case <-link.chanWait:
-				default:
-				}
-			}
-		}()
+		return link.SendRequest(req)
 
 	case *types.Control:
 		isDataRequest := false
@@ -1374,14 +1346,9 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			return nil
 		}
 
-		if err := req.Flush(RequestTimeout); err != nil {
-			ins.log.Error("Flush control error: %v", err)
-			if isDataRequest {
-				global.DataCollected.Done()
-			}
-			ctrlLink.Close()
-			// Control commands are valid to connection only.
-			return nil
+		if err := ctrlLink.SendControl(req); err != nil && isDataRequest {
+			global.DataCollected.Done()
+			// No error returned, control commands will not be retry for now.
 		}
 
 	default:

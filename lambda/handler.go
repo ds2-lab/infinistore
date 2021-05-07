@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
@@ -589,15 +590,21 @@ func main() {
 		ret := Store.SetStream(key, chunkId, valReader)
 		client.Conn().SetReadDeadline(time.Time{})
 		d1 := time.Since(t)
-		if ret.Error() != nil {
-			errRsp.Error = ret.Error()
-			log.Error("%v", errRsp.Error)
+		err = ret.Error()
+		if err != nil {
+			errRsp.Error = err
+			log.Error("%v", err)
 			Server.AddResponses(errRsp, client)
 
 			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
-				// Ignore
+				// Ignore, network error will be handled by redeo.
 			}
+			// If the setstream err is net error (timeout), cut the line.
+			if util.IsConnectionFailed(err) {
+				client.Conn().Close()
+			}
+
 			finalize(ret, false)
 			return
 		}

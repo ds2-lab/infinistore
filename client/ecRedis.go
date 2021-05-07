@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
-	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -16,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -196,7 +195,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d, succeed %d, empties", failed, succeed, empties)
+		log.Warn("Failed chucks %d, succeed %d, empties %d", failed, succeed, empties)
 		return stats.ReqId, nil, false
 	}
 
@@ -230,9 +229,7 @@ func random(cluster, n int) []int {
 }
 
 func (c *Client) setError(ret *ecRet, addr string, i int, err error) {
-	if err == io.EOF {
-		c.disconnect(addr, i)
-	} else if err, ok := err.(net.Error); ok && err.Timeout() {
+	if util.IsConnectionFailed(err) {
 		c.disconnect(addr, i)
 	}
 	ret.SetError(i, err)
