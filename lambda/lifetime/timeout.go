@@ -36,7 +36,9 @@ var (
 
 func init() {
 	// adapt
-	if lambdacontext.MemoryLimitInMB < 896 {
+	if lambdacontext.MemoryLimitInMB == 0 {
+		// Do nothing, default
+	} else if lambdacontext.MemoryLimitInMB < 896 {
 		TICK_ERROR_EXTEND = TICK_1_ERROR_EXTEND
 		TICK_ERROR = TICK_1_ERROR
 	} else if lambdacontext.MemoryLimitInMB < 1792 {

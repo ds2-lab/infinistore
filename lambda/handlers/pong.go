@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -16,22 +18,27 @@ import (
 var (
 	ContextKeyReady    = "ready"
 	DefaultPongTimeout = 30 * time.Millisecond
-	DefaultRetry       = 0 // Disable retrial for backend link intergrated retrial and reconnection.
+	DefaultAttempts    = 0 // Disable retrial for backend link intergrated retrial and reconnection.
 
-	log = store.Log
+	Pong = NewPongHandler()
+
+	errPongTimeout = errors.New("pong timeout")
 )
 
 type pong func(*worker.Link, int64) error
 
+type fail func(*worker.Link, error)
+
 type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
-	limiter  chan int
-	timeout  *time.Timer
-	mu       sync.Mutex
-	done     chan struct{}
-	pong     pong // For test
-	canceled bool
+	limiter   chan int
+	timeout   *time.Timer
+	mu        sync.Mutex
+	done      chan struct{}
+	pong      pong // For test
+	fail      fail // For test
+	cancelled bool
 }
 
 func NewPongHandler() *PongHandler {
@@ -41,6 +48,7 @@ func NewPongHandler() *PongHandler {
 		done:    make(chan struct{}, 1),
 	}
 	handler.pong = sendPong
+	handler.fail = setFailure
 	return handler
 }
 
@@ -48,13 +56,13 @@ func (p *PongHandler) Issue(retry bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	retries := 0
+	attempts := 0
 	if retry {
-		retries = DefaultRetry
+		attempts = DefaultAttempts
 	}
 	select {
-	case p.limiter <- retries:
-		p.canceled = false
+	case p.limiter <- attempts:
+		p.cancelled = false
 		return true
 	default:
 		// if limiter is full, move on
@@ -62,33 +70,38 @@ func (p *PongHandler) Issue(retry bool) bool {
 	}
 }
 
+// Send Send ack(pong) on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
+func (p *PongHandler) Send() error {
+	return p.sendImpl(protocol.PONG_FOR_CTRL, nil, false)
+}
+
+// Send Send ack(pong) with flags on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
 func (p *PongHandler) SendWithFlags(ctx context.Context, flags int64) error {
 	if ctx != nil {
 		ready := ctx.Value(&ContextKeyReady)
 		if ready != nil {
-			pongLog(flags, false)
+			pongLog(flags, nil)
 			ready.(chan struct{}) <- struct{}{}
 			return nil
 		}
 	}
-	return p.sendImpl(flags, nil)
+	return p.sendImpl(flags, nil, false)
 }
 
-func (p *PongHandler) Send() error {
-	return p.sendImpl(0, nil)
+// Send Send heartbeat on specified link.
+func (p *PongHandler) SendToLink(link *worker.Link, flags int64) error {
+	// if link.IsControl() {
+	// 	return p.sendImpl(protocol.PONG_FOR_CTRL, link, false)
+	// } else {
+	// 	return p.sendImpl(protocol.PONG_FOR_DATA, link, false)
+	// }
+	return p.sendImpl(flags, link, false)
 }
 
-func (p *PongHandler) SendToLink(link *worker.Link) error {
-	if link.IsControl() {
-		return p.sendImpl(protocol.PONG_FOR_CTRL, link)
-	} else {
-		return p.sendImpl(protocol.PONG_FOR_DATA, link)
-	}
-}
-
+// Cancel Flag expected request is received and cancel pong retrial.
 func (p *PongHandler) Cancel() {
 	p.mu.Lock()
-	p.canceled = true
+	p.cancelled = true
 	select {
 	case p.done <- struct{}{}:
 	default:
@@ -102,19 +115,20 @@ func (p *PongHandler) Cancel() {
 	p.mu.Unlock()
 }
 
+// IsCancelled If the expected request has been received and pong has benn cancelled.
 func (p *PongHandler) IsCancelled() bool {
-	return p.canceled
+	return p.cancelled
 }
 
-func (p *PongHandler) sendImpl(flags int64, link *worker.Link) error {
+func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	retry := 0
-	// No retry and multiple PONGs avoidance if the link is specified, which is triggered by the worker and will not duplicate.
+	attempts := 0
+	// No retrial and multi-PONGs avoidance if the link is specified, which is triggered by the worker and will not duplicate.
 	if link == nil {
 		select {
-		case retry = <-p.limiter:
+		case attempts = <-p.limiter:
 			// Quota avaiable or abort.
 		default:
 			return nil
@@ -126,30 +140,25 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link) error {
 		// Abandon
 		return nil
 	}
-	pongLog(flags, link != nil)
+	// Drain possible cancel signal
+	if !retrial {
+		select {
+		case <-p.done:
+		default:
+		}
+	}
+	pongLog(flags, link)
 	if err := p.pong(link, flags); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err
 	}
 
-	// To keep a ealier pong will always send first, occupy the limiter now.
-	if retry > 0 {
-		p.limiter <- retry - 1
+	if attempts > 0 {
+		// To keep a ealier pong will always send first, occupy the limiter now.
+		p.limiter <- attempts - 1
 
-		// Drain timer
-		if !p.timeout.Stop() {
-			select {
-			case <-p.timeout.C:
-			default:
-			}
-		}
-		p.timeout.Reset(DefaultPongTimeout)
-
-		// Drain done
-		select {
-		case <-p.done:
-		default:
-		}
+		// Set timeout
+		p.setTimeout(DefaultPongTimeout)
 
 		// Monitor and wait
 		go func() {
@@ -157,7 +166,22 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link) error {
 			case <-p.timeout.C:
 				// Timeout. retry
 				log.Warn("retry PONG")
-				p.sendImpl(flags, link)
+				p.sendImpl(flags, link, true)
+			case <-p.done:
+				return
+			}
+		}()
+	} else if link == nil {
+		// For ack/pong, link will be disconnected if no attempt left.
+		p.setTimeout(DefaultPongTimeout)
+
+		// Monitor and wait
+		go func() {
+			select {
+			case <-p.timeout.C:
+				// Timeout. retry
+				log.Warn("PONG timeout, disconnect")
+				p.fail(link, &PongError{error: errPongTimeout, flags: flags})
 			case <-p.done:
 				return
 			}
@@ -167,7 +191,18 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link) error {
 	return nil
 }
 
-func pongLog(flags int64, forLink bool) {
+func (p *PongHandler) setTimeout(timeout time.Duration) {
+	// Drain timer
+	if !p.timeout.Stop() {
+		select {
+		case <-p.timeout.C:
+		default:
+		}
+	}
+	p.timeout.Reset(timeout)
+}
+
+func pongLog(flags int64, link *worker.Link) {
 	var claim string
 	if flags > 0 {
 		// These two claims are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
@@ -176,8 +211,8 @@ func pongLog(flags int64, forLink bool) {
 		} else if flags&protocol.PONG_RECLAIMED > 0 {
 			claim = " with claiming the node has experienced reclaimation."
 		}
-	} else if forLink {
-		claim = " for link."
+	} else if link != nil {
+		claim = fmt.Sprintf(" for link: %v", link)
 	}
 	log.Debug("PONG%s", claim)
 }
@@ -197,4 +232,8 @@ func sendPong(link *worker.Link, flags int64) error {
 	}, link)
 	// return rsp.Flush()
 	return nil
+}
+
+func setFailure(link *worker.Link, err error) {
+	store.Server.SetFailure(link, err)
 }

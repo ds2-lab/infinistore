@@ -14,8 +14,6 @@ import (
 
 var (
 	RequestTimeout = 1 * time.Second
-
-	ctxKeyClient = struct{}{}
 )
 
 type Preparer func(*SimpleResponse, resp.ResponseWriter)

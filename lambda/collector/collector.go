@@ -3,11 +3,13 @@ package collector
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"io"
+	"os/exec"
+
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+
 	// "runtime"
 	// "runtime/pprof"
 	"strings"
@@ -23,19 +25,19 @@ const (
 )
 
 var (
-	S3Bucket       string
+	S3Bucket string
 
-	Prefix         string
-	HostName       string
-	FunctionName   string
-	Enables        int32 = COLLECT_PERSIST
-	Lifetime       *lifetime.Lifetime
-	Session        *lifetime.Session
+	Prefix       string
+	HostName     string
+	FunctionName string
+	Enables      int32 = COLLECT_PERSIST
+	Lifetime     *lifetime.Lifetime
+	Session      *lifetime.Session
 
-	dataGatherer                   = make(chan DataEntry, 10)
-	dataDepository                 = make([]DataEntry, 0, 100)
+	dataGatherer   = make(chan DataEntry, 10)
+	dataDepository = make([]DataEntry, 0, 100)
 	dataDeposited  sync.WaitGroup
-	log            logger.ILogger  = &logger.ColorLogger{ Prefix: "collector ", Level: logger.LOG_LEVEL_INFO }
+	log            logger.ILogger = &logger.ColorLogger{Prefix: "collector ", Level: logger.LOG_LEVEL_INFO}
 )
 
 func init() {
