@@ -3,7 +3,6 @@ package lambdastore
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	. "github.com/onsi/ginkgo"
@@ -20,26 +19,6 @@ func getTestID() int {
 	return int(atomic.AddInt32(&TestID, 1))
 }
 
-func shouldTimeout(test func(), expect bool) {
-	timer := time.NewTimer(time.Second)
-	timeout := false
-	responeded := make(chan struct{})
-	go func() {
-		test()
-		responeded <- struct{}{}
-	}()
-	select {
-	case <-timer.C:
-		timeout = true
-	case <-responeded:
-		if !timer.Stop() {
-			<-timer.C
-		}
-	}
-
-	Expect(timeout).Should(Equal(expect))
-}
-
 var _ = Describe("Connection", func() {
 	protocol.InitShortcut()
 
@@ -47,8 +26,9 @@ var _ = Describe("Connection", func() {
 		var done sync.WaitGroup
 		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), 2)
 
-		ctrlLink := NewConnection(shortcut.Conns[0].Server)
-		dataLink := NewConnection(shortcut.Conns[1].Server)
+		instance := NewInstance("test", 1)
+		ctrlLink := NewConnection(shortcut.Conns[0].Server).BindInstance(instance)
+		dataLink := NewConnection(shortcut.Conns[1].Server).BindInstance(instance)
 
 		done.Add(2)
 		go func() {
@@ -60,11 +40,12 @@ var _ = Describe("Connection", func() {
 			done.Done()
 		}()
 
-		added := ctrlLink.AddDataLink(dataLink)
+		instance.lm.SetControl(ctrlLink)
+		added := instance.lm.AddDataLink(dataLink)
 		Expect(added).To(BeTrue())
 
 		shouldTimeout(func() {
-			ctrlLink.Close()
+			instance.lm.Close()
 		}, false)
 
 		shouldTimeout(func() {

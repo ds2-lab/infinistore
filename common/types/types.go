@@ -1,17 +1,20 @@
 package types
 
+import "net"
+
 // InputEvent Input for the Lambda
 type InputEvent struct {
-	Sid     string `json:"sid"`    // Session id to ensure invoking once only.
-	Cmd     string `json:"cmd"`    // Invocation type, can be "ping", "warmup".
-	Id      uint64 `json:"id"`     // Node id
-	Proxy   string `json:"proxy"`  // Address of proxy .
-	Addr    string `json:"addr"`   // Address of P2P relay.
-	Prefix  string `json:"prefix"` // Experiment id reserved for evaluation.
-	Log     int    `json:"log"`    // Log level - debug or not.
-	Flags   uint64 `json:"flags"`  // Feature flags
-	Backups int    `json:"baks"`   // Number of configured recovery nodes
-	Status  Status `json:"status"` // Lineage info
+	Sid       string   `json:"sid"`   // Session id to ensure invoking once only.
+	Cmd       string   `json:"cmd"`   // Invocation type, can be "ping", "warmup".
+	Id        uint64   `json:"id"`    // Node id
+	Proxy     string   `json:"proxy"` // Address of proxy .
+	ProxyAddr net.Addr // Address of proxy, for simulation.
+	Addr      string   `json:"addr"`   // Address of P2P relay.
+	Prefix    string   `json:"prefix"` // Experiment id reserved for evaluation.
+	Log       int      `json:"log"`    // Log level - debug or not.
+	Flags     uint64   `json:"flags"`  // Feature flags
+	Backups   int      `json:"baks"`   // Number of configured recovery nodes
+	Status    Status   `json:"status"` // Lineage info
 }
 
 func (i *InputEvent) IsReplicaEnabled() bool {

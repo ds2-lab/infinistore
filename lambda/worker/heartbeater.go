@@ -9,12 +9,16 @@ var (
 )
 
 type Heartbeater interface {
-	SendToLink(*Link) error
+	SendToLink(*Link, int64) error
 }
 
 type DefaultHeartbeater struct {
 }
 
-func (hb *DefaultHeartbeater) SendToLink(link *Link) error {
+func (hb *DefaultHeartbeater) SendToLink(link *Link, flags int64) error {
 	return nil
+}
+
+type HeartbeatError interface {
+	Flags() int64
 }

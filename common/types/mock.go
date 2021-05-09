@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/zhangjyr/hashmap"
 	mock "github.com/jordwest/mock-conn"
+	"github.com/zhangjyr/hashmap"
 )
 
 var (
@@ -37,8 +37,7 @@ func (s *shortcut) Prepare(addr string, id int, n int) *ShortcutConn {
 	address := fmt.Sprintf(shortcutAddress, id, addr)
 	conn, existed := s.ports.Get(address) // For specified id, GetOrInsert is not necessary.
 	if !existed {
-		newConn := NewShortcutConn(n)
-		newConn.Address = address
+		newConn := NewShortcutConn(address, n)
 		s.ports.Set(address, newConn)
 		return newConn
 	} else {
@@ -64,7 +63,7 @@ func (s *shortcut) GetConn(address string) (*ShortcutConn, bool) {
 	}
 }
 
-func (s *shortcut) Dial(address string) ([]*mock.Conn, bool) {
+func (s *shortcut) Dial(address string) ([]*MockConn, bool) {
 	conn, existed := s.ports.Get(address)
 	if !existed {
 		return nil, false
@@ -77,16 +76,32 @@ func (s *shortcut) Invalidate(conn *ShortcutConn) {
 	s.ports.Del(conn.Address)
 }
 
+type MockConn struct {
+	*mock.Conn
+	name string
+}
+
+func NewMockConn(addr string, idx int) *MockConn {
+	return &MockConn{
+		Conn: mock.NewConn(),
+		name: fmt.Sprintf("%s[%d]", addr, idx),
+	}
+}
+
+func (c *MockConn) String() string {
+	return c.name
+}
+
 type ShortcutConn struct {
-	Conns   []*mock.Conn
+	Conns   []*MockConn
 	Client  interface{}
 	Address string
 }
 
-func NewShortcutConn(n int) *ShortcutConn {
-	conn := &ShortcutConn{Conns: make([]*mock.Conn, n)}
+func NewShortcutConn(addr string, n int) *ShortcutConn {
+	conn := &ShortcutConn{Conns: make([]*MockConn, n), Address: addr}
 	for i := 0; i < n; i++ {
-		conn.Conns[i] = mock.NewConn()
+		conn.Conns[i] = NewMockConn(conn.Address, i)
 	}
 	return conn
 }
@@ -103,7 +118,7 @@ func (cn *ShortcutConn) Close(idxes ...int) {
 	}
 }
 
-func (cn *ShortcutConn) close(i int, conn *mock.Conn) {
+func (cn *ShortcutConn) close(i int, conn *MockConn) {
 	conn.Close()
 	cn.Conns[i] = nil
 }
@@ -121,8 +136,8 @@ func (cn *ShortcutConn) Validate(idxes ...int) *ShortcutConn {
 	return cn
 }
 
-func (cn *ShortcutConn) validate(i int, conn *mock.Conn) {
+func (cn *ShortcutConn) validate(i int, conn *MockConn) {
 	if conn == nil {
-		cn.Conns[i] = mock.NewConn()
+		cn.Conns[i] = NewMockConn(cn.Address, i)
 	}
 }

@@ -157,8 +157,7 @@ type Instance struct {
 	lambdaCanceller context.CancelFunc
 
 	// Connection management
-	ctrlLink *Connection
-	dataLink *Connection
+	lm       *LinkManager
 	sessions *hashmap.HashMap
 
 	// Backup fields
@@ -179,7 +178,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		Color:  !global.Options.NoColor,
 	}
 
-	return &Instance{
+	ins := &Instance{
 		Deployment: dp,
 		Meta: Meta{
 			Term:     1,
@@ -197,6 +196,8 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
 	}
+	ins.lm = NewLinkManager(ins)
+	return ins
 }
 
 // create new lambda instance
@@ -560,16 +561,6 @@ func (ins *Instance) IsReclaimed() bool {
 	return atomic.LoadUint32(&ins.phase) >= PHASE_RECLAIMED
 }
 
-func (ins *Instance) MatchDataLink(ctrl *Connection) {
-	if ins.dataLink != nil && ctrl.AddDataLink(ins.dataLink) {
-		ins.dataLink = nil
-	}
-}
-
-func (ins *Instance) CacheDataLink(link *Connection) {
-	ins.dataLink = link
-}
-
 func (ins *Instance) Close() {
 	if ins.IsClosed() {
 		return
@@ -596,14 +587,7 @@ func (ins *Instance) closeLocked() {
 	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
 	// Close all links
 	// TODO: Due to reconnection from lambda side, we may just leave links to be closed by the lambda.
-	if ins.ctrlLink != nil {
-		ins.ctrlLink.Close()
-		ins.ctrlLink = nil
-	}
-	if ins.dataLink != nil {
-		ins.dataLink.Close()
-		ins.dataLink = nil
-	}
+	ins.lm.Close()
 	atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 	ins.flagValidatedLocked(nil, ErrInstanceClosed)
 	ins.log.Info("[%v]Closed", ins)
@@ -692,12 +676,12 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 				connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
 			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 				// Instance is warm, skip unnecssary warming up.
-				return ins.flagValidatedLocked(ins.ctrlLink) // Skip any check in the "FlagValidated".
+				return ins.flagValidatedLocked(ins.lm.GetControl()) // Skip any check in the "FlagValidated".
 			} else {
 				// If instance is active, PING is issued to ensure active
 				// Closed safe: On closing, ctrlLink will be nil. By keeping a local copy and checking it is not nil, it is safe to make PING request.
 				//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
-				ctrl := ins.ctrlLink // Make a reference copy of ctrlLink to avoid it being changed.
+				ctrl := ins.lm.GetControl() // Make a reference copy of ctrlLink to avoid it being changed.
 				if ctrl != nil {
 					if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
 						ins.log.Debug("Ping with payload")
@@ -895,16 +879,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 
 	ins.endSession(event.Sid)
 
-	// Don't reset links here, fronzen but not dead.
-	// Added by Tianium: Since lambda is stopped, clear any pending responses.
-	ctrlLink := ins.ctrlLink
-	if ctrlLink != nil {
-		ctrlLink.ClearResponses()
-		dataLink := ctrlLink.GetDataLink()
-		if dataLink != nil {
-			dataLink.ClearResponses()
-		}
-	}
+	// Added by Tianium: Since lambda is stopped, do some cleanup
+	ins.lm.Reset()
 
 	if err != nil {
 		ins.Meta.Stale = false
@@ -1012,25 +988,18 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 
 	// Acknowledge data links
 	if !conn.control {
-		// Datalinks can come earlier than ctrl link.
-		// Keeping using the newly connectioned datalinks, and we are safe, or just wait it timeout and try to get a new one.
-		conn.BindInstance(ins)
-		// Connect to corresponding ctrl link
-		if ins.ctrlLink == nil || !ins.ctrlLink.AddDataLink(conn) {
-			ins.CacheDataLink(conn)
-		}
+		ins.lm.AddDataLink(conn)
 		return conn, ErrNotCtrlLink
 	}
 
 	ins.log.Debug("[%v]Confirming validation...", ins)
 	ins.flagWarmed()
-	if ins.ctrlLink != conn {
-		// Check possible duplicated session
-		newSession := ins.startSession(sid)
-
-		// If session is duplicated and no anomaly in flags, it is safe to switch regardless potential lambda change.
-		if !newSession && flags != protocol.PONG_FOR_CTRL {
-			// Deny session
+	// Check possible duplicated session
+	newSession := ins.startSession(sid)
+	oldCtrl := ins.lm.GetControl()
+	if conn != oldCtrl {
+		if !newSession && !conn.IsSameWorker(oldCtrl) {
+			// Deny session if session is duplicated and from another worker
 			return conn, ErrDuplicatedSession
 		} else if newSession {
 			ins.log.Debug("Session %s started.", sid)
@@ -1038,21 +1007,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 			ins.log.Debug("Session %s resumed.", sid)
 		}
 
-		oldConn := ins.ctrlLink
-
-		// Set instance, order matters here.
-		conn.BindInstance(ins)
-		ins.ctrlLink = conn
-
-		if oldConn != nil {
-			// Inherit the data link so it will not be closed because of ctrl link reconnected.
-			dl := oldConn.GetDataLink()
-			if dl != nil && conn.AddDataLink(dl) {
-				// Worker matches and added
-				oldConn.RemoveDataLink(dl)
-			}
-			oldConn.Close()
-		}
+		ins.lm.SetControl(conn)
 
 		// There are three cases for link switch:
 		// 1. Old node get reclaimed
@@ -1063,33 +1018,33 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		// atomic.StoreUint32(&ins.awakeness, INSTANCE_MAYBE)
 		ins.log.Debug("[%v]Control link updated.", ins)
 	} else {
-		// New session for saved connection, simply call startSession and update status.
-		ins.startSession(sid)
+		// Simply try update status.
 		atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_ACTIVATING, INSTANCE_ACTIVE)
 	}
-	// Connect to possible data link.
-	ins.MatchDataLink(conn)
 
-	// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
-	if flags&protocol.PONG_RECOVERY > 0 {
-		ins.log.Debug("Parallel recovery requested.")
-		ins.startRecoveryLocked()
-	} else if (flags&protocol.PONG_ON_INVOKING > 0) && ins.IsRecovering() {
-		// If flags indicate it is from function invokcation without recovery request, the service is resumed but somehow we missed it.
-		ins.resumeServingLocked()
-		ins.log.Info("Function invoked without data loss, assuming parallel recovered and service resumed.")
-	}
+	// Skip actions if we've seen it.
+	if !newSession {
+		// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
+		if flags&protocol.PONG_RECOVERY > 0 {
+			ins.log.Debug("Parallel recovery requested.")
+			ins.startRecoveryLocked()
+		} else if (flags&protocol.PONG_ON_INVOKING > 0) && ins.IsRecovering() {
+			// If flags indicate it is from function invocation without recovery request, the service is resumed but somehow we missed it.
+			ins.resumeServingLocked()
+			ins.log.Info("Function invoked without data loss, assuming parallel recovered and service resumed.")
+		}
 
-	if flags&protocol.PONG_RECLAIMED > 0 {
-		// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
-		atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
-		// We can close the instance if it is not backing any instance.
-		if !ins.IsBacking(true) {
-			ins.log.Info("Reclaimed")
-			ins.closeLocked()
-			return conn, nil
-		} else {
-			ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
+		if flags&protocol.PONG_RECLAIMED > 0 {
+			// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
+			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
+			// We can close the instance if it is not backing any instance.
+			if !ins.IsBacking(true) {
+				ins.log.Info("Reclaimed")
+				ins.closeLocked()
+				return conn, nil
+			} else {
+				ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
+			}
 		}
 	}
 
@@ -1133,7 +1088,7 @@ func (ins *Instance) bye(conn *Connection) {
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	if ins.ctrlLink != conn {
+	if ins.lm.GetControl() != conn {
 		// We don't care any rogue bye
 		return
 	}
@@ -1148,22 +1103,11 @@ func (ins *Instance) bye(conn *Connection) {
 
 // FlagClosed Notify instance that a connection is closed.
 func (ins *Instance) FlagClosed(conn *Connection) {
-	// We care control link only.
-	if ins.ctrlLink != conn {
-		return
+	if conn.control {
+		ins.lm.InvalidateControl(conn) // Only current control affected.
+	} else {
+		ins.lm.RemoveDataLink(conn)
 	}
-
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
-
-	// Double check in the mutex block.
-	if ins.ctrlLink != conn {
-		return
-	}
-
-	// For now, all we can do is setting control link to nil to avoid it being used.
-	// If node is active, it will be reconnected later.
-	ins.ctrlLink = nil
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
@@ -1285,40 +1229,19 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		collector.CollectRequest(collector.LogValidate, req.CollectorEntry, int64(validateDuration))
 
 		// Select link
-		link := ctrlLink
-		if req.Size() > MaxControlRequestSize {
-			link = ctrlLink.GetDataLink()
-			// Fallback to ctrlLink if dataLink is not ready.
-			if link == nil {
-				link = ctrlLink
-			}
-		}
+		useDataLink := req.Size() > MaxControlRequestSize // Changes: will fallback to ctrl link.
 
+		// Record write operations
 		switch cmdName {
-		case protocol.CMD_SET: /*set or two argument cmd*/
-			req.PrepareForSet(link)
-			// If parallel recovery is triggered, record keys set during recovery.
-			if ins.IsRecovering() {
-				ins.log.Debug("Override rerouting for key %s due to set", req.Key)
-				ins.writtens.Set(req.Key, &struct{}{})
-			}
-		case protocol.CMD_GET: /*get or one argument cmd*/
-			// If parallel recovery is triggered, there is no need to forward the serving key.
-			req.PrepareForGet(link)
+		case protocol.CMD_SET:
+			fallthrough
 		case protocol.CMD_DEL:
-			req.PrepareForDel(link)
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to del", req.Key)
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
-		case protocol.CMD_RECOVER:
-			req.PrepareForRecover(link)
-		default:
-			req.SetResponse(fmt.Errorf("unexpected request command: %s", cmd))
-			// Unrecoverable
-			return nil
 		}
-		return link.SendRequest(req)
+		return ctrlLink.SendRequest(req, useDataLink)
 
 	case *types.Control:
 		isDataRequest := false
@@ -1328,22 +1251,12 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 			// Simply ignore.
 			return nil
 		case protocol.CMD_DATA:
-			req.PrepareForData(ctrlLink)
 			isDataRequest = true
-		case protocol.CMD_MIGRATE:
-			req.PrepareForMigrate(ctrlLink)
 		case protocol.CMD_DEL:
-			req.PrepareForDel(ctrlLink)
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to del", req.Request.Key)
 				ins.writtens.Set(req.Request.Key, &struct{}{})
 			}
-		case protocol.CMD_RECOVER:
-			req.PrepareForRecover(ctrlLink)
-		default:
-			ins.log.Error("Unexpected control command: %s", cmd)
-			// Unrecoverable
-			return nil
 		}
 
 		if err := ctrlLink.SendControl(req); err != nil && isDataRequest {

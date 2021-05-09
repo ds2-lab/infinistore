@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/mason-leap-lab/redeo"
 )
@@ -12,6 +13,7 @@ import (
 const (
 	LinkUninitialized = 0
 	LinkInitialized   = 1
+	LinkClosed        = 2
 )
 
 var (
@@ -20,12 +22,15 @@ var (
 
 // Wrapper for redeo client that support response buffering if connection is unavailable
 type Link struct {
-	id int
 	*redeo.Client
-	ctrl bool
-	buff chan interface{}
-	mu   sync.RWMutex
-	once int32
+	id        int
+	addr      string
+	ctrl      bool
+	buff      chan interface{}
+	lastError error
+	mu        sync.RWMutex
+	once      int32
+	token     *struct{}
 }
 
 func LinkFromClient(client *redeo.Client) *Link {
@@ -48,11 +53,16 @@ func NewLink(ctrl bool) *Link {
 }
 
 func (ln *Link) Initialize() bool {
+	atomic.CompareAndSwapInt32(&ln.once, LinkClosed, LinkUninitialized)
 	return atomic.CompareAndSwapInt32(&ln.once, LinkUninitialized, LinkInitialized)
 }
 
 func (ln *Link) ID() int {
 	return ln.id
+}
+
+func (ln *Link) String() string {
+	return ln.addr
 }
 
 func (ln *Link) IsControl() bool {
@@ -68,8 +78,9 @@ func (ln *Link) Reset(conn net.Conn) {
 		return
 	}
 
+	atomic.StoreInt32(&ln.once, LinkInitialized)
+	ln.lastError = nil
 	ln.Client = redeo.NewClient(conn)
-	ln.Client.SetContext(context.WithValue(ln.Client.Context(), ctxKeyLink, ln))
 	ln.Client.SetContext(context.WithValue(ln.Client.Context(), ctxKeyLink, ln))
 	// Move cached responses
 	if len(ln.buff) > 0 {
@@ -82,7 +93,7 @@ func (ln *Link) AddResponses(rsp interface{}) error {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	if atomic.LoadInt32(&ln.once) == LinkUninitialized {
+	if atomic.LoadInt32(&ln.once) == LinkClosed {
 		rsp.(Response).abandon(ErrWorkerClosed)
 		return ErrWorkerClosed
 	} else if ln.Client == nil {
@@ -93,10 +104,47 @@ func (ln *Link) AddResponses(rsp interface{}) error {
 	return nil
 }
 
+func (ln *Link) GrantToken(token *struct{}) {
+	ln.token = token
+}
+
+func (ln *Link) RevokeToken() *struct{} {
+	token := ln.token
+	if token == nil {
+		return nil
+	} else if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&ln.token)), unsafe.Pointer(token), unsafe.Pointer(nil)) {
+		return token
+	} else {
+		return nil
+	}
+}
+
+func (ln *Link) Invalidate(err error) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.close()
+	ln.lastError = err
+}
+
 func (ln *Link) Close() {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
+	ln.close()
+	// Drain responses
+	if len(ln.buff) > 0 {
+		for rsp := range ln.buff {
+			rsp.(Response).abandon(ErrWorkerClosed)
+			if len(ln.buff) == 0 {
+				break
+			}
+		}
+	}
+	atomic.StoreInt32(&ln.once, LinkClosed)
+}
+
+func (ln *Link) close() {
 	if ln.Client != nil {
 		conn := ln.Client.Conn()
 		// Don't use conn.Close(), it will stuck and wait.
@@ -107,16 +155,6 @@ func (ln *Link) Close() {
 		ln.Client.Close()
 		ln.Client = nil
 	}
-	// Drain responses
-	if len(ln.buff) > 0 {
-		for rsp := range ln.buff {
-			rsp.(Response).abandon(ErrWorkerClosed)
-			if len(ln.buff) == 0 {
-				break
-			}
-		}
-	}
-	atomic.StoreInt32(&ln.once, LinkUninitialized)
 }
 
 func (ln *Link) migrate() {

@@ -28,3 +28,12 @@ func NewResponseError(status int, msg interface{}, args ...interface{}) *Respons
 func (e *ResponseError) Status() string {
 	return strconv.Itoa(e.StatusCode)
 }
+
+type PongError struct {
+	error
+	flags int64
+}
+
+func (e *PongError) Flags() int64 {
+	return e.flags
+}

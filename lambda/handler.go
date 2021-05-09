@@ -11,8 +11,6 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
 	//	"github.com/wangaoone/s3gof3r"
@@ -23,11 +21,10 @@ import (
 	"runtime"
 
 	// "runtime/pprof"
-	"strconv"
+
 	"sync"
 	"time"
 
-	mock "github.com/jordwest/mock-conn"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/handlers"
@@ -43,8 +40,7 @@ var (
 	ExpectedGOMAXPROCS = 2
 	DefaultStatus      = protocol.Status{}
 
-	log  = Log
-	pong = handlers.NewPongHandler()
+	log = Log
 )
 
 func init() {
@@ -61,7 +57,7 @@ func init() {
 
 	Lifetime = lambdaLife.New(LIFESPAN)
 	Server = worker.NewWorker(Lifetime.Id())
-	Server.SetHeartbeater(pong)
+	Server.SetHeartbeater(handlers.Pong)
 
 	collector.S3Bucket = S3_COLLECTOR_BUCKET
 	collector.Lifetime = Lifetime
@@ -116,7 +112,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	collector.Session = session
 
 	// Ensure pong will only be issued once on invocation
-	pong.Issue(input.Cmd == protocol.CMD_PING)
+	handlers.Pong.Issue(input.Cmd == protocol.CMD_PING)
 	// Setup of the session is done.
 	session.Setup.Done()
 
@@ -136,7 +132,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	Server.SetManualAck(true)
 
 	// Check connection
-	if started, err := Server.StartOrResume(input.Proxy, &worker.WorkerOptions{DryRun: DRY_RUN}); err != nil {
+	proxyAddr := input.ProxyAddr
+	if proxyAddr == nil {
+		proxyAddr = protocol.StrAddr(input.Proxy)
+	}
+	if started, err := Server.StartOrResume(proxyAddr, &worker.WorkerOptions{DryRun: DRY_RUN}); err != nil {
 		return DefaultStatus, err
 	} else if started {
 		Lifetime.Reborn()
@@ -157,7 +157,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
-		pong.SendWithFlags(ctx, flags)
+		handlers.Pong.SendWithFlags(ctx, flags)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
@@ -194,7 +194,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// PONG represents the node is ready to serve, no fast recovery required.
-			pong.SendWithFlags(ctx, flags)
+			handlers.Pong.SendWithFlags(ctx, flags)
 		} else {
 			session.Timeout.Busy("recover")
 			recoverErrs = make([]chan error, 0, inconsistency)
@@ -206,10 +206,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				if fast {
 					flags |= protocol.PONG_RECOVERY
 				}
-				pong.SendWithFlags(ctx, flags)
+				handlers.Pong.SendWithFlags(ctx, flags)
 				recoverErrs = append(recoverErrs, chanErr)
 			} else {
-				pong.SendWithFlags(ctx, flags)
+				handlers.Pong.SendWithFlags(ctx, flags)
 			}
 
 			// Recovery backup
@@ -229,6 +229,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	Server.SetManualAck(false)
 
+	if input.Cmd == protocol.CMD_WARMUP {
+		handlers.Pong.Cancel() // No timeout will be reported.
+	}
+
 	// Wait until recovered to avoid timeout on recovery.
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
@@ -246,6 +250,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// Adaptive timeout control
 	meta := wait(session, Lifetime).ProtocolStatus()
+	Server.Pause()
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
@@ -340,6 +345,77 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 	return
 }
 
+func pingHandler(w resp.ResponseWriter, c *resp.Command) {
+	// Drain payload anyway.
+	payload := c.Arg(0).Bytes()
+
+	session := lambdaLife.GetSession()
+	if session == nil {
+		// Possibilities are ping may comes after HandleRequest returned or before session started.
+		log.Debug("PING ignored: session ended.")
+		return
+	} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND, c.Name) && !session.IsMigrating() {
+		// Failed to extend timeout, do nothing and prepare to return from lambda.
+		log.Debug("PING ignored: timeout extension denied.")
+		return
+	}
+
+	// Ensure the session is setup.
+	session.Setup.Wait()
+	if grant := handlers.Pong.Issue(true); !grant {
+		// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
+		// which means this PING is a legacy from last invocation.
+		log.Debug("PING ignored: request to issue a PONG is denied.")
+		return
+	}
+
+	log.Debug("PING")
+	handlers.Pong.SendWithFlags(c.Context(), protocol.PONG_FOR_CTRL)
+
+	// Deal with payload
+	if len(payload) > 0 {
+		session.Timeout.Busy(c.Name)
+		skip := true
+
+		var pmeta protocol.Meta
+		if err := binary.Unmarshal(payload, &pmeta); err != nil {
+			log.Warn("Error on parse payload of the ping: %v", err)
+		} else if Lineage == nil {
+			log.Warn("Recovery is requested but lineage is not available.")
+		} else {
+			log.Debug("PING meta: %v", pmeta)
+
+			// For now, only backup request supported.
+			meta, err := types.LineageMetaFromProtocol(&pmeta)
+			if err != nil {
+				log.Warn("Error on get meta: %v", err)
+			}
+
+			consistent, err := Lineage.IsConsistent(meta)
+			if err != nil {
+				log.Warn("Error on check consistency: %v", err)
+			}
+
+			if !consistent {
+				skip = false
+				_, chanErr := Lineage.Recover(meta)
+				session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
+				go func() {
+					waitForRecovery(chanErr)
+					session.Timeout.DoneBusy(c.Name)
+				}()
+			} else {
+				log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
+			}
+		}
+
+		if skip {
+			// No more request expected for a ping with payload (backup ping).
+			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, c.Name)
+		}
+	}
+}
+
 func recoveredHandler(ctx context.Context) error {
 	log.Debug("Sending recovered notification.")
 	rsp, _ := Server.AddResponsesWithPreparer(protocol.CMD_RECOVERED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
@@ -412,617 +488,15 @@ func byeHandler() error {
 
 func main() {
 	// Define handlers
-	Server.HandleFunc(protocol.CMD_TEST, func(w resp.ResponseWriter, c *resp.Command) {
-		client := redeo.GetClient(c.Context())
-
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Busy(c.Name)
-		extension := lambdaLife.TICK_ERROR
-		if session.Requests > 1 {
-			extension = lambdaLife.TICK
-		}
-		defer session.Timeout.DoneBusyWithReset(extension, c.Name)
-
-		log.Debug("In Test handler")
-
-		rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-			w.AppendBulkString(rsp.Cmd)
-		}, client)
-		if err := rsp.Flush(); err != nil {
-			log.Error("Error on test::flush: %v", err)
-		}
-	})
-
-	Server.HandleFunc(protocol.CMD_GET, func(w resp.ResponseWriter, c *resp.Command) {
-		client := redeo.GetClient(c.Context())
-
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Busy(c.Name)
-		session.Requests++
-		extension := lambdaLife.TICK_ERROR
-		if session.Requests > 1 {
-			extension = lambdaLife.TICK
-		}
-		defer session.Timeout.DoneBusyWithReset(extension, c.Name)
-
-		t := time.Now()
-		log.Debug("In GET handler(link:%d)", worker.LinkFromClient(client).ID())
-
-		reqId := c.Arg(0).String()
-		// Skip: chunkId := c.Arg(1).String()
-		key := c.Arg(2).String()
-
-		var recovered int64
-		chunkId, stream, ret := Store.GetStream(key)
-		// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
-		if ret.Error() == types.ErrNotFound && Persist != nil {
-			if Lineage != nil {
-				log.Warn("Key not found while recovery is enabled: %v", key)
-			}
-			errRsp := &worker.ErrorResponse{}
-			chunkId = c.Arg(1).String()
-			sizeArg := c.Arg(3)
-			if sizeArg == nil {
-				errRsp.Error = errors.New("size must be set for trying recovery from persistent layer")
-				Server.AddResponses(errRsp, client)
-				if err := errRsp.Flush(); err != nil {
-					log.Error("Error on flush(error 500): %v", err)
-				}
-				return
-			}
-			size, szErr := sizeArg.Int()
-			if szErr != nil {
-				errRsp.Error = szErr
-				Server.AddResponses(errRsp, client)
-				if err := errRsp.Flush(); err != nil {
-					log.Error("Error on flush(error 500): %v", err)
-				}
-				return
-			}
-			ret = Persist.SetRecovery(key, chunkId, uint64(size))
-			if ret.Error() != nil {
-				errRsp.Error = ret.Error()
-				Server.AddResponses(errRsp, client)
-				if err := errRsp.Flush(); err != nil {
-					log.Error("Error on flush(error 500): %v", err)
-				}
-				return
-			}
-			recovered = 1
-
-			// Retry
-			chunkId, stream, ret = Store.GetStream(key)
-		}
-		if stream != nil {
-			defer stream.Close()
-		}
-		d1 := time.Since(t)
-
-		if ret.Error() == nil {
-			// construct lambda store response
-			response := &worker.ObjectResponse{
-				Cmd:        c.Name,
-				ReqId:      reqId,
-				ChunkId:    chunkId,
-				BodyStream: stream,
-				Recovered:  recovered,
-			}
-
-			t2 := time.Now()
-			Server.AddResponses(response, client)
-			if err := response.Flush(); err != nil {
-				log.Error("Error on flush(get key %s): %v", key, err)
-				return
-			}
-			d2 := time.Since(t2)
-
-			dt := time.Since(t)
-			log.Debug("Get key:%s, chunk:%s, duration:%v, transmission:%v", key, chunkId, dt, d1)
-			collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
-		} else {
-			var respError *handlers.ResponseError
-			if ret.Error() == types.ErrNotFound {
-				// Not found
-				respError = handlers.NewResponseError(404, "Key not found %s: %v", key, ret.Error())
-			} else {
-				respError = handlers.NewResponseError(500, "Failed to get %s: %v", key, ret.Error())
-			}
-			errResponse := &worker.ErrorResponse{Error: respError}
-			Server.AddResponses(errResponse, client)
-			if err := errResponse.Flush(); err != nil {
-				log.Error("Error on flush: %v", err)
-			}
-			collector.AddRequest(t, types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
-		}
-	})
-
-	Server.HandleStreamFunc(protocol.CMD_SET, func(w resp.ResponseWriter, c *resp.CommandStream) {
-		client := redeo.GetClient(c.Context())
-
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Busy(c.Name)
-		session.Requests++
-		extension := lambdaLife.TICK_ERROR
-		if session.Requests > 1 {
-			extension = lambdaLife.TICK
-		}
-
-		t := time.Now()
-		log.Debug("In SET handler(link:%d)", worker.LinkFromClient(client).ID())
-
-		var reqId, chunkId string
-		var finalize func(*types.OpRet, bool, ...time.Duration)
-		cmd := c.Name
-		finalize = func(ret *types.OpRet, wait bool, ds ...time.Duration) {
-			if ret == nil || !ret.IsDelayed() {
-				// Only if error
-				collector.AddRequest(t, types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
-			} else if wait {
-				ret.Wait()
-				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
-			} else {
-				go finalize(ret, true, ds...)
-				return
-			}
-			session.Timeout.DoneBusyWithReset(extension, cmd)
-		}
-
-		errRsp := &worker.ErrorResponse{}
-		reqId, _ = c.NextArg().String()
-		chunkId, _ = c.NextArg().String()
-		key, _ := c.NextArg().String()
-		valReader, err := c.Next()
-		if err != nil {
-			errRsp.Error = handlers.NewResponseError(500, "Error on get value reader: %v", err)
-			Server.AddResponses(errRsp, client)
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-			}
-			finalize(nil, false)
-			return
-		}
-
-		// Streaming set.
-		client.Conn().SetReadDeadline(lambdaLife.GetStreamingDeadline(valReader.Len()))
-		ret := Store.SetStream(key, chunkId, valReader)
-		client.Conn().SetReadDeadline(time.Time{})
-		d1 := time.Since(t)
-		err = ret.Error()
-		if err != nil {
-			errRsp.Error = err
-			log.Error("%v", err)
-			Server.AddResponses(errRsp, client)
-
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-				// Ignore, network error will be handled by redeo.
-			}
-			// If the setstream err is net error (timeout), cut the line.
-			if util.IsConnectionFailed(err) {
-				client.Conn().Close()
-			}
-
-			finalize(ret, false)
-			return
-		}
-
-		// write Key, clientId, chunkId, body back to proxy
-		response := &worker.ObjectResponse{
-			Cmd:     c.Name,
-			ReqId:   reqId,
-			ChunkId: chunkId,
-		}
-
-		t2 := time.Now()
-		Server.AddResponses(response, client)
-		if err := response.Flush(); err != nil {
-			log.Error("Error on set::flush(set key %s): %v", key, err)
-			// Ignore
-		}
-		d2 := time.Since(t2)
-
-		dt := time.Since(t)
-		log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
-		finalize(ret, false, d1, d2, dt)
-	})
-
-	Server.HandleFunc(protocol.CMD_RECOVER, func(w resp.ResponseWriter, c *resp.Command) {
-		client := redeo.GetClient(c.Context())
-
-		session := lambdaLife.GetSession()
-		session.Timeout.Busy(c.Name)
-		session.Requests++
-		extension := lambdaLife.TICK_ERROR
-		if session.Requests > 1 {
-			extension = lambdaLife.TICK
-		}
-		var ret *types.OpRet
-		cmd := c.Name
-		defer func() {
-			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension, cmd)
-			} else {
-				go func() {
-					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension, cmd)
-				}()
-			}
-		}()
-
-		t := time.Now()
-		log.Debug("In RECOVER handler(link:%d)", worker.LinkFromClient(client).ID())
-
-		errRsp := &worker.ErrorResponse{}
-		reqId := c.Arg(0).String()
-		chunkId := c.Arg(1).String()
-		key := c.Arg(2).String()
-		retCmd := c.Arg(3).String()
-		sizeArg := c.Arg(4)
-		if sizeArg == nil {
-			errRsp.Error = errors.New("size must be set")
-			Server.AddResponses(errRsp, client)
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-			}
-			return
-		}
-
-		size, szErr := sizeArg.Int()
-		if szErr != nil {
-			errRsp.Error = szErr
-			Server.AddResponses(errRsp, client)
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-			}
-			return
-		}
-
-		if Persist == nil {
-			errRsp.Error = errors.New("recover is not supported")
-			Server.AddResponses(errRsp, client)
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-			}
-			return
-		}
-
-		// Recover.
-		ret = Persist.SetRecovery(key, chunkId, uint64(size))
-		if ret.Error() != nil {
-			errRsp.Error = ret.Error()
-			Server.AddResponses(errRsp, client)
-			if err := errRsp.Flush(); err != nil {
-				log.Error("Error on flush(error 500): %v", err)
-			}
-			return
-		}
-
-		log.Debug("Success to recover from persistent store, Key:%s, ChunkID: %s", key, chunkId)
-
-		// Immediate get, unlikely to error, don't overwrite ret.
-		var stream resp.AllReadCloser
-		if retCmd == protocol.CMD_GET {
-			_, stream, _ = Store.GetStream(key)
-			if stream != nil {
-				defer stream.Close()
-			}
-		}
-		d1 := time.Since(t)
-
-		// write Key, clientId, chunkId, body back to proxy
-		response := &worker.ObjectResponse{
-			Cmd:        retCmd,
-			ReqId:      reqId,
-			ChunkId:    chunkId,
-			BodyStream: stream,
-			Recovered:  1,
-		}
-
-		t2 := time.Now()
-		Server.AddResponses(response, client)
-		if err := response.Flush(); err != nil {
-			log.Error("Error on recover::flush(recover key %s): %v", key, err)
-			// Ignore
-		}
-		d2 := time.Since(t2)
-
-		dt := time.Since(t)
-		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
-		if retCmd == protocol.CMD_GET {
-			collector.AddRequest(t, types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
-		}
-	})
-
-	Server.HandleFunc(protocol.CMD_DEL, func(w resp.ResponseWriter, c *resp.Command) {
-		client := redeo.GetClient(c.Context())
-
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Busy(c.Name)
-		session.Requests++
-		extension := lambdaLife.TICK_ERROR
-		if session.Requests > 1 {
-			extension = lambdaLife.TICK
-		}
-		var ret *types.OpRet
-		defer func() {
-			if ret == nil || !ret.IsDelayed() {
-				session.Timeout.DoneBusyWithReset(extension, c.Name)
-			} else {
-				go func() {
-					ret.Wait()
-					session.Timeout.DoneBusyWithReset(extension, c.Name)
-				}()
-			}
-		}()
-
-		//t := time.Now()
-		log.Debug("In Del Handler")
-
-		reqId := c.Arg(0).String()
-		chunkId := c.Arg(1).String()
-		key := c.Arg(2).String()
-
-		ret = Store.Del(key, chunkId)
-		if ret.Error() == nil {
-			// write Key, clientId, chunkId, body back to proxy
-			response := &worker.ObjectResponse{
-				Cmd:     c.Name,
-				ReqId:   reqId,
-				ChunkId: chunkId,
-			}
-			Server.AddResponses(response, client)
-			if err := response.Flush(); err != nil {
-				log.Error("Error on del::flush(set key %s): %v", key, err)
-				return
-			}
-		} else {
-			var respError *handlers.ResponseError
-			if ret.Error() == types.ErrNotFound {
-				// Not found
-				respError = handlers.NewResponseError(404, "Failed to del %s: %v", key, ret.Error())
-			} else {
-				respError = handlers.NewResponseError(500, "Failed to del %s: %v", key, ret.Error())
-			}
-			errResponse := &worker.ErrorResponse{Error: respError}
-			Server.AddResponses(errResponse, client)
-			if err := errResponse.Flush(); err != nil {
-				log.Error("Error on flush: %v", err)
-			}
-		}
-	})
-
-	Server.HandleFunc(protocol.CMD_DATA, func(w resp.ResponseWriter, c *resp.Command) {
-		client := redeo.GetClient(c.Context())
-
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Halt()
-		log.Debug("In DATA handler")
-
-		if session.Migrator != nil {
-			session.Migrator.SetError(types.ErrProxyClosing)
-			session.Migrator.Close()
-			session.Migrator = nil
-		}
-
-		// put DATA to s3
-		collector.Save()
-
-		rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-			w.AppendBulkString(rsp.Cmd)
-			w.AppendBulkString("OK")
-		}, client)
-
-		if err := rsp.Flush(); err != nil {
-			log.Error("Error on data::flush: %v", err)
-		}
-
-		log.Debug("data complete")
-		if err := lambdaLife.TimeoutAfter(Server.Close, worker.RetrialDelayStartFrom); err != nil {
-			log.Error("Timeout on closing the worker.")
-		}
-		Lifetime.Rest()
-
-		// Reset store
-		Store = nil
-		Persist = nil
-		Lineage = nil
-		log.Debug("before done")
-		session.Done()
-	})
-
-	Server.HandleFunc(protocol.CMD_PING, func(w resp.ResponseWriter, c *resp.Command) {
-		// Drain payload anyway.
-		payload := c.Arg(0).Bytes()
-
-		session := lambdaLife.GetSession()
-		if session == nil {
-			// Possibilities are ping may comes after HandleRequest returned or before session started.
-			log.Debug("PING ignored: session ended.")
-			return
-		} else if !session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR_EXTEND, c.Name) && !session.IsMigrating() {
-			// Failed to extend timeout, do nothing and prepare to return from lambda.
-			log.Debug("PING ignored: timeout extension denied.")
-			return
-		}
-
-		// Ensure the session is setup.
-		session.Setup.Wait()
-		if grant := pong.Issue(true); !grant {
-			// The only reason for pong response is not being granted is because it conflicts with PONG issued on invocation,
-			// which means this PING is a legacy from last invocation.
-			log.Debug("PING ignored: request to issue a PONG is denied.")
-			return
-		}
-
-		log.Debug("PING")
-		pong.SendWithFlags(c.Context(), protocol.PONG_FOR_CTRL)
-
-		// Deal with payload
-		if len(payload) > 0 {
-			session.Timeout.Busy(c.Name)
-			skip := true
-
-			var pmeta protocol.Meta
-			if err := binary.Unmarshal(payload, &pmeta); err != nil {
-				log.Warn("Error on parse payload of the ping: %v", err)
-			} else if Lineage == nil {
-				log.Warn("Recovery is requested but lineage is not available.")
-			} else {
-				log.Debug("PING meta: %v", pmeta)
-
-				// For now, only backup request supported.
-				meta, err := types.LineageMetaFromProtocol(&pmeta)
-				if err != nil {
-					log.Warn("Error on get meta: %v", err)
-				}
-
-				consistent, err := Lineage.IsConsistent(meta)
-				if err != nil {
-					log.Warn("Error on check consistency: %v", err)
-				}
-
-				if !consistent {
-					skip = false
-					_, chanErr := Lineage.Recover(meta)
-					session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
-					go func() {
-						waitForRecovery(chanErr)
-						session.Timeout.DoneBusy(c.Name)
-					}()
-				} else {
-					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
-				}
-			}
-
-			if skip {
-				// No more request expected for a ping with payload (backup ping).
-				session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, c.Name)
-			}
-		}
-	})
-
-	Server.HandleFunc(protocol.CMD_MIGRATE, func(w resp.ResponseWriter, c *resp.Command) {
-		pong.Cancel()
-		session := lambdaLife.GetSession()
-		session.Timeout.Halt()
-		log.Debug("In MIGRATE handler")
-
-		// addr:port
-		addr := c.Arg(0).String()
-		deployment := c.Arg(1).String()
-		newId, _ := c.Arg(2).Int()
-		requestFromProxy := false
-
-		if !session.IsMigrating() {
-			// Migration initiated by proxy
-			requestFromProxy = true
-			session.Migrator = migrator.NewClient()
-		}
-
-		// dial to migrator
-		if err := session.Migrator.Connect(addr); err != nil {
-			return
-		}
-
-		if err := session.Migrator.TriggerDestination(deployment, &protocol.InputEvent{
-			Cmd:    "migrate",
-			Id:     uint64(newId),
-			Proxy:  session.Input.Proxy,
-			Addr:   addr,
-			Prefix: collector.Prefix,
-			Log:    log.GetLevel(),
-		}); err != nil {
-			return
-		}
-
-		// Now, we serve migration connection
-		go func(session *lambdaLife.Session) {
-			// In session gorouting
-			session.Migrator.WaitForMigration(Server.Server)
-			// Migration ends or is interrupted.
-
-			// Should be ready if migration ended.
-			if session.Migrator.IsReady() {
-				// put data to s3 before migration finish
-				collector.Save()
-
-				// This is essential for debugging, and useful if deployment pool is not large enough.
-				Lifetime.Rest()
-				// Keep or not? It is a problem.
-				// KEEP: MUST if migration is used for backup
-				// DISCARD: SHOULD if to be reused after migration.
-				// lifetime.Store = storage.New()
-
-				// Close session
-				session.Migrator = nil
-				session.Done()
-			} else if requestFromProxy {
-				session.Migrator = nil
-				session.Timeout.Restart(lambdaLife.TICK_ERROR)
-			}
-		}(session)
-
-		// Gracefully close the server.
-		// The server will not be closed immediately. Instead, it waits until:
-		// 1. The replica will connect to the proxy and relay concurrently.
-		// 2.a The proxy will disconnect the ctrl and data link in the worker, yet the redeo server in worker is still serving.
-		// 2.b The redeo server continue serves the connection from the replica through the relay.
-		Server.CloseWithOptions(true)
-
-		// Signal migrator is ready and start migration. The migration will only begin if:
-		// 1. The replica is connected (handled in mhello)
-		// 2. The worker is disconnected by proxy (worker closed)
-		session.Migrator.SetReady()
-
-		// Prevent timeout
-		session.Timeout.EndInterruption()
-	})
-
-	Server.HandleFunc(protocol.CMD_MHELLO, func(w resp.ResponseWriter, c *resp.Command) {
-		session := lambdaLife.GetSession()
-		if session.Migrator == nil {
-			log.Error("Migration is not initiated.")
-			return
-		}
-
-		// Wait for ready, which means connection to proxy is closed and we are safe to proceed.
-		err := <-session.Migrator.Ready()
-		if err != nil {
-			return
-		}
-
-		// Send key list by access time
-		w.AppendBulkString("mhello")
-		w.AppendBulkString(strconv.Itoa(Store.Len()))
-
-		delList := make([]string, 0, 2*Store.Len())
-		getList := delList[Store.Len():Store.Len()]
-		for key := range Store.Keys() {
-			_, _, ret := Store.Get(key)
-			if ret.Error() == types.ErrNotFound {
-				delList = append(delList, key)
-			} else {
-				getList = append(getList, key)
-			}
-		}
-
-		for _, key := range delList {
-			w.AppendBulkString(fmt.Sprintf("%d%s", types.OP_DEL, key))
-		}
-		for _, key := range getList {
-			w.AppendBulkString(fmt.Sprintf("%d%s", types.OP_GET, key))
-		}
-
-		if err := w.Flush(); err != nil {
-			log.Error("Error on mhello::flush: %v", err)
-			return
-		}
-	})
+	Server.HandleFunc(protocol.CMD_TEST, Server.Handler(handlers.TestHandler))
+	Server.HandleFunc(protocol.CMD_GET, Server.Handler(handlers.GetHandler))
+	Server.HandleStreamFunc(protocol.CMD_SET, Server.StreamHandler(handlers.SetHandler))
+	Server.HandleFunc(protocol.CMD_RECOVER, Server.Handler(handlers.RecoverHandler))
+	Server.HandleFunc(protocol.CMD_DEL, Server.Handler(handlers.DelHandler))
+	Server.HandleFunc(protocol.CMD_DATA, Server.Handler(handlers.DataHandler))
+	Server.HandleFunc(protocol.CMD_PING, Server.Handler(pingHandler))
+	Server.HandleFunc(protocol.CMD_MIGRATE, Server.Handler(handlers.MigrateHandler))
+	Server.HandleFunc(protocol.CMD_MHELLO, Server.Handler(handlers.MHelloHandler))
 
 	if DRY_RUN {
 		var printInfo bool
@@ -1066,9 +540,10 @@ func main() {
 		if printInfo {
 			fmt.Fprintf(os.Stderr, "Usage: ./lambda -dryrun [options]\n")
 			fmt.Fprintf(os.Stderr, "Example: \n")
-			fmt.Fprintf(os.Stderr, "\tPersistently insert 1MB: ./lambda -dryrun -flags=256 -cksize=1000000 -hash=dummy -insert=100\n")
+			fmt.Fprintf(os.Stderr, "\tStart and insert objects with recovery support: ./lambda -dryrun -flags=256 -cksize=1000000 -hash=dummy -insert=100\n")
 			fmt.Fprintf(os.Stderr, "\tExample output: [{1 2 972 100 hash 2 972 355 }]\n")
-			fmt.Fprintf(os.Stderr, "\tPersistently recovery: ./lambda -dryrun -flags=256 -hash=dummy -term=2 -updates=972 -snapshot=2 -snapshotupdates=972 -snapshotsize=355\n")
+			fmt.Fprintf(os.Stderr, "\tStart with recovery: ./lambda -dryrun -flags=256 -hash=dummy -term=2 -updates=972 -snapshot=2 -snapshotupdates=972 -snapshotsize=355\n")
+			fmt.Fprintf(os.Stderr, "\tStart without recovery: ./lambda -dryrun -flags=768\n")
 			fmt.Fprintf(os.Stderr, "Available options:\n")
 			flag.PrintDefaults()
 			os.Exit(0)
@@ -1110,11 +585,11 @@ func main() {
 			log.Verbose = true
 			storage.Concurrency = *concurrency
 			storage.Buckets = *buckets
-			var shortcut *protocol.ShortcutConn
+			var shortcutCtrl *protocol.ShortcutConn
 			if input.Proxy == "" {
 				protocol.InitShortcut()
-				shortcut = protocol.Shortcut.Prepare("dryrun", 0, 2)
-				input.Proxy = shortcut.Address
+				shortcutCtrl = protocol.Shortcut.Prepare("ctrl", 0, 1)
+				input.ProxyAddr = protocol.NewQueueAddr(shortcutCtrl.Address)
 			}
 
 			ready := make(chan struct{})
@@ -1124,17 +599,17 @@ func main() {
 			exit := make(chan struct{})
 
 			// Dummy Proxy
-			if shortcut == nil {
+			if shortcutCtrl == nil {
 				ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
 				invokes <- &input
 				close(invokes)
 			} else {
-				writePing := func(writer *resp.RequestWriter, payload []byte) {
-					writer.WriteMultiBulkSize(2)
-					writer.WriteBulkString(protocol.CMD_PING)
-					writer.WriteBulk(payload)
-					writer.Flush()
-				}
+				// writePing := func(writer *resp.RequestWriter, payload []byte) {
+				// 	writer.WriteMultiBulkSize(2)
+				// 	writer.WriteBulkString(protocol.CMD_PING)
+				// 	writer.WriteBulk(payload)
+				// 	writer.Flush()
+				// }
 
 				readPong := func(reader resp.ResponseReader) {
 					reader.ReadBulkString()     // pong
@@ -1153,67 +628,116 @@ func main() {
 				// 	reader.ReadBulkString() // test
 				// }
 
-				consumeDataPongs := func(conns ...*mock.Conn) {
-					for _, conn := range conns {
-						go func(cn net.Conn) {
-							client := worker.NewClient(cn)
+				consumeDataPongs := func(wait bool, shortcuts ...*protocol.ShortcutConn) {
+					var wg sync.WaitGroup
+					for _, shortcut := range shortcuts {
+						if wait {
+							wg.Add(1)
+						}
+						go func(shortcut *protocol.ShortcutConn) {
+							client := worker.NewClient(shortcut.Conns[0].Server, false)
 							readPong(client.Reader)
-							log.Info("Data PONG received.")
-						}(conn.Server)
+							log.Info("Data PONG received %v", shortcut.Conns[0])
+							if wait {
+								wg.Done()
+							}
+						}(shortcut)
+					}
+					if wait {
+						wg.Wait()
 					}
 				}
 
-				// cutConnection := func(idx int, permanent bool) net.Conn {
-				// 	old := shortcut.Conns[idx]
-				// 	shortcut.Conns[idx] = mock.NewConn()
-				// 	if permanent {
-				// 		old.Server.Close()
-				// 	} else {
-				// 		old.Close()
-				// 	}
-
-				// 	return shortcut.Conns[idx].Server
-				// }
+				changeConnection := func(shortcut *protocol.ShortcutConn, nick string, cut bool, permanent ...bool) net.Conn {
+					old := shortcut.Conns[0]
+					shortcut.Conns[0] = protocol.NewMockConn(shortcut.Address+nick, 0)
+					if cut {
+						if len(permanent) > 0 && permanent[0] {
+							old.Server.Close()
+						} else {
+							old.Close()
+						}
+					}
+					return shortcut.Conns[0].Server
+				}
 
 				alldone.Add(1)
 				// Proxy simulator
 				go func() {
+					var validated sync.WaitGroup
 					log.Info("First Invocation")
 					// First invocation
 					invokes <- &input
+					validated.Add(1)
+					time.Sleep(5 * time.Millisecond) // Let lambda run
 
-					// Consume messages from datalinks
-					consumeDataPongs(shortcut.Conns[1:]...)
-					ctrlClient := worker.NewClient(shortcut.Conns[0].Server)
-					readPong(ctrlClient.Reader)
-					log.Info("Ctrl PONG received.")
-					ready <- struct{}{}
+					// if *statusAsPayload {
+					// 	pl, _ := binary.Marshal(payload)
+					// 	writePing(ctrlClient.Writer, pl)
+					// 	readPong(ctrlClient.Reader)
+					// }
 
-					if *statusAsPayload {
-						pl, _ := binary.Marshal(payload)
-						writePing(ctrlClient.Writer, pl)
+					// Prepare data connection 1 and consume pong
+					shourtcutData := protocol.Shortcut.Prepare("data", 0, 1)
+					input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData.Address)
+					clients := make(chan *worker.Client, 1)
+
+					go func() {
+						// Zombie link test
+						changeConnection(shortcutCtrl, "-No2", false) // Prepare a new connection
+						time.Sleep(40 * time.Millisecond)             // Wait for ack timeout
+
+						ctrlClient := worker.NewClient(shortcutCtrl.Conns[0].Server, true)
 						readPong(ctrlClient.Reader)
-					}
+						log.Info("Ctrl PONG received %v", shortcutCtrl.Conns[0])
+						ready <- struct{}{}
+						select {
+						case clients <- ctrlClient:
+						default:
+						}
+						validated.Done()
+					}()
 
-					// Get key with recovery
-					ctrlClient.Writer.WriteMultiBulkSize(5)
-					ctrlClient.Writer.WriteBulkString(protocol.CMD_GET)
-					ctrlClient.Writer.WriteBulkString("dummy request id")
-					ctrlClient.Writer.WriteBulkString("1")
-					ctrlClient.Writer.WriteBulkString("obj-1-9")
-					ctrlClient.Writer.WriteBulkString("100000")
-					ctrlClient.Writer.Flush()
+					go func() {
+						consumeDataPongs(true, shourtcutData)
+						select {
+						case clients <- worker.NewClient(shourtcutData.Conns[0].Server, false):
+							// Prepare data connection 2 and consume pong
+							shourtcutData2 := protocol.Shortcut.Prepare("data", 1, 1)
+							input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData2.Address)
+							consumeDataPongs(false, shourtcutData2)
+						default:
+						}
+					}()
 
+					// Get key (recovery if not load)
+					validated.Wait()
+					log.Info("Validated, %d", len(clients))
+					client := <-clients
+					log.Info("Client from ctrl: %v", client.Ctrl)
+					client.Writer.WriteMultiBulkSize(5)
+					client.Writer.WriteBulkString(protocol.CMD_GET)
+					client.Writer.WriteBulkString("dummy request id")
+					client.Writer.WriteBulkString("1")
+					client.Writer.WriteBulkString("obj-1-9")
+					client.Writer.WriteBulkString("100000")
+					client.Writer.Flush()
+
+					time.Sleep(5 * time.Millisecond) // Let lambda run
+
+					// Error response
 					// msg, _ := ctrlClient.Reader.ReadError()
 					// log.Error("error: %v", msg)
 
-					ctrlClient.Reader.ReadBulkString()            // cmd
-					ctrlClient.Reader.ReadBulkString()            // reqid
-					ctrlClient.Reader.ReadBulkString()            // chunk id
-					data, _ := ctrlClient.Reader.ReadBulkString() // stream
+					// Success response
+					client.Reader.ReadBulkString()            // cmd
+					client.Reader.ReadBulkString()            // reqid
+					client.Reader.ReadBulkString()            // chunk id
+					client.Reader.ReadInt()                   // recovery
+					data, _ := client.Reader.ReadBulkString() // stream
 					log.Info("Recovered data of size: %v", len(data))
 
-					<-ended
+					// <-ended
 
 					// // Control link interruption test
 					//

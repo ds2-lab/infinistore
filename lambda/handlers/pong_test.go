@@ -60,7 +60,7 @@ var _ = Describe("PongHandler", func() {
 		// Wait for retry
 		timeout := time.NewTimer(1 * time.Second)
 		<-timeout.C
-		Expect(pong.canceled).To(Equal(true))
+		Expect(pong.cancelled).To(Equal(true))
 
 		// Should be ok to send more
 		pong.pong = succeedPong
@@ -79,7 +79,7 @@ var _ = Describe("PongHandler", func() {
 
 		timeout := time.NewTimer(1 * time.Second)
 		<-timeout.C
-		Expect(pong.canceled).To(Equal(false))
+		Expect(pong.cancelled).To(Equal(false))
 
 		// Should be ok to send more
 		pong.pong = succeedPong

@@ -24,17 +24,18 @@ var (
 		Prefix: "Undesignated ",
 		Color:  !global.Options.NoColor,
 	}
-	ErrConnectionClosed = errors.New("connection closed")
-	ErrMissingResponse  = errors.New("missing response")
-	ErrUnexpectedType   = errors.New("unexpected type")
+	ErrConnectionClosed  = errors.New("connection closed")
+	ErrMissingResponse   = errors.New("missing response")
+	ErrUnexpectedCommand = errors.New("unexpected command")
+	ErrUnexpectedType    = errors.New("unexpected type")
 )
 
 type Connection struct {
+	Id uint32
 	net.Conn
-	workerId int32       // Identify a unique lambda worker
-	control  bool        // Identify if the connection is control link or not.
-	dataLink *Connection // Only works for the control link to find its data link.
-	ctrlLink *Connection // Only works for the data link to find its control link.
+	workerId int32 // Identify a unique lambda worker
+	control  bool  // Identify if the connection is control link or not.
+	lm       *LinkManager
 
 	instance    *Instance
 	log         logger.ILogger
@@ -70,58 +71,101 @@ func (conn *Connection) Writer() *resp.RequestWriter {
 	return conn.w
 }
 
-func (conn *Connection) BindInstance(ins *Instance) {
+func (conn *Connection) IsSameWorker(another *Connection) bool {
+	if another == nil {
+		return false
+	}
+	return conn.workerId == another.workerId
+}
+
+func (conn *Connection) BindInstance(ins *Instance) *Connection {
 	if conn.instance == ins {
-		return
+		return conn
 	}
 
 	conn.instance = ins
+	conn.lm = ins.lm
 	conn.log = ins.log
 	if l, ok := conn.log.(*logger.ColorLogger); ok {
 		copied := *l
 		copied.Prefix = fmt.Sprintf("%s%v ", copied.Prefix, conn)
 		conn.log = &copied
 	}
-}
-
-func (conn *Connection) GetDataLink() *Connection {
-	return conn.dataLink
-}
-
-func (conn *Connection) AddDataLink(link *Connection) bool {
-	if conn.workerId != link.workerId {
-		return false
-	}
-
-	link.ctrlLink, conn.dataLink = conn, link
-	conn.log.Debug("Data link added:%v", link)
-	return true
-}
-
-func (conn *Connection) RemoveDataLink(link *Connection) {
-	if conn.dataLink != nil && conn.dataLink == link {
-		conn.dataLink = nil
-	}
+	return conn
 }
 
 func (conn *Connection) SendControl(ctrl *types.Control) error {
+	switch ctrl.Name() {
+	case protocol.CMD_DATA:
+		ctrl.PrepareForData(conn)
+	case protocol.CMD_MIGRATE:
+		ctrl.PrepareForMigrate(conn)
+	case protocol.CMD_DEL:
+		ctrl.PrepareForDel(conn)
+	case protocol.CMD_RECOVER:
+		ctrl.PrepareForRecover(conn)
+	default:
+		conn.log.Error("Unexpected control command: %s", ctrl)
+		return ErrUnexpectedCommand
+	}
+
 	if err := ctrl.Flush(); err != nil {
 		conn.log.Error("Flush control error: %v - %v", ctrl, err)
-
 		conn.close()
-
 		return err
 	}
 
 	return nil
 }
 
-func (conn *Connection) SendRequest(req *types.Request) error {
+func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) error {
+	useDataLink := false
+	if len(args) > 0 {
+		useDataLink, _ = args[0].(bool)
+	}
+
+	if !conn.control {
+		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
+		conn.chanWait <- req
+		return conn.sendRequest(req)
+	} else if useDataLink {
+		conn.log.Debug("Waiting for available data link %v", req)
+		conn.lm.GetAvailableForRequest() <- req
+		return conn.lm.GetLastRequestError()
+	} else {
+		conn.log.Debug("Waiting for available link %v", req)
+		select {
+		case conn.chanWait <- req:
+			return conn.sendRequest(req)
+		case conn.lm.GetAvailableForRequest() <- req:
+			return conn.lm.GetLastRequestError()
+		}
+	}
+}
+
+func (conn *Connection) sendRequest(req *types.Request) error {
 	// In case there is a request already, wait to be consumed (for response).
 	// Lock free: request sent after headRequest get set.
-	conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
-	conn.chanWait <- req
+	// Moved to SendRequest start
+	// conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
+	// conn.chanWait <- req
+	// Moved end
 	conn.headRequest = req
+
+	switch req.Name() {
+	case protocol.CMD_SET:
+		req.PrepareForSet(conn)
+	case protocol.CMD_GET:
+		req.PrepareForGet(conn)
+	case protocol.CMD_DEL:
+		req.PrepareForDel(conn)
+	case protocol.CMD_RECOVER:
+		req.PrepareForRecover(conn)
+	default:
+		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
+		// Unrecoverable
+		return nil
+	}
 
 	// Updated by Tianium: 20210504
 	// Write timeout is meaningless: small data will be buffered and always success, blobs will be handled by both ends.
@@ -187,23 +231,12 @@ func (conn *Connection) Close() error {
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
-	// Signal data link to close itself.
-	dataLink := conn.dataLink
-	if dataLink != nil {
-		dataLink.Close()
-		conn.dataLink = nil
-	}
-
 	return nil
 }
 
 func (conn *Connection) close() {
-	// Data link: Try detach from control link.
-	// Control link: Notify instance.
-	if conn.ctrlLink != nil {
-		conn.ctrlLink.RemoveDataLink(conn)
-		conn.ctrlLink = nil
-	} else if conn.instance != nil {
+	// Notify instance.
+	if conn.instance != nil {
 		conn.instance.FlagClosed(conn)
 	}
 
@@ -395,6 +428,9 @@ func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) 
 
 	// Lock free: double check that poped is what we peeked.
 	if poped := conn.popRequest(); poped == req {
+		if !conn.control {
+			conn.lm.FlagAvailableForRequest(conn)
+		}
 		conn.log.Debug("response matched: %v", req)
 		return req, req.SetResponse(rsp)
 	}
@@ -404,6 +440,9 @@ func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) 
 
 func (conn *Connection) SetErrorResponse(err error) bool {
 	if req := conn.popRequest(); req != nil {
+		if !conn.control {
+			conn.lm.FlagAvailableForRequest(conn)
+		}
 		return req.SetResponse(err)
 	}
 
