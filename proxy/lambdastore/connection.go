@@ -243,7 +243,8 @@ func (conn *Connection) close() {
 	// Call signal function to avoid duplicated close.
 	conn.Close()
 
-	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	// Connection disconnected. Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	// Additionally, lambda can tell the connection should be restored instead of closing itself.
 	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
 		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	}
@@ -286,7 +287,11 @@ func (conn *Connection) ServeLambda() {
 		switch ret := retPeek.(type) {
 		case error:
 			if ret == io.EOF {
-				conn.log.Warn("Lambda store disconnected.")
+				if conn.control {
+					conn.log.Warn("Lambda store disconnected.")
+				} else {
+					conn.log.Debug("Disconnected.")
+				}
 			} else {
 				conn.log.Warn("Failed to peek response type: %v", ret)
 			}

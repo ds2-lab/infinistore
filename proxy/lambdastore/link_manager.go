@@ -154,23 +154,21 @@ func (m *LinkManager) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.ctrlLink == nil {
-		return
+	if m.ctrlLink != nil {
+		m.ctrlLink.ClearResponses()
 	}
-	m.ctrlLink.ClearResponses()
-	m.resetLocked(m.ctrlLink)
+	m.resetLocked(m.lastValidCtrl)
 }
 
 func (m *LinkManager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.ctrlLink == nil {
-		return
+	if m.ctrlLink != nil {
+		m.ctrlLink.Close()
+		m.ctrlLink = nil
 	}
-	m.resetLocked(m.ctrlLink)
-	m.ctrlLink.Close()
-	m.ctrlLink = nil
+	m.resetLocked(m.lastValidCtrl)
 	m.lastValidCtrl = nil
 }
 
