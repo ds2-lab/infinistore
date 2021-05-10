@@ -132,11 +132,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	Server.SetManualAck(true)
 
 	// Check connection
-	proxyAddr := input.ProxyAddr
+	proxyAddr := input.ProxyAddr // So far, ProxyAddr is used for shortcut connection only.
+	var wopts *worker.WorkerOptions
 	if proxyAddr == nil {
 		proxyAddr = protocol.StrAddr(input.Proxy)
+	} else {
+		wopts = &worker.WorkerOptions{DryRun: DRY_RUN}
 	}
-	if started, err := Server.StartOrResume(proxyAddr, &worker.WorkerOptions{DryRun: DRY_RUN}); err != nil {
+	if started, err := Server.StartOrResume(proxyAddr, wopts); err != nil {
 		return DefaultStatus, err
 	} else if started {
 		Lifetime.Reborn()
@@ -157,7 +160,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
-		handlers.Pong.SendWithFlags(ctx, flags)
+		handlers.Pong.SendWithFlags(flags)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
@@ -194,7 +197,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// PONG represents the node is ready to serve, no fast recovery required.
-			handlers.Pong.SendWithFlags(ctx, flags)
+			handlers.Pong.SendWithFlags(flags)
 		} else {
 			session.Timeout.Busy("recover")
 			recoverErrs = make([]chan error, 0, inconsistency)
@@ -206,10 +209,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				if fast {
 					flags |= protocol.PONG_RECOVERY
 				}
-				handlers.Pong.SendWithFlags(ctx, flags)
+				handlers.Pong.SendWithFlags(flags)
 				recoverErrs = append(recoverErrs, chanErr)
 			} else {
-				handlers.Pong.SendWithFlags(ctx, flags)
+				handlers.Pong.SendWithFlags(flags)
 			}
 
 			// Recovery backup
@@ -370,7 +373,7 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	log.Debug("PING")
-	handlers.Pong.SendWithFlags(c.Context(), protocol.PONG_FOR_CTRL)
+	handlers.Pong.SendWithFlags(protocol.PONG_FOR_CTRL)
 
 	// Deal with payload
 	if len(payload) > 0 {
@@ -510,6 +513,7 @@ func main() {
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
 		// })
+		flag.StringVar(&input.Sid, "sid", "", "Session id")
 		flag.StringVar(&input.Cmd, "cmd", "warmup", "Command to trigger")
 		flag.Uint64Var(&input.Id, "id", 1, "Node id")
 		flag.StringVar(&input.Proxy, "proxy", "", "Proxy address:port")
@@ -600,7 +604,6 @@ func main() {
 
 			// Dummy Proxy
 			if shortcutCtrl == nil {
-				ctx = context.WithValue(ctx, &handlers.ContextKeyReady, ready)
 				invokes <- &input
 				close(invokes)
 			} else {

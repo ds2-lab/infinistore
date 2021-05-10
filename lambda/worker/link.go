@@ -147,10 +147,10 @@ func (ln *Link) Close() {
 func (ln *Link) close() {
 	if ln.Client != nil {
 		conn := ln.Client.Conn()
-		// Don't use conn.Close(), it will stuck and wait.
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
-		}
+		// // Don't use conn.Close(), it will stuck and wait.
+		// if tcp, ok := conn.(*net.TCPConn); ok {
+		// 	tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+		// }
 		conn.Close()
 		ln.Client.Close()
 		ln.Client = nil

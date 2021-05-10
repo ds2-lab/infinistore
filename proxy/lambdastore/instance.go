@@ -21,6 +21,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
+	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -807,7 +808,13 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
-	client := lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+	var client invoker.FunctionInvoker
+	switch global.Options.GetInvoker() {
+	case global.InvokerLocal:
+		client = &invoker.LocalInvoker{}
+	default:
+		client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+	}
 
 	tips := &url.Values{}
 	if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET {

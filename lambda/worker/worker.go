@@ -98,7 +98,7 @@ func (wrk *Worker) SetHeartbeater(heartbeater Heartbeater) {
 
 func (wrk *Worker) StartOrResume(proxyAddr net.Addr, args ...*WorkerOptions) (isStart bool, err error) {
 	opts := &defaultOption
-	if len(args) > 0 {
+	if len(args) > 0 && args[0] != nil {
 		opts = args[0]
 	}
 	if opts.MinDataLinks == 0 {
@@ -142,6 +142,7 @@ func (wrk *Worker) Pause() {
 	for wrk.dataLinks.Len() > 0 {
 		link := wrk.dataLinks.Remove(wrk.dataLinks.Front()).(*Link)
 		link.Close()
+		wrk.log.Debug("%v closed", link)
 	}
 }
 

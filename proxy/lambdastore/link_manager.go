@@ -122,6 +122,10 @@ func (m *LinkManager) addDataLinkLocked(link *Connection) bool {
 func (m *LinkManager) RemoveDataLink(link *Connection) {
 	m.dataLinks.Del(link.Id)
 	m.log.Debug("Data link removed:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
+	// Data link being removed can be in avaiables already, we ignore this by considering following cases:
+	// 1. New datalink will not be disconnected before first use.
+	// 2. Reuse datalink will be closed (beyond ActiveLinks) and will not be added to availables.
+	// 3. On function exists, all data links will be removed, and then resetLocked will be called sometime.
 }
 
 func (m *LinkManager) GetAvailableForRequest() chan<- *types.Request {
@@ -184,6 +188,7 @@ func (m *LinkManager) resetLocked(legacy *Connection) {
 			m.dataLinks.Del(keyVal.Key)
 		}
 	}
+	m.log.Debug("Data link reset, availables: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
 }
 
 type LinkBucket struct {
