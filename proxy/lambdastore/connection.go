@@ -12,7 +12,6 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -64,7 +63,11 @@ func NewConnection(c net.Conn) *Connection {
 }
 
 func (conn *Connection) String() string {
-	return fmt.Sprintf("%d%s", conn.workerId, util.Ifelse(conn.control, "c", "d"))
+	if conn.control {
+		return fmt.Sprintf("%d%s", conn.workerId, "c")
+	} else {
+		return fmt.Sprintf("%d%s-%d", conn.workerId, "d", conn.Id)
+	}
 }
 
 func (conn *Connection) Writer() *resp.RequestWriter {
@@ -92,6 +95,13 @@ func (conn *Connection) BindInstance(ins *Instance) *Connection {
 		conn.log = &copied
 	}
 	return conn
+}
+
+func (conn *Connection) SetId(id uint32) {
+	conn.Id = id
+	if l, ok := conn.log.(*logger.ColorLogger); ok && conn.instance != nil {
+		l.Prefix = fmt.Sprintf("%s%v ", conn.instance.log.(*logger.ColorLogger).Prefix, conn)
+	}
 }
 
 func (conn *Connection) SendControl(ctrl *types.Control) error {
@@ -130,15 +140,17 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		return conn.sendRequest(req)
 	} else if useDataLink {
 		conn.log.Debug("Waiting for available data link %v", req)
-		conn.lm.GetAvailableForRequest() <- req
-		return conn.lm.GetLastRequestError()
+		availableLink := conn.lm.GetAvailableForRequest()
+		availableLink.Request() <- req
+		return availableLink.Error()
 	} else {
 		conn.log.Debug("Waiting for available link %v", req)
+		availableLink := conn.lm.GetAvailableForRequest()
 		select {
 		case conn.chanWait <- req:
 			return conn.sendRequest(req)
-		case conn.lm.GetAvailableForRequest() <- req:
-			return conn.lm.GetLastRequestError()
+		case availableLink.Request() <- req:
+			return availableLink.Error()
 		}
 	}
 }

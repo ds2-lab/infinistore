@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,8 @@ const (
 )
 
 var (
-	ctxKeyLink = struct{}{}
+	ctxKeyLink    = struct{}{}
+	ErrLinkClosed = errors.New("link closed")
 )
 
 // Wrapper for redeo client that support response buffering if connection is unavailable
@@ -94,8 +96,8 @@ func (ln *Link) AddResponses(rsp interface{}) error {
 	defer ln.mu.Unlock()
 
 	if atomic.LoadInt32(&ln.once) == LinkClosed {
-		rsp.(Response).abandon(ErrWorkerClosed)
-		return ErrWorkerClosed
+		rsp.(Response).abandon(ErrLinkClosed)
+		return ErrLinkClosed
 	} else if ln.Client == nil {
 		ln.buff <- rsp
 	} else if err := ln.Client.AddResponses(rsp); err != nil {
@@ -128,21 +130,25 @@ func (ln *Link) Invalidate(err error) {
 	ln.close()
 }
 
+func (ln *Link) IsClosed() bool {
+	return atomic.LoadInt32(&ln.once) == LinkClosed
+}
+
 func (ln *Link) Close() {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
+	atomic.StoreInt32(&ln.once, LinkClosed)
 	ln.close()
 	// Drain responses
 	if len(ln.buff) > 0 {
 		for rsp := range ln.buff {
-			rsp.(Response).abandon(ErrWorkerClosed)
+			rsp.(Response).abandon(ErrLinkClosed)
 			if len(ln.buff) == 0 {
 				break
 			}
 		}
 	}
-	atomic.StoreInt32(&ln.once, LinkClosed)
 }
 
 func (ln *Link) close() {
