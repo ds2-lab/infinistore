@@ -139,10 +139,17 @@ var _ = Describe("AvailableLinks", func() {
 		Expect(list.AddAvailable(&testLink{})).To(BeFalse())
 		Expect(list.Len()).To(Equal(1))
 
-		_ = list.GetRequestPipe()
+		al := list.GetRequestPipe()
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(1))
 		Expect(list.AddAvailable(&testLink{})).To(BeFalse())
+		Expect(list.Len()).To(Equal(1))
+
+		al.Request() <- &types.Request{}
+		runtime.Gosched()
+		Expect(list.Len()).To(Equal(0))
+
+		Expect(list.AddAvailable(al.link)).To(BeTrue())
 		Expect(list.Len()).To(Equal(1))
 
 		list.Reset()

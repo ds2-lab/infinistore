@@ -135,15 +135,7 @@ func (wrk *Worker) Pause() {
 	wrk.mu.Lock()
 	defer wrk.mu.Unlock()
 
-	if wrk.availableTokens != nil {
-		close(wrk.availableTokens)
-		wrk.availableTokens = nil
-	}
-	for wrk.dataLinks.Len() > 0 {
-		link := wrk.dataLinks.Remove(wrk.dataLinks.Front()).(*Link)
-		link.Close()
-		wrk.log.Debug("%v closed", link)
-	}
+	wrk.clearDataLinksLocked()
 }
 
 func (wrk *Worker) Close() {
@@ -169,7 +161,7 @@ func (wrk *Worker) CloseWithOptions(opts ...bool) {
 	}
 
 	wrk.ctrlLink.Close()
-	// wrk.dataLink.Close()
+	wrk.clearDataLinksLocked()
 	atomic.StoreInt32(&wrk.numLinks, 0)
 
 	wrk.readyToClose.Wait()
@@ -370,7 +362,7 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr net.Addr, opts 
 			// Failed to connect, exit.
 			break
 		} else {
-			links.PushBack(link)
+			wrk.addDataLink(link)
 		}
 	}
 }
@@ -416,26 +408,19 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	// Send a heartbeat on the link immediately to confirm store information.
 	// The heartbeat will be queued and send once worker started.
 	// On error, the connection will be closed .
-	go func(link *Link) {
-		wrk.log.Debug("Invoke heartbeater(%v)", link.ID())
-		if err := wrk.heartbeater.SendToLink(link, protocol.PONG_FOR_DATA); err != nil {
-			wrk.log.Warn("Heartbeat(%v) err: %v", link.ID(), err)
-			link.Client.Close()
-		}
-	}(link)
+	wrk.log.Debug("Invoke heartbeater(%v)", link.ID())
+	if err := wrk.heartbeater.SendToLink(link, protocol.PONG_FOR_DATA); err != nil {
+		wrk.log.Warn("Heartbeat(%v) err: %v", link.ID(), err)
+		link.Close()
+		return err
+	}
 
 	// Serve the client.
 	go func(link *Link) {
-		err := wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
-		if link.lastError != nil {
-			// override err if by purpose.
-			err = link.lastError
-		}
-		conn.Close()
-		if err == nil {
-			return
-		}
+		_ = wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
 		wrk.flagReservationUsed(link)
+		wrk.removeDataLink(link)
+		link.Close()
 	}(link)
 
 	return nil
@@ -467,6 +452,8 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 
 	err := rsp.flush(w)
 	if err != nil {
+		wrk.SetFailure(link, err)
+
 		if wrk.IsClosed() {
 			wrk.log.Warn("Error on flush response(%s), abandon attempts because the worker is closed: %v", rsp.Command(), ErrWorkerClosed)
 			rsp.close()
@@ -518,6 +505,39 @@ func (wrk *Worker) selectLink(links ...interface{}) (link *Link) {
 		link = wrk.ctrlLink
 	}
 	return
+}
+
+func (wrk *Worker) addDataLink(link *Link) {
+	wrk.mu.Lock()
+	defer wrk.mu.Unlock()
+
+	wrk.dataLinks.PushBack(link)
+	link.registry = wrk.dataLinks.Back()
+}
+
+func (wrk *Worker) removeDataLink(link *Link) {
+	wrk.mu.Lock()
+	defer wrk.mu.Unlock()
+
+	if link.registry == nil {
+		return
+	}
+
+	wrk.dataLinks.Remove(link.registry.(*list.Element))
+	link.registry = nil
+}
+
+func (wrk *Worker) clearDataLinksLocked() {
+	if wrk.availableTokens != nil {
+		close(wrk.availableTokens)
+		wrk.availableTokens = nil
+	}
+	for wrk.dataLinks.Len() > 0 {
+		link := wrk.dataLinks.Remove(wrk.dataLinks.Front()).(*Link)
+		link.registry = nil
+		link.Close()
+		wrk.log.Debug("%v cleared", link)
+	}
 }
 
 type TestClient struct {

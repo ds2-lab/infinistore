@@ -141,8 +141,8 @@ func (m *LinkManager) FlagAvailableForRequest(link *Connection) bool {
 	defer m.mu.Unlock()
 
 	added := m.availables.AddAvailable(link)
-	if !added {
-		m.log.Debug("Data link available: %d, all: : %d", m.availables.Len(), m.dataLinks.Len())
+	if added {
+		m.log.Debug("Data link available: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
 	} else {
 		m.RemoveDataLink(link)
 		link.Close()

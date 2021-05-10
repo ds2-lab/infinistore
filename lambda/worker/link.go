@@ -33,6 +33,7 @@ type Link struct {
 	mu        sync.RWMutex
 	once      int32
 	token     *struct{}
+	registry  interface{}
 }
 
 func LinkFromClient(client *redeo.Client) *Link {
