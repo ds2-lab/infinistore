@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -16,7 +15,6 @@ import (
 )
 
 var (
-	ContextKeyReady    = "ready"
 	DefaultPongTimeout = 30 * time.Millisecond
 	DefaultAttempts    = 0 // Disable retrial for backend link intergrated retrial and reconnection.
 
@@ -76,15 +74,7 @@ func (p *PongHandler) Send() error {
 }
 
 // Send Send ack(pong) with flags on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
-func (p *PongHandler) SendWithFlags(ctx context.Context, flags int64) error {
-	if ctx != nil {
-		ready := ctx.Value(&ContextKeyReady)
-		if ready != nil {
-			pongLog(flags, nil)
-			ready.(chan struct{}) <- struct{}{}
-			return nil
-		}
-	}
+func (p *PongHandler) SendWithFlags(flags int64) error {
 	return p.sendImpl(flags, nil, false)
 }
 

@@ -10,6 +10,10 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 )
 
+const (
+	InvokerLocal = "local"
+)
+
 type CommandlineOptions struct {
 	Pid         string
 	Debug       bool
@@ -32,6 +36,7 @@ type CommandlineOptions struct {
 	disableRecovery    bool
 	cluster            string
 	numFunctions       int
+	invoker            string
 }
 
 func (o *CommandlineOptions) GetLambdaPrefix() string {
@@ -73,6 +78,10 @@ func (o *CommandlineOptions) GetInstanceChunkThreshold() int {
 	return o.funcChunkThreshold
 }
 
+func (o *CommandlineOptions) GetInvoker() string {
+	return o.invoker
+}
+
 func CheckUsage(options *CommandlineOptions) {
 	var printInfo bool
 	flag.BoolVar(&printInfo, "h", false, "help info?")
@@ -97,6 +106,7 @@ func CheckUsage(options *CommandlineOptions) {
 	flag.IntVar(&options.NumBackups, "numbak", 0, "EVALUATION ONLY: The number of backups used per node.")
 	flag.BoolVar(&options.NoFirstD, "disable-first-d", false, "EVALUATION ONLY: Disable first-d optimization.")
 	flag.Uint64Var(&options.funcCapacity, "funcap", 0, "EVALUATION ONLY: Preset capacity(MB) of function instance.")
+	flag.StringVar(&options.invoker, "invoker", "lambda", "EVALUATION ONLY: Use alternative invokers. Try local")
 
 	flag.Parse()
 	options.NoDashboard = !*showDashboard
