@@ -7,8 +7,8 @@ prepare:
 
 build: prepare
 	go build -o bin/proxy ../proxy/
-	go build -o bin/lambda ../lambda/
-	#go build -o bin/preprocess benchmark-recovery/preprocess.go
+	# go build -o bin/lambda ../lambda/
+	# go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
@@ -38,7 +38,7 @@ playback-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
 
 playback-static: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -debug" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -debug" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-norecovery: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
