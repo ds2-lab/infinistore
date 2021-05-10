@@ -457,6 +457,7 @@ func (wrk *Worker) flagReservationUsed(link *Link) {
 // HandleCallback callback handler
 func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp := r.(Response)
+	link := LinkFromClient(redeo.GetClient(rsp.Context()))
 
 	if wrk.IsClosed() {
 		wrk.log.Warn("Abort flushing response(%s): %v", rsp.Command(), ErrWorkerClosed)
@@ -470,10 +471,14 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 			wrk.log.Warn("Error on flush response(%s), abandon attempts because the worker is closed: %v", rsp.Command(), ErrWorkerClosed)
 			rsp.close()
 			return
+		} else if link.IsClosed() {
+			wrk.log.Warn("Error on flush response(%s), abandon attempts because the link is closed: %v", rsp.Command(), ErrLinkClosed)
+			rsp.close()
+			return
 		}
 
 		left := rsp.markAttempt()
-		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left)))
+		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left-1)))
 		if left > 0 {
 			wrk.log.Warn("Error on flush response(%s), retry in %v: %v", rsp.Command(), retryIn, err)
 			go func() {

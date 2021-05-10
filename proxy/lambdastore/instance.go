@@ -1002,10 +1002,10 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 	ins.log.Debug("[%v]Confirming validation...", ins)
 	ins.flagWarmed()
 	// Check possible duplicated session
-	newSession := ins.startSession(sid)
 	oldCtrl := ins.lm.GetControl()
+	newSession := ins.startSession(sid)
 	if conn != oldCtrl {
-		if !newSession && !conn.IsSameWorker(oldCtrl) {
+		if !newSession && oldCtrl != nil && !conn.IsSameWorker(oldCtrl) {
 			// Deny session if session is duplicated and from another worker
 			return conn, ErrDuplicatedSession
 		} else if newSession {

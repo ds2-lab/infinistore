@@ -56,6 +56,10 @@ func (m *LinkManager) GetControl() *Connection {
 	return m.ctrlLink
 }
 
+func (m *LinkManager) GetLastControl() *Connection {
+	return m.lastValidCtrl
+}
+
 func (m *LinkManager) SetControl(link *Connection) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,7 +116,7 @@ func (m *LinkManager) addDataLinkLocked(link *Connection) bool {
 		return false
 	}
 
-	link.Id = atomic.AddUint32(&m.seq, 1)
+	link.SetId(atomic.AddUint32(&m.seq, 1))
 	m.dataLinks.Insert(link.Id, link)
 	m.availables.AddAvailable(link) // No limit control here
 	m.log.Debug("Data link added:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
@@ -128,12 +132,8 @@ func (m *LinkManager) RemoveDataLink(link *Connection) {
 	// 3. On function exists, all data links will be removed, and then resetLocked will be called sometime.
 }
 
-func (m *LinkManager) GetAvailableForRequest() chan<- *types.Request {
+func (m *LinkManager) GetAvailableForRequest() *AvailableLink {
 	return m.availables.GetRequestPipe()
-}
-
-func (m *LinkManager) GetLastRequestError() error {
-	return m.availables.lastError
 }
 
 func (m *LinkManager) FlagAvailableForRequest(link *Connection) bool {
@@ -204,17 +204,31 @@ func (b *LinkBucket) Reset() {
 	}
 }
 
+type AvailableLink struct {
+	link      manageableLink
+	pipe      chan *types.Request
+	err       error
+	requested sync.WaitGroup
+}
+
+func (l *AvailableLink) Request() chan<- *types.Request {
+	return l.pipe
+}
+
+func (l *AvailableLink) Error() error {
+	l.requested.Wait()
+	return l.err
+}
+
 type AvailableLinks struct {
 	top    *LinkBucket
 	bottom *LinkBucket
 	tail   *LinkBucket
-	total  int
+	total  int32
 	limit  int
 
 	// Offer pipe support
-	lastPipe  chan *types.Request
-	lastLink  manageableLink
-	lastError error
+	linkRequest *AvailableLink
 
 	mu sync.Mutex
 }
@@ -230,7 +244,7 @@ func newAvailableLinks() *AvailableLinks {
 }
 
 func (l *AvailableLinks) Len() int {
-	return l.total
+	return int(atomic.LoadInt32(&l.total))
 }
 
 func (l *AvailableLinks) SetLimit(limit int) int {
@@ -244,19 +258,26 @@ func (l *AvailableLinks) Reset() {
 	defer l.mu.Unlock()
 
 	// Clean pipe
-	if l.lastPipe != nil {
-		if l.lastLink == nil {
+	if l.linkRequest != nil {
+		if l.linkRequest.link == nil {
 			// Pipe is waiting for available link
 			top := l.top
 			l.top = l.nextBottomLocked(false)
 			top.next = nil
 			close(top.links) // Close channel to allow pipe routing continue. Pipe will close itself.
-			return           // Nothing left.
+			l.linkRequest = nil
+			return // Nothing left.
 		} else {
 			// Pipe is waiting for request, close it by force. Continue to check links left.
-			close(l.lastPipe)
-			l.total--
+			// Drain the pipe and update counter here to keep the last statement (l.total = 0) safe
+			select {
+			case <-l.linkRequest.pipe:
+			default:
+			}
+			close(l.linkRequest.pipe)
+			atomic.AddInt32(&l.total, -1)
 		}
+		l.linkRequest = nil
 	}
 
 	if len(l.top.links) == 0 {
@@ -271,21 +292,21 @@ func (l *AvailableLinks) Reset() {
 	l.top.Reset()
 
 	// Reset availables
-	l.total = 0
+	atomic.StoreInt32(&l.total, 0)
 }
 
 func (l *AvailableLinks) AddAvailable(link manageableLink) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.limit > 0 && l.total >= l.limit {
+	if l.limit > 0 && int(atomic.LoadInt32(&l.total)) >= l.limit {
 		return false
 	}
 
 	for {
 		select {
 		case l.bottom.links <- link:
-			l.total++
+			atomic.AddInt32(&l.total, 1)
 			return true
 		default:
 			l.nextBottomLocked(true)
@@ -293,24 +314,22 @@ func (l *AvailableLinks) AddAvailable(link manageableLink) bool {
 	}
 }
 
-func (l *AvailableLinks) GetRequestPipe() chan<- *types.Request {
+func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.lastPipe != nil {
-		return l.lastPipe
+	if l.linkRequest != nil {
+		return l.linkRequest
 	}
 
-	l.lastError = nil
-	l.lastPipe = make(chan *types.Request)
-
+	l.linkRequest = &AvailableLink{pipe: make(chan *types.Request)}
 	// Pipe go routing is not in the lock
-	go func(pipe chan *types.Request) {
+	go func(al *AvailableLink) {
 		// Wait for available connection
 	Finding:
 		for {
 			select {
-			case l.lastLink = <-l.top.links:
+			case al.link = <-l.top.links:
 				break Finding
 			default:
 				if l.top != l.bottom {
@@ -318,37 +337,45 @@ func (l *AvailableLinks) GetRequestPipe() chan<- *types.Request {
 					l.recycleTopBucket()
 				} else {
 					// Wait for next available connection
-					l.lastLink = <-l.top.links
+					al.link = <-l.top.links
 					break Finding
 				}
 			}
 		}
-		// AvailableLinks is cleaning up.
-		if l.lastLink == nil {
+		if al.link == nil {
+			// AvailableLinks is cleaning up and top.links is closed.
+			// This setion is triggered by Reset() and locked by Reset()
 			select {
-			case <-pipe:
-				l.lastError = ErrLinkManagerReset
+			case <-al.pipe:
+				al.err = ErrLinkManagerReset
 			default:
 			}
-			l.lastPipe = nil
-			close(pipe)
+			close(al.pipe)
 			return
 		}
 
 		// Consume request
-		req := <-pipe
-		if req != nil {
-			l.total-- // In case cleaning up, Reset will reset the availables.
-			l.lastError = l.lastLink.SendRequest(req)
-		} else {
-			// Or pipe is closed
-			l.lastError = ErrLinkManagerReset
+		al.requested.Add(1)
+		defer al.requested.Done()
+		req := <-al.pipe
+		if req == nil {
+			// Pipe is closed
+			// This setion is triggered by Reset() and locked by Reset()
+			al.err = ErrLinkManagerReset
+			return
 		}
-		l.lastLink = nil
-		l.lastPipe = nil
-	}(l.lastPipe)
 
-	return l.lastPipe
+		// Link request is fulfilled
+		l.mu.Lock()
+		l.linkRequest = nil
+		l.mu.Unlock()
+
+		// Consume link
+		atomic.AddInt32(&l.total, -1)
+		al.err = al.link.SendRequest(req)
+	}(l.linkRequest)
+
+	return l.linkRequest
 }
 
 func (l *AvailableLinks) nextBottomLocked(check bool) *LinkBucket {

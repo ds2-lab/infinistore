@@ -28,7 +28,7 @@ func (l *AvailableLinks) count() (int, int) {
 		total += len(b.links)
 		buckets++
 	}
-	if l.lastLink != nil {
+	if l.linkRequest != nil {
 		total += 1
 	}
 	for b := l.bottom.next; b != nil; b = b.next {
@@ -62,10 +62,11 @@ var _ = Describe("AvailableLinks", func() {
 
 		wg.Add(1)
 		go func() {
-			list.GetRequestPipe() <- &types.Request{}
-			Expect(list.lastLink).To(BeNil())
-			Expect(list.lastError).To(BeNil())
-			Expect(list.lastPipe).To(BeNil())
+			al := list.GetRequestPipe()
+			al.Request() <- &types.Request{}
+			Expect(al.link).To(Not(BeNil()))
+			Expect(al.err).To(BeNil())
+			Expect(list.linkRequest).To(BeNil())
 			wg.Done()
 		}()
 
@@ -87,10 +88,11 @@ var _ = Describe("AvailableLinks", func() {
 
 		wg.Add(1)
 		go func() {
-			list.GetRequestPipe() <- &types.Request{}
-			Expect(list.lastLink).To(BeNil())
-			Expect(list.lastError).To(Equal(ErrLinkManagerReset))
-			Expect(list.lastPipe).To(BeNil())
+			al := list.GetRequestPipe()
+			al.Request() <- &types.Request{}
+			Expect(al.link).To(BeNil())
+			Expect(al.err).To(Equal(ErrLinkManagerReset))
+			Expect(list.linkRequest).To(BeNil())
 			wg.Done()
 		}()
 
@@ -107,24 +109,24 @@ var _ = Describe("AvailableLinks", func() {
 
 	It("should pipe wait for request and terminate on reset", func() {
 		list := newAvailableLinks()
-		pipe := list.GetRequestPipe()
+		al := list.GetRequestPipe()
 
 		link := &testLink{}
 		list.AddAvailable(link)
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(1))
-		expectedLink, _ := list.lastLink.(*testLink)
+		expectedLink, _ := al.link.(*testLink)
 		Expect(expectedLink).To(Equal(link))
-		var expectedPipe chan<- *types.Request = list.lastPipe
-		Expect(expectedPipe).To(Equal(pipe))
+		var expectedAl *AvailableLink = list.linkRequest
+		Expect(expectedAl).To(Equal(al))
 
 		list.Reset()
 		Expect(list.Len()).To(Equal(0))
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(0))
-		Expect(list.lastLink).To(BeNil())
-		Expect(list.lastError).To(Equal(ErrLinkManagerReset))
-		Expect(list.lastPipe).To(BeNil())
+		Expect(al.link).To(Not(BeNil()))
+		Expect(al.err).To(Equal(ErrLinkManagerReset))
+		Expect(list.linkRequest).To(BeNil())
 	})
 
 	It("should limit links", func() {
