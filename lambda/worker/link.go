@@ -123,8 +123,9 @@ func (ln *Link) Invalidate(err error) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.close()
+	// Set error first, so worker may read it later when it detect the failure.
 	ln.lastError = err
+	ln.close()
 }
 
 func (ln *Link) Close() {
@@ -147,11 +148,7 @@ func (ln *Link) Close() {
 func (ln *Link) close() {
 	if ln.Client != nil {
 		conn := ln.Client.Conn()
-		// // Don't use conn.Close(), it will stuck and wait.
-		// if tcp, ok := conn.(*net.TCPConn); ok {
-		// 	tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
-		// }
-		conn.Close()
+		conn.Close() // Use normal close to avoid unnecessary alert
 		ln.Client.Close()
 		ln.Client = nil
 	}
