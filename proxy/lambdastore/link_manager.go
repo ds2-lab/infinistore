@@ -84,7 +84,7 @@ func (m *LinkManager) SetControl(link *Connection) {
 	// Check pendings
 	for i := m.pendings.Front(); i != nil; i = m.pendings.Front() {
 		link := m.pendings.Remove(i).(*Connection)
-		if !m.addDataLinkLocked(link) {
+		if !m.addDataLinkLocked(link, false) {
 			// Still failed? Abandon.
 			link.Close()
 		}
@@ -108,18 +108,20 @@ func (m *LinkManager) AddDataLink(link *Connection) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.addDataLinkLocked(link)
+	return m.addDataLinkLocked(link, true)
 }
 
-func (m *LinkManager) addDataLinkLocked(link *Connection) bool {
-	link.BindInstance(m.instance)
+func (m *LinkManager) addDataLinkLocked(link *Connection, cache bool) bool {
 	// Datalinks can come earlier than ctrl link.
 	if m.ctrlLink == nil || m.ctrlLink.workerId != link.workerId {
-		m.pendings.PushBack(link)
+		if cache {
+			m.pendings.PushBack(link)
+		}
 		return false
 	}
 
-	link.SetId(atomic.AddUint32(&m.seq, 1))
+	link.Id = atomic.AddUint32(&m.seq, 1)
+	link.BindInstance(m.instance)
 	m.dataLinks.Insert(link.Id, link)
 	m.availables.AddAvailable(link) // No limit control here
 	m.log.Debug("Data link added:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
