@@ -63,13 +63,13 @@ func (m *LinkManager) GetLastControl() *Connection {
 func (m *LinkManager) SetControl(link *Connection) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.log.Debug("Set control %v -> %v", m.ctrlLink, link)
 
 	oldConn := m.ctrlLink
 
 	// Set instance, order matters here.
 	link.BindInstance(m.instance)
 	m.ctrlLink = link
-	m.log = link.log
 
 	// Clean up if worker(lambda) changed. To deal temprorary invalidated control, we check lastValidCtrl instead of oldConn
 	if m.lastValidCtrl != nil && link.workerId != m.lastValidCtrl.workerId {
@@ -78,6 +78,7 @@ func (m *LinkManager) SetControl(link *Connection) {
 	if oldConn != nil {
 		oldConn.Close()
 	}
+
 	m.lastValidCtrl = link
 
 	// Check pendings
@@ -88,6 +89,7 @@ func (m *LinkManager) SetControl(link *Connection) {
 			link.Close()
 		}
 	}
+	m.log.Debug("Set control done")
 }
 
 func (m *LinkManager) InvalidateControl(link manageableLink) {
@@ -99,6 +101,7 @@ func (m *LinkManager) InvalidateControl(link manageableLink) {
 	}
 
 	m.ctrlLink = nil
+	m.log.Debug("Invalidated control %v", link)
 }
 
 func (m *LinkManager) AddDataLink(link *Connection) bool {

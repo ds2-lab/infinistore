@@ -7,13 +7,15 @@ import (
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
-	RequestTimeout = 1 * time.Second
+	RequestTimeout  = 1 * time.Second
+	ResponseTimeout = 100 * time.Millisecond
 )
 
 type Preparer func(*SimpleResponse, resp.ResponseWriter)
@@ -57,7 +59,7 @@ type BaseResponse struct {
 	link      *Link
 	attempted int
 	err       error
-	done      sync.WaitGroup
+	done      promise.Promise
 	doneOnce  sync.Once
 	inst      Response
 	preparer  Preparer
@@ -78,8 +80,9 @@ func (r *BaseResponse) Prepare() {
 }
 
 func (r *BaseResponse) Flush() error {
-	r.done.Wait()
-	return r.err
+	// Timeout added here, sometimes redeo may not handle all responses.
+	r.done.SetTimeout(ResponseTimeout)
+	return r.done.Timeout()
 }
 
 func (r *BaseResponse) Size() int64 {
@@ -112,7 +115,7 @@ func (r *BaseResponse) bindImpl(inst Response, link *Link) {
 		if r.Attempts == 0 {
 			r.Attempts = MaxAttempts
 		}
-		r.done.Add(1)
+		r.done = promise.NewPromise()
 		r.inst = inst
 		r.link = link
 	}
@@ -182,8 +185,12 @@ func (r *BaseResponse) abandon(err error) {
 
 func (r *BaseResponse) close() {
 	if r.link != nil {
-		r.doneOnce.Do(r.done.Done)
+		r.doneOnce.Do(r.resolve)
 	}
+}
+
+func (r *BaseResponse) resolve() {
+	r.done.Resolve(&struct{}{})
 }
 
 type SimpleResponse struct {
