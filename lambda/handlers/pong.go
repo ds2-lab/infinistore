@@ -152,13 +152,9 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 
 		// Monitor and wait
 		go func() {
-			select {
-			case <-p.timeout.C:
-				// Timeout. retry
+			if p.waitTimeout() {
 				log.Warn("retry PONG")
 				p.sendImpl(flags, link, true)
-			case <-p.done:
-				return
 			}
 		}()
 	} else if link == nil {
@@ -167,13 +163,9 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 
 		// Monitor and wait
 		go func() {
-			select {
-			case <-p.timeout.C:
-				// Timeout. retry
+			if p.waitTimeout() {
 				log.Warn("PONG timeout, disconnect")
 				p.fail(link, &PongError{error: errPongTimeout, flags: flags})
-			case <-p.done:
-				return
 			}
 		}()
 	}
@@ -190,6 +182,21 @@ func (p *PongHandler) setTimeout(timeout time.Duration) {
 		}
 	}
 	p.timeout.Reset(timeout)
+}
+
+func (p *PongHandler) waitTimeout() bool {
+	select {
+	case <-p.timeout.C:
+		// Timeout. double confirm p.done.
+		select {
+		case <-p.done:
+			return false
+		default:
+			return true
+		}
+	case <-p.done:
+		return false
+	}
 }
 
 func pongLog(flags int64, link *worker.Link) {

@@ -433,9 +433,9 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 		return false
 	}
 
-	wrk.log.Debug("Token recycled.")
 	wrk.mu.Lock()
 	if wrk.availableTokens != nil {
+		wrk.log.Debug("Token recycled.")
 		wrk.availableTokens <- token
 	}
 	wrk.mu.Unlock()
