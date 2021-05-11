@@ -128,7 +128,7 @@ func (ln *Link) Invalidate(err error) {
 
 	// Set error first, so worker may read it later when it detect the failure.
 	ln.lastError = err
-	ln.close()
+	ln.close(true) // Force close.
 }
 
 func (ln *Link) IsClosed() bool {
@@ -140,7 +140,7 @@ func (ln *Link) Close() {
 	defer ln.mu.Unlock()
 
 	atomic.StoreInt32(&ln.once, LinkClosed)
-	ln.close()
+	ln.close(false)
 	// Drain responses
 	if len(ln.buff) > 0 {
 		for rsp := range ln.buff {
@@ -152,10 +152,16 @@ func (ln *Link) Close() {
 	}
 }
 
-func (ln *Link) close() {
+func (ln *Link) close(force bool) {
 	if ln.Client != nil {
 		conn := ln.Client.Conn()
-		conn.Close() // Use normal close to avoid unnecessary alert
+		if force {
+			// Don't use conn.Conn.Close(), it will stuck and wait for response. Too slow
+			if tcp, ok := conn.(*net.TCPConn); ok {
+				tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+			}
+		}
+		conn.Close()
 		ln.Client.Close()
 		ln.Client = nil
 	}

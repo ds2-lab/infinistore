@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -426,17 +427,20 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	return nil
 }
 
-func (wrk *Worker) flagReservationUsed(link *Link) {
+func (wrk *Worker) flagReservationUsed(link *Link) bool {
 	token := link.RevokeToken()
 	if token == nil {
-		return
+		return false
 	}
 
+	wrk.log.Debug("Token recycled.")
 	wrk.mu.Lock()
 	if wrk.availableTokens != nil {
 		wrk.availableTokens <- token
 	}
 	wrk.mu.Unlock()
+	runtime.Gosched() // Encourage create another connection quickly.
+	return true
 }
 
 // HandleCallback callback handler
