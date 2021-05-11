@@ -1030,7 +1030,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 	}
 
 	// Skip actions if we've seen it.
-	if !newSession {
+	if newSession {
 		// These two flags are exclusive because backing only mode will enable reclaimation claim and disable fast recovery.
 		if flags&protocol.PONG_RECOVERY > 0 {
 			ins.log.Debug("Parallel recovery requested.")
