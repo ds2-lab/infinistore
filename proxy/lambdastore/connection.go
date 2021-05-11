@@ -97,13 +97,6 @@ func (conn *Connection) BindInstance(ins *Instance) *Connection {
 	return conn
 }
 
-func (conn *Connection) SetId(id uint32) {
-	conn.Id = id
-	if l, ok := conn.log.(*logger.ColorLogger); ok && conn.instance != nil {
-		l.Prefix = fmt.Sprintf("%s%v ", conn.instance.log.(*logger.ColorLogger).Prefix, conn)
-	}
-}
-
 func (conn *Connection) SendControl(ctrl *types.Control) error {
 	switch ctrl.Name() {
 	case protocol.CMD_DATA:
