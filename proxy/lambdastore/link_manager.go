@@ -123,7 +123,7 @@ func (m *LinkManager) addDataLinkLocked(link *Connection, cache bool) bool {
 	link.Id = atomic.AddUint32(&m.seq, 1)
 	link.BindInstance(m.instance)
 	m.dataLinks.Insert(link.Id, link)
-	m.availables.AddAvailable(link) // No limit control here
+	m.availables.AddAvailable(link, true) // No limit control here
 	m.log.Debug("Data link added:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
 	return true
 }
@@ -145,7 +145,7 @@ func (m *LinkManager) FlagAvailableForRequest(link *Connection) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	added := m.availables.AddAvailable(link)
+	added := m.availables.AddAvailable(link, false)
 	if added {
 		m.log.Debug("Data link available: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
 	} else {
@@ -300,11 +300,11 @@ func (l *AvailableLinks) Reset() {
 	atomic.StoreInt32(&l.total, 0)
 }
 
-func (l *AvailableLinks) AddAvailable(link manageableLink) bool {
+func (l *AvailableLinks) AddAvailable(link manageableLink, nolimit bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.limit > 0 && int(atomic.LoadInt32(&l.total)) >= l.limit {
+	if !nolimit && l.limit > 0 && int(atomic.LoadInt32(&l.total)) >= l.limit {
 		return false
 	}
 

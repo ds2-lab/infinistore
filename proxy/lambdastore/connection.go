@@ -603,7 +603,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.BodyStream.(resp.Holdable).Hold()
 	defer rsp.BodyStream.Close()
 
-	conn.log.Debug("GOT %v, confirmed.", rsp.Id)
+	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
 	if req, ok := conn.SetResponse(rsp); !ok {
 		// Failed to set response, release hold.
 		rsp.BodyStream.(resp.Holdable).Unhold()

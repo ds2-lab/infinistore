@@ -44,7 +44,7 @@ var _ = Describe("AvailableLinks", func() {
 		Expect(list.Len()).To(Equal(0))
 
 		for i := 0; i < LinkBucketSize*2; i++ {
-			list.AddAvailable(&testLink{})
+			list.AddAvailable(&testLink{}, false)
 		}
 		Expect(list.Len()).To(Equal(LinkBucketSize * 2))
 
@@ -74,7 +74,7 @@ var _ = Describe("AvailableLinks", func() {
 			wg.Wait()
 		}, true)
 
-		list.AddAvailable(&testLink{})
+		list.AddAvailable(&testLink{}, false)
 		shouldTimeout(func() {
 			wg.Wait()
 		}, false)
@@ -112,7 +112,7 @@ var _ = Describe("AvailableLinks", func() {
 		al := list.GetRequestPipe()
 
 		link := &testLink{}
-		list.AddAvailable(link)
+		list.AddAvailable(link, false)
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(1))
 		expectedLink, _ := al.link.(*testLink)
@@ -133,23 +133,48 @@ var _ = Describe("AvailableLinks", func() {
 		list := newAvailableLinks()
 		list.SetLimit(1)
 
-		Expect(list.AddAvailable(&testLink{})).To(BeTrue())
+		Expect(list.AddAvailable(&testLink{}, false)).To(BeTrue())
 		Expect(list.Len()).To(Equal(1))
 
-		Expect(list.AddAvailable(&testLink{})).To(BeFalse())
+		Expect(list.AddAvailable(&testLink{}, false)).To(BeFalse())
 		Expect(list.Len()).To(Equal(1))
 
 		al := list.GetRequestPipe()
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(1))
-		Expect(list.AddAvailable(&testLink{})).To(BeFalse())
+		Expect(list.AddAvailable(&testLink{}, false)).To(BeFalse())
 		Expect(list.Len()).To(Equal(1))
 
 		al.Request() <- &types.Request{}
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(0))
 
-		Expect(list.AddAvailable(al.link)).To(BeTrue())
+		Expect(list.AddAvailable(al.link, false)).To(BeTrue())
+		Expect(list.Len()).To(Equal(1))
+
+		list.Reset()
+		Expect(list.Len()).To(Equal(0))
+	})
+
+	It("should no limit works", func() {
+		list := newAvailableLinks()
+		list.SetLimit(1)
+
+		Expect(list.AddAvailable(&testLink{}, false)).To(BeTrue())
+		Expect(list.Len()).To(Equal(1))
+
+		Expect(list.AddAvailable(&testLink{}, true)).To(BeTrue())
+		Expect(list.Len()).To(Equal(2))
+
+		al := list.GetRequestPipe()
+		runtime.Gosched()
+		Expect(list.Len()).To(Equal(2))
+
+		al.Request() <- &types.Request{}
+		runtime.Gosched()
+		Expect(list.Len()).To(Equal(1))
+
+		Expect(list.AddAvailable(al.link, false)).To(BeFalse())
 		Expect(list.Len()).To(Equal(1))
 
 		list.Reset()
@@ -163,7 +188,7 @@ var _ = Describe("AvailableLinks", func() {
 		// Prefill some
 		expected := 0
 		for i := 0; i < LinkBucketSize/2; i++ {
-			list.AddAvailable(&testLink{})
+			list.AddAvailable(&testLink{}, false)
 			expected++
 		}
 		producer := make(chan *testLink, LinkBucketSize*2)
@@ -174,7 +199,7 @@ var _ = Describe("AvailableLinks", func() {
 		for i := 0; i < LinkBucketSize; i++ {
 			go func() {
 				for link := range producer {
-					list.AddAvailable(link)
+					list.AddAvailable(link, false)
 				}
 				wg.Done()
 			}()

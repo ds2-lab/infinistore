@@ -379,6 +379,7 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 	if len(payload) > 0 {
 		session.Timeout.Busy(c.Name)
 		skip := true
+		cancelPong := true // For ping with payload, no immediate incoming request expected except certain tips has been set.
 
 		var pmeta protocol.Meta
 		if err := binary.Unmarshal(payload, &pmeta); err != nil {
@@ -389,32 +390,38 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 			log.Debug("PING meta: %v", pmeta)
 
 			// For now, only backup request supported.
-			meta, err := types.LineageMetaFromProtocol(&pmeta)
-			if err != nil {
+			if meta, err := types.LineageMetaFromProtocol(&pmeta); err != nil {
 				log.Warn("Error on get meta: %v", err)
-			}
-
-			consistent, err := Lineage.IsConsistent(meta)
-			if err != nil {
+			} else if consistent, err := Lineage.IsConsistent(meta); err != nil {
 				log.Warn("Error on check consistency: %v", err)
-			}
-
-			if !consistent {
-				skip = false
-				_, chanErr := Lineage.Recover(meta)
-				session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
-				go func() {
-					waitForRecovery(chanErr)
-					session.Timeout.DoneBusy(c.Name)
-				}()
 			} else {
-				log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
+				if meta.ServingKey() != "" {
+					cancelPong = false // Serving key is set and immediate incoming request is expected.
+				}
+				if !consistent {
+					skip = false
+					_, chanErr := Lineage.Recover(meta)
+					session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
+					go func() {
+						defer session.Timeout.DoneBusy(c.Name)
+						waitForRecovery(chanErr)
+					}()
+				} else {
+					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
+				}
 			}
 		}
 
+		if cancelPong {
+			handlers.Pong.Cancel()
+		}
 		if skip {
-			// No more request expected for a ping with payload (backup ping).
-			session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, c.Name)
+			if cancelPong {
+				// No more request expected for a ping with payload (backup ping).
+				session.Timeout.DoneBusyWithReset(lambdaLife.TICK_ERROR, c.Name)
+			} else {
+				session.Timeout.DoneBusy(c.Name)
+			}
 		}
 	}
 }

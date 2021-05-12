@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 
@@ -43,6 +44,9 @@ var (
 	SnapshotInterval = uint64(1)
 	// To minimize lineage recovery latency, try download the same file with multiple contenders.
 	LineageRecoveryContenders = 3
+
+	// Errors
+	ErrRecoveryInterrupted = errors.New("recovery interrupted")
 )
 
 // Storage with lineage
@@ -60,9 +64,10 @@ type LineageStorage struct {
 	lineageMu sync.RWMutex // Mutex for lienage commit.
 
 	// backup
-	backup        *hashmap.HashMap   // Just a index, all will be available to repo
-	backupMeta    *types.LineageMeta // Only one backup is effective at a time.
-	backupLocator protocol.BackupLocator
+	backup                  *hashmap.HashMap   // Just a index, all will be available to repo
+	backupMeta              *types.LineageMeta // Only one backup is effective at a time.
+	backupLocator           protocol.BackupLocator
+	backupRecoveryCanceller context.CancelFunc
 }
 
 func NewLineageStorage(id uint64) *LineageStorage {
@@ -375,14 +380,26 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
 			s.log.Debug("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
 			// Clean obsolete backups
+			if s.backupRecoveryCanceller != nil {
+				s.backupRecoveryCanceller()
+			}
 			s.ClearBackup()
 		}
 	}
 
 	// Flag get as unsafe
 	s.delayGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
+	ctx := context.Background()
+	if meta.Backup {
+		newCtx, cancel := context.WithCancel(ctx)
+		ctx = newCtx
+		s.backupRecoveryCanceller = func() {
+			s.backupRecoveryCanceller = nil
+			cancel()
+		}
+	}
 	chanErr := make(chan error, 1)
-	go s.doRecover(old, meta, chanErr)
+	go s.doRecover(ctx, old, meta, chanErr)
 
 	// Fast recovery if the node is not backup and significant enough.
 	return !meta.Backup && s.diffrank.IsSignificant(meta.DiffRank), chanErr
@@ -561,7 +578,7 @@ func (s *LineageStorage) doSnapshot(lineage *types.LineageTerm, uploader *s3mana
 	return ss, nil
 }
 
-func (s *LineageStorage) doRecover(lineage *types.LineageTerm, meta *types.LineageMeta, chanErr chan error) {
+func (s *LineageStorage) doRecover(ctx context.Context, lineage *types.LineageTerm, meta *types.LineageMeta, chanErr chan error) {
 	// Initialize s3 api
 	downloader := s.getS3Downloader()
 
@@ -572,6 +589,7 @@ func (s *LineageStorage) doRecover(lineage *types.LineageTerm, meta *types.Linea
 	if err != nil {
 		chanErr <- err
 	}
+	s.log.Debug("Lineage recovered %d.", meta.Meta.Id)
 
 	if len(terms) == 0 {
 		// No term recovered
@@ -589,6 +607,7 @@ func (s *LineageStorage) doRecover(lineage *types.LineageTerm, meta *types.Linea
 	tbds := s.doReplayLineage(meta, terms, numOps)
 	// Now get is safe
 	s.resetGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
+	s.log.Debug("Lineage replayed %d.", meta.Meta.Id)
 
 	// s.log.Debug("tbds %d: %v", meta.Meta.Id, tbds)
 	// for i, t := range tbds {
@@ -598,7 +617,7 @@ func (s *LineageStorage) doRecover(lineage *types.LineageTerm, meta *types.Linea
 	start2 := time.Now()
 	objectBytes := 0
 	if len(tbds) > 0 {
-		objectBytes, err = s.doRecoverObjects(tbds, downloader)
+		objectBytes, err = s.doRecoverObjects(ctx, tbds, downloader)
 	}
 	stop2 := time.Since(start2)
 	if err != nil {
@@ -777,7 +796,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	defer s.lineageMu.Unlock()
 
 	// Deal with the key that is currently serving.
-	servingKey := meta.Tips.Get(protocol.TIP_SERVING_KEY)
+	servingKey := meta.ServingKey()
 	if servingKey != "" {
 		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
 		chunk, existed := s.get(servingKey)
@@ -926,7 +945,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	return tbds
 }
 
-func (s *LineageStorage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.Downloader) (int, error) {
+func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chunk, downloader *mys3.Downloader) (int, error) {
 	// Setup receivers
 	inputs := make(chan *mys3.BatchDownloadObject, downloader.Concurrency)
 	chanNotify := make(chan interface{}, downloader.Concurrency)
@@ -938,8 +957,23 @@ func (s *LineageStorage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.
 
 	// Setup inputs for terms downloading.
 	more := true
+	ctxDone := ctx.Done()
+	cancelled := false
 	go func() {
+		defer close(inputs)
+
 		for i := 0; i < len(tbds); i++ {
+			// Check for terminate signal
+			if ctxDone != nil {
+				select {
+				case <-ctxDone:
+					more = false
+					cancelled = true // Flag terminated, wait for download consumes all scheduled. Then, the interrupted err will be returned.
+					return
+				default:
+				}
+			}
+
 			if tbds[i].Deleted {
 				// Skip deleted objects
 				atomic.AddUint32(&succeed, 1)
@@ -970,7 +1004,6 @@ func (s *LineageStorage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.
 				// s.log.Debug("Scheduled %s(%d)", *key, num)
 			}
 		}
-		close(inputs)
 		more = false
 		// s.log.Info("Inputs closed")
 	}()
@@ -980,7 +1013,10 @@ func (s *LineageStorage) doRecoverObjects(tbds []*types.Chunk, downloader *mys3.
 		// iter := &s3manager.DownloadObjectsIterator{ Objects: inputs }
 		ctx := aws.BackgroundContext()
 		ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
-		if err := downloader.DownloadWithIterator(ctx, inputs); err != nil {
+		err := downloader.DownloadWithIterator(ctx, inputs)
+		if cancelled {
+			chanError <- ErrRecoveryInterrupted
+		} else if err != nil {
 			s.log.Error("error on download objects: %v", err)
 			chanError <- err
 		}
