@@ -185,7 +185,7 @@ func (d *Downloader) downloadWithIterator(ctx aws.Context, iter chan *BatchDownl
 
 	// Launch object downloaders
 	for i := 0; i < len(backends); i++ {
-		wg.Add(1)
+		wg.Add(1) // Added: download thread
 		go d.download(ctx, backends[i], iter, chanErr, &wg)
 	}
 
@@ -194,13 +194,13 @@ func (d *Downloader) downloadWithIterator(ctx aws.Context, iter chan *BatchDownl
 		for err := range chanErr {
 			errs = append(errs, err)
 		}
-		wg.Done()
+		wg.Done() // Done: close chanErr
 	}()
 
 	wg.Wait()
 
 	// Wait for chanErr
-	wg.Add(1)
+	wg.Add(1) // Added: close chanErr
 	close(chanErr)
 	wg.Wait()
 
@@ -211,7 +211,7 @@ func (d *Downloader) downloadWithIterator(ctx aws.Context, iter chan *BatchDownl
 }
 
 func (d *Downloader) download(ctx aws.Context, downloader *s3manager.Downloader, ch chan *BatchDownloadObject, errs chan s3manager.Error, wg *sync.WaitGroup) {
-	defer wg.Done()
+	defer wg.Done() // Done: download thread
 
 	// log := ctx.Value(&ContextKeyLog).(logger.ILogger)
 	for object := range ch {

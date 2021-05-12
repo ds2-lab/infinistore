@@ -5,29 +5,30 @@ go 1.12
 require (
 	github.com/ScottMansfield/nanolog v0.2.0
 	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751 // indirect
-	github.com/aws/aws-lambda-go v1.16.0
-	github.com/aws/aws-sdk-go v1.31.0
-	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
+	github.com/aws/aws-lambda-go v1.23.0
+	github.com/aws/aws-sdk-go v1.38.38
+	github.com/buraksezer/consistent v0.9.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
-	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
+	github.com/dgryski/go-metro v0.0.0-20200812162917-85c65e2d0165 // indirect
 	github.com/gizak/termui/v3 v3.1.0
-	github.com/google/uuid v1.1.1
+	github.com/go-sql-driver/mysql v1.5.0 // indirect
+	github.com/google/uuid v1.2.0
 	github.com/jordwest/mock-conn v0.0.0-20180617021051-4896c6bd1641
-	github.com/kelindar/binary v1.0.8
-	github.com/klauspost/cpuid v1.2.3 // indirect
-	github.com/klauspost/reedsolomon v1.9.3
-	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mason-leap-lab/redeo v1.1.7
-	github.com/mattn/go-colorable v0.1.6 // indirect
-	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b
+	github.com/kelindar/binary v1.0.9
+	github.com/klauspost/cpuid v1.3.1 // indirect
+	github.com/klauspost/reedsolomon v1.9.12
+	github.com/kr/pretty v0.2.1 // indirect
+	github.com/mason-leap-lab/redeo v1.1.8
+	github.com/mattn/go-colorable v0.1.8 // indirect
+	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d
-	github.com/onsi/ginkgo v1.12.0
-	github.com/onsi/gomega v1.9.0
-	github.com/prometheus/common v0.13.0
-	github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7
-	github.com/stretchr/objx v0.2.0 // indirect
-	github.com/urfave/cli v1.22.1 // indirect
+	github.com/nsf/termbox-go v1.1.1
+	github.com/onsi/ginkgo v1.16.2
+	github.com/onsi/gomega v1.12.0
+	github.com/prometheus/common v0.24.0
+	github.com/seiflotfy/cuckoofilter v0.0.0-20201222105146-bc6005554a0c
+	github.com/stretchr/objx v0.3.0 // indirect
+	github.com/urfave/cli v1.22.5 // indirect
 	github.com/zhangjyr/hashmap v1.0.2
 )

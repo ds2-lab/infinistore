@@ -184,18 +184,19 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 		chunks[i] = ret.Ret(i)
 		if chunks[i] == nil {
 			failed++
+		} else if len(chunks[i]) == 0 {
+			log.Warn("Detect empty chunk %s(%d)", stats.ReqId, i)
+			empties++
 		} else {
 			succeed++
 		}
-		if len(chunks[i]) == 0 {
-			empties++
-		}
+
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Failed chucks %d, succeed %d, empties %d", failed, succeed, empties)
+		log.Warn("Stats of %s: failed %d, succeed %d, empties %d", stats.ReqId, failed, succeed, empties)
 		return stats.ReqId, nil, false
 	}
 
@@ -241,6 +242,10 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 	}
 
 	for attemp := 0; attemp < RequestAttempts; attemp++ {
+		if attemp > 0 {
+			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
+		}
+
 		if err := c.validate(addr, i); err != nil {
 			c.setError(ret, addr, i, err)
 			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
@@ -264,6 +269,7 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
 		if err := w.Flush(); err != nil {
 			log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+			c.disconnect(addr, i)
 			continue
 		}
 
@@ -272,20 +278,17 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
 		if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
 			log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
+			c.disconnect(addr, i)
 			continue
 		}
 		if err := w.Flush(); err != nil {
 			log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
+			c.disconnect(addr, i)
 			continue
 		}
 		cn.conn.SetWriteDeadline(time.Time{})
 
-		if attemp == 0 {
-			log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
-		} else {
-			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
-		}
-
+		log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
 		c.recvSet("Set", addr, reqId, i, ret, nil)
 		return
 	}
@@ -299,7 +302,11 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		defer wg.Done()
 	}
 
-	for attemp := 0; attemp < RequestAttempts; attemp++ {
+	for attempt := 0; attempt < RequestAttempts; attempt++ {
+		if attempt > 0 {
+			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attempt+1)
+		}
+
 		if err := c.validate(addr, i); err != nil {
 			c.setError(ret, addr, i, err)
 			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
@@ -318,20 +325,16 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		//if err := c.W[i].Flush(); err != nil {
 		if err := cn.W.Flush(); err != nil {
 			log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
+			c.disconnect(addr, i)
 			continue
 		}
 		cn.conn.SetWriteDeadline(time.Time{})
-
-		if attemp == 0 {
-			log.Debug("Initiated getting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
-		} else {
-			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
-		}
 
 		// if !c.recvPong("", addr, reqId, i) {
 		// 	continue
 		// }
 
+		log.Debug("Initiated getting %d@%s(%s), attempt %d", i, key, addr, attempt+1)
 		c.recvGet("Got", addr, reqId, i, ret, nil)
 		return
 	}
@@ -412,7 +415,7 @@ func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *e
 		return
 	}
 
-	log.Debug("%s chunk %d", prompt, i)
+	log.Debug("%s chunk %s(%d)", prompt, reqId, i)
 	ret.Set(i, storeId)
 }
 
@@ -459,7 +462,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 		// This is what expected
 		break
 	default:
-		err := fmt.Errorf("nexpected response type %v", type0)
+		err := fmt.Errorf("unexpected response type %v", type0)
 		log.Warn("Error on receiving chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		c.disconnect(addr, i)
@@ -481,7 +484,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 
 	// Abandon?
 	if chunkId == "-1" {
-		log.Debug("Abandon late chunk %d", i)
+		log.Debug("Abandon late chunk %s(%d)", reqId, i)
 		ret.Set(i, nil)
 		return
 	}
@@ -490,13 +493,17 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	cn.conn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := cn.R.StreamBulk()
 	if err != nil {
-		log.Warn("Error on getting reader of received chunk %d: %v", i, err)
+		log.Warn("Error on getting reader of received chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
+	if valReader.Len() == 0 {
+		log.Warn("Got empty chunk %s(%d)", reqId, i)
+	}
+
 	val, err := valReader.ReadAll()
 	if err != nil {
-		log.Error("Error on steaming received chunk %d: %v", i, err)
+		log.Warn("Error on steaming received chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
@@ -506,7 +513,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 		atomic.CompareAndSwapInt64(&ret.Size, 0, size)
 	}
 
-	log.Debug("%s chunk %d", prompt, i)
+	log.Debug("%s chunk %s(%d)", prompt, reqId, i)
 	ret.Set(i, val)
 }
 
