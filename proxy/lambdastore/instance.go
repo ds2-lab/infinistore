@@ -30,10 +30,11 @@ import (
 )
 
 const (
-	INSTANCE_MASK_STATUS_START      = 0x000F
-	INSTANCE_MASK_STATUS_CONNECTION = 0x00F0
-	INSTANCE_MASK_STATUS_BACKING    = 0x0F00
-	INSTANCE_MASK_STATUS_LIFECYCLE  = 0xF000
+	INSTANCE_MASK_STATUS_START      = 0x0000000F
+	INSTANCE_MASK_STATUS_CONNECTION = 0x000000F0
+	INSTANCE_MASK_STATUS_BACKING    = 0x00000F00
+	INSTANCE_MASK_STATUS_LIFECYCLE  = 0x0000F000
+	INSTANCE_MASK_STATUS_FAILURE    = 0xF0000000
 
 	// Start status
 	INSTANCE_UNSTARTED = 0
@@ -63,6 +64,9 @@ const (
 	PHASE_RECLAIMED    = 2 // Instance has been reclaimed.
 	PHASE_EXPIRED      = 3 // Instance is expired, no invocation will be made, and it is safe to recycle.
 
+	// Abnormal status
+	FAILURE_MAX_QUEUE_REACHED = 1
+
 	MAX_CMD_QUEUE_LEN = 10
 	MAX_ATTEMPTS      = 3
 	TEMP_MAP_SIZE     = 10
@@ -87,7 +91,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ResponseTimeout       = 2 * time.Second
-	MinValidationInterval = 80 * time.Millisecond // The minimum interval between validations.
+	MinValidationInterval = 20 * time.Millisecond // The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -219,17 +223,22 @@ func (ins *Instance) Status() uint64 {
 	// 0x00F0  connection
 	// 0x0F00  backing
 	var backing uint64
+	var failure uint64
 	if ins.IsRecovering() {
 		backing += INSTANCE_RECOVERING
 	}
 	if ins.IsBacking(true) {
 		backing += INSTANCE_BACKING
 	}
+	if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
+		failure += FAILURE_MAX_QUEUE_REACHED
+	}
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +
 		(uint64(atomic.LoadUint32(&ins.awakeness)) << 4) +
 		(backing << 8) +
-		(uint64(atomic.LoadUint32(&ins.phase)) << 12)
+		(uint64(atomic.LoadUint32(&ins.phase)) << 12) +
+		(failure << 28)
 }
 
 func (ins *Instance) Description() string {
@@ -650,77 +659,76 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return nil, ErrInstanceClosed
 	}
 
-	lastResolved := ins.validated.ResolvedAt()
-	// 1. resolved
-	// 2. last validation succeeded and time since lastResolved >= MinValidationInterval
-	// 3. or something wrong on last validating (must be ignorable)
-	if (lastResolved != time.Time{} && (ins.validated.Error() != nil || time.Since(lastResolved) >= MinValidationInterval)) {
-		// For reclaimed instance, simply return the result of last validation.
-		// if ins.IsReclaimed() {
-		// 	return castValidatedConnection(ins.validated)
-		// }
-
-		// Not validating. Validate...
-		ins.validated.ResetWithOptions(opt)
+	// 1. Unresolved: wait for validation result.
+	// 2: MinValidationInterval has not passed since last successful valiation: avoid frequent heartbeat.
+	if !ins.validated.IsResolved() ||
+		(ins.validated.Error() == nil && atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval) {
 		ins.mu.Unlock()
-
-		connectTimeout := DefaultConnectTimeout
-		// for::attemps
-		for {
-			ins.log.Debug("Validating...")
-			// Try invoking the lambda node.
-			// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
-			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
-			if triggered {
-				// Pass to timeout check.
-				ins.validated.SetTimeout(TriggerTimeout)
-				connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
-			} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
-				// Instance is warm, skip unnecssary warming up.
-				return ins.flagValidatedLocked(ins.lm.GetControl()) // Skip any check in the "FlagValidated".
-			} else {
-				// If instance is active, PING is issued to ensure active
-				// Closed safe: On closing, ctrlLink will be nil. By keeping a local copy and checking it is not nil, it is safe to make PING request.
-				//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
-				ctrl := ins.lm.GetControl() // Make a reference copy of ctrlLink to avoid it being changed.
-				if ctrl != nil {
-					if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
-						ins.log.Debug("Ping with payload")
-						ctrl.Ping(opt.Command.(*types.Control).Payload)
-					} else {
-						ctrl.Ping(DefaultPingPayload)
-					}
-				} // Ctrl can be nil if disconnected, simply wait for timeout and retry
-
-				ins.validated.SetTimeout(connectTimeout)
-			}
-
-			// Start timeout, possibitilities are:
-			// 1. ping may get stucked anytime.
-			// 2. pong may lost (both after triggered or after ping), especially pong retrial has been disabled at lambda side.
-			// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
-			// ins.validated.SetTimeout(connectTimeout) // moved to above for different circumstances.
-
-			// Wait for timeout or validation get concluded
-			// Closed safe: On closing, validation will be concluded.
-			if err := ins.validated.Timeout(); err == promise.ErrTimeout {
-				// Exponential backoff
-				connectTimeout *= time.Duration(BackoffFactor)
-				if connectTimeout > MaxConnectTimeout {
-					// Time to abandon
-					return ins.flagValidatedLocked(nil, ErrValidationTimeout)
-				}
-				ins.log.Warn("Timeout on validating, re-ping...")
-			} else {
-				// Validated.
-				return castValidatedConnection(ins.validated)
-			}
-		} // End of for::attemps
-	} else {
-		// Validating... Wait.
-		ins.mu.Unlock()
+		// Return last validated connection or wait.
 		return castValidatedConnection(ins.validated)
 	}
+
+	// For reclaimed instance, simply return the result of last validation.
+	// if ins.IsReclaimed() {
+	// 	return castValidatedConnection(ins.validated)
+	// }
+
+	// Not validating. Validate...
+	ins.validated.ResetWithOptions(opt)
+	ins.mu.Unlock()
+
+	connectTimeout := DefaultConnectTimeout
+	// for::attemps
+	for {
+		ins.log.Debug("Validating...")
+		// Try invoking the lambda node.
+		// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
+		triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
+		if triggered {
+			// Pass to timeout check.
+			ins.validated.SetTimeout(TriggerTimeout)
+			connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
+		} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
+			// Instance is warm, skip unnecssary warming up.
+			return ins.flagValidatedLocked(ins.lm.GetControl()) // Skip any check in the "FlagValidated".
+		} else {
+			// If instance is active, PING is issued to ensure active
+			// Closed safe: On closing, ctrlLink will be nil. By keeping a local copy and checking it is not nil, it is safe to make PING request.
+			//   Like invoking, closed status will be checked in TryFlagValidated on processing the PONG.
+			ctrl := ins.lm.GetControl() // Make a reference copy of ctrlLink to avoid it being changed.
+			if ctrl != nil {
+				if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
+					ins.log.Debug("Ping with payload")
+					ctrl.Ping(opt.Command.(*types.Control).Payload)
+				} else {
+					ctrl.Ping(DefaultPingPayload)
+				}
+			} // Ctrl can be nil if disconnected, simply wait for timeout and retry
+
+			ins.validated.SetTimeout(connectTimeout)
+		}
+
+		// Start timeout, possibitilities are:
+		// 1. ping may get stucked anytime.
+		// 2. pong may lost (both after triggered or after ping), especially pong retrial has been disabled at lambda side.
+		// TODO: In this version, no switching and unmanaged instance is handled. So ping will re-ping forever until being activated or proved to be sleeping.
+		// ins.validated.SetTimeout(connectTimeout) // moved to above for different circumstances.
+
+		// Wait for timeout or validation get concluded
+		// Closed safe: On closing, validation will be concluded.
+		if err := ins.validated.Timeout(); err == promise.ErrTimeout {
+			// Exponential backoff
+			connectTimeout *= time.Duration(BackoffFactor)
+			if connectTimeout > MaxConnectTimeout {
+				// Time to abandon
+				return ins.flagValidatedLocked(nil, ErrValidationTimeout)
+			}
+			ins.log.Warn("Timeout on validating, re-ping...")
+		} else {
+			// Validated.
+			return castValidatedConnection(ins.validated)
+		}
+	} // End of for::attemps
 }
 
 func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {

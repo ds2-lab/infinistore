@@ -129,13 +129,21 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 
 	if !conn.control {
 		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
-		conn.chanWait <- req
-		return conn.sendRequest(req)
+		select {
+		case conn.chanWait <- req:
+			return conn.sendRequest(req)
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
+		}
 	} else if useDataLink {
 		conn.log.Debug("Waiting for available data link %v", req)
 		availableLink := conn.lm.GetAvailableForRequest()
-		availableLink.Request() <- req
-		return availableLink.Error()
+		select {
+		case availableLink.Request() <- req:
+			return availableLink.Error()
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
+		}
 	} else {
 		conn.log.Debug("Waiting for available link %v", req)
 		availableLink := conn.lm.GetAvailableForRequest()
@@ -144,6 +152,8 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 			return conn.sendRequest(req)
 		case availableLink.Request() <- req:
 			return availableLink.Error()
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
 		}
 	}
 }
