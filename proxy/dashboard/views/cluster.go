@@ -146,7 +146,9 @@ func (v *ClusterView) getCellByInstance(ins types.InstanceStats) *drawille.Cell 
 }
 
 func (v *ClusterView) getColorByStatus(status uint64) ui.Color {
-	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
+	if status&lambdastore.INSTANCE_MASK_STATUS_FAILURE > 0 {
+		return ui.ColorRed
+	} else if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
 		// Unstarted
 		return ui.ColorWhite
 	} else if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing&lambdastore.INSTANCE_RECOVERING > 0 {

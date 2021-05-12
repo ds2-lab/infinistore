@@ -28,7 +28,7 @@ var (
 	ErrUnexpectedResponse      = errors.New("unexpected response")
 	ErrUnexpectedPreflightPong = errors.New("unexpected preflight pong")
 	ErrMaxPreflightsReached    = errors.New("max preflight attemps reached")
-	PreflightAttempts          = 3
+	RequestAttempts            = 3
 )
 
 func init() {
@@ -240,50 +240,58 @@ func (c *Client) set(addr string, key string, reqId string, size int, i int, val
 		defer wg.Done()
 	}
 
-	if err := c.validate(addr, i); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+	for attemp := 0; attemp < RequestAttempts; attemp++ {
+		if err := c.validate(addr, i); err != nil {
+			c.setError(ret, addr, i, err)
+			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+			return
+		}
+		cn := c.conns[addr][i]
+		w := cn.W
+
+		cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
+		defer cn.conn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
+
+		w.WriteMultiBulkSize(10)
+		w.WriteBulkString(protocol.CMD_SET_CHUNK)
+		w.WriteBulkString(key)
+		w.WriteBulkString(reqId)
+		w.WriteBulkString(strconv.Itoa(size))
+		w.WriteBulkString(strconv.Itoa(i))
+		w.WriteBulkString(strconv.Itoa(c.DataShards))
+		w.WriteBulkString(strconv.Itoa(c.ParityShards))
+		w.WriteBulkString(strconv.Itoa(lambdaId))
+		w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
+		if err := w.Flush(); err != nil {
+			log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+			continue
+		}
+
+		// Flush pipeline
+		//if err := c.W[i].Flush(); err != nil {
+		cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
+		if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
+			log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
+			continue
+		}
+		if err := w.Flush(); err != nil {
+			log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
+			continue
+		}
+		cn.conn.SetWriteDeadline(time.Time{})
+
+		if attemp == 0 {
+			log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
+		} else {
+			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
+		}
+
+		c.recvSet("Set", addr, reqId, i, ret, nil)
 		return
 	}
-	cn := c.conns[addr][i]
-	w := cn.W
 
-	cn.conn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
-	defer cn.conn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
-
-	w.WriteMultiBulkSize(10)
-	w.WriteBulkString(protocol.CMD_SET_CHUNK)
-	w.WriteBulkString(key)
-	w.WriteBulkString(reqId)
-	w.WriteBulkString(strconv.Itoa(size))
-	w.WriteBulkString(strconv.Itoa(i))
-	w.WriteBulkString(strconv.Itoa(c.DataShards))
-	w.WriteBulkString(strconv.Itoa(c.ParityShards))
-	w.WriteBulkString(strconv.Itoa(lambdaId))
-	w.WriteBulkString(strconv.Itoa(MaxLambdaStores))
-	if err := w.Flush(); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-
-	// Flush pipeline
-	//if err := c.W[i].Flush(); err != nil {
-	cn.conn.SetWriteDeadline(time.Now().Add(Timeout))
-	if err := w.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-	if err := w.Flush(); err != nil {
-		c.setError(ret, addr, i, err)
-		log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
-		return
-	}
-	cn.conn.SetWriteDeadline(time.Time{})
-
-	log.Debug("Initiated setting %d@%s(%s)", i, key, addr)
-	c.recvSet("Set", addr, reqId, i, ret, nil)
+	log.Warn("Stop attempts to set %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
+	c.setError(ret, addr, i, ErrMaxPreflightsReached)
 }
 
 func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
@@ -291,7 +299,7 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		defer wg.Done()
 	}
 
-	for attemp := 0; attemp < PreflightAttempts; attemp++ {
+	for attemp := 0; attemp < RequestAttempts; attemp++ {
 		if err := c.validate(addr, i); err != nil {
 			c.setError(ret, addr, i, err)
 			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
@@ -309,9 +317,8 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 		// Flush pipeline
 		//if err := c.W[i].Flush(); err != nil {
 		if err := cn.W.Flush(); err != nil {
-			c.setError(ret, addr, i, err)
 			log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
-			return
+			continue
 		}
 		cn.conn.SetWriteDeadline(time.Time{})
 
@@ -321,33 +328,35 @@ func (c *Client) get(addr string, key string, reqId string, i int, ret *ecRet, w
 			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
 		}
 
-		if c.recvPong("", addr, reqId, i) {
-			c.recvGet("Got", addr, reqId, i, ret, nil)
-			return
-		}
+		// if !c.recvPong("", addr, reqId, i) {
+		// 	continue
+		// }
+
+		c.recvGet("Got", addr, reqId, i, ret, nil)
+		return
 	}
 
-	log.Warn("Stop attempts %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
+	log.Warn("Stop attempts to get %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
 	c.setError(ret, addr, i, ErrMaxPreflightsReached)
 }
 
-func (c *Client) recvPong(prompt string, addr string, reqId string, i int) bool {
-	cn := c.conns[addr][i]
-	// Set deadline for preflight pong
-	cn.conn.SetReadDeadline(time.Now().Add(PreflightTimeout))
-	defer cn.conn.SetReadDeadline(time.Time{})
+// func (c *Client) recvPong(prompt string, addr string, reqId string, i int) bool {
+// 	cn := c.conns[addr][i]
+// 	// Set deadline for preflight pong
+// 	cn.conn.SetReadDeadline(time.Now().Add(PreflightTimeout))
+// 	defer cn.conn.SetReadDeadline(time.Time{})
 
-	// Check error
-	pong, err := cn.R.ReadBulkString()
-	if err == nil && pong != protocol.CMD_PONG {
-		err = ErrUnexpectedPreflightPong
-	}
-	if err != nil {
-		log.Debug("Error on receiving preflight pong %s(%d): %v", reqId, i, err)
-		c.disconnect(addr, i)
-	}
-	return err == nil
-}
+// 	// Check error
+// 	pong, err := cn.R.ReadBulkString()
+// 	if err == nil && pong != protocol.CMD_PONG {
+// 		err = ErrUnexpectedPreflightPong
+// 	}
+// 	if err != nil {
+// 		log.Debug("Error on receiving preflight pong %s(%d): %v", reqId, i, err)
+// 		c.disconnect(addr, i)
+// 	}
+// 	return err == nil
+// }
 
 func (c *Client) recvSet(prompt string, addr string, reqId string, i int, ret *ecRet, wg *sync.WaitGroup) {
 	if wg != nil {
