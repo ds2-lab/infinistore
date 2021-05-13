@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
@@ -638,38 +637,38 @@ func main() {
 				// 	reader.ReadBulkString() // test
 				// }
 
-				consumeDataPongs := func(wait bool, shortcuts ...*protocol.ShortcutConn) {
-					var wg sync.WaitGroup
-					for _, shortcut := range shortcuts {
-						if wait {
-							wg.Add(1)
-						}
-						go func(shortcut *protocol.ShortcutConn) {
-							client := worker.NewClient(shortcut.Conns[0].Server, false)
-							readPong(client.Reader)
-							log.Info("Data PONG received %v", shortcut.Conns[0])
-							if wait {
-								wg.Done()
-							}
-						}(shortcut)
-					}
-					if wait {
-						wg.Wait()
-					}
-				}
+				// consumeDataPongs := func(wait bool, shortcuts ...*protocol.ShortcutConn) {
+				// 	var wg sync.WaitGroup
+				// 	for _, shortcut := range shortcuts {
+				// 		if wait {
+				// 			wg.Add(1)
+				// 		}
+				// 		go func(shortcut *protocol.ShortcutConn) {
+				// 			client := worker.NewClient(shortcut.Conns[0].Server, false)
+				// 			readPong(client.Reader)
+				// 			log.Info("Data PONG received %v", shortcut.Conns[0])
+				// 			if wait {
+				// 				wg.Done()
+				// 			}
+				// 		}(shortcut)
+				// 	}
+				// 	if wait {
+				// 		wg.Wait()
+				// 	}
+				// }
 
-				changeConnection := func(shortcut *protocol.ShortcutConn, nick string, cut bool, permanent ...bool) net.Conn {
-					old := shortcut.Conns[0]
-					shortcut.Conns[0] = protocol.NewMockConn(shortcut.Address+nick, 0)
-					if cut {
-						if len(permanent) > 0 && permanent[0] {
-							old.Server.Close()
-						} else {
-							old.Close()
-						}
-					}
-					return shortcut.Conns[0].Server
-				}
+				// changeConnection := func(shortcut *protocol.ShortcutConn, nick string, cut bool, permanent ...bool) net.Conn {
+				// 	old := shortcut.Conns[0]
+				// 	shortcut.Conns[0] = protocol.NewMockConn(shortcut.Address+nick, 0)
+				// 	if cut {
+				// 		if len(permanent) > 0 && permanent[0] {
+				// 			old.Server.Close()
+				// 		} else {
+				// 			old.Close()
+				// 		}
+				// 	}
+				// 	return shortcut.Conns[0].Server
+				// }
 
 				alldone.Add(1)
 				// Proxy simulator
@@ -687,65 +686,71 @@ func main() {
 					// 	readPong(ctrlClient.Reader)
 					// }
 
-					// Prepare data connection 1 and consume pong
-					shourtcutData := protocol.Shortcut.Prepare("data", 0, 1)
-					input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData.Address)
-					clients := make(chan *worker.Client, 1)
+					ctrlClient := worker.NewClient(shortcutCtrl.Conns[0].Server, true)
+					readPong(ctrlClient.Reader)
+					log.Info("Ctrl PONG received %v", shortcutCtrl.Conns[0])
+					ready <- struct{}{}
 
-					go func() {
-						// Zombie link test
-						changeConnection(shortcutCtrl, "-No2", false) // Prepare a new connection
-						time.Sleep(40 * time.Millisecond)             // Wait for ack timeout
+					// Dynamic data link test
+					// // Prepare data connection 1 and consume pong
+					// shourtcutData := protocol.Shortcut.Prepare("data", 0, 1)
+					// input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData.Address)
+					// clients := make(chan *worker.Client, 1)
 
-						ctrlClient := worker.NewClient(shortcutCtrl.Conns[0].Server, true)
-						readPong(ctrlClient.Reader)
-						log.Info("Ctrl PONG received %v", shortcutCtrl.Conns[0])
-						ready <- struct{}{}
-						select {
-						case clients <- ctrlClient:
-						default:
-						}
-						validated.Done()
-					}()
+					// go func() {
+					// 	// Zombie link test
+					// 	changeConnection(shortcutCtrl, "-No2", false) // Prepare a new connection
+					// 	time.Sleep(40 * time.Millisecond)             // Wait for ack timeout
 
-					go func() {
-						consumeDataPongs(true, shourtcutData)
-						select {
-						case clients <- worker.NewClient(shourtcutData.Conns[0].Server, false):
-							// Prepare data connection 2 and consume pong
-							shourtcutData2 := protocol.Shortcut.Prepare("data", 1, 1)
-							input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData2.Address)
-							consumeDataPongs(false, shourtcutData2)
-						default:
-						}
-					}()
+					// 	ctrlClient := worker.NewClient(shortcutCtrl.Conns[0].Server, true)
+					// 	readPong(ctrlClient.Reader)
+					// 	log.Info("Ctrl PONG received %v", shortcutCtrl.Conns[0])
+					// 	ready <- struct{}{}
+					// 	select {
+					// 	case clients <- ctrlClient:
+					// 	default:
+					// 	}
+					// 	validated.Done()
+					// }()
 
-					// Get key (recovery if not load)
-					validated.Wait()
-					log.Info("Validated, %d", len(clients))
-					client := <-clients
-					log.Info("Client from ctrl: %v", client.Ctrl)
-					client.Writer.WriteMultiBulkSize(5)
-					client.Writer.WriteBulkString(protocol.CMD_GET)
-					client.Writer.WriteBulkString("dummy request id")
-					client.Writer.WriteBulkString("1")
-					client.Writer.WriteBulkString("obj-1-9")
-					client.Writer.WriteBulkString("100000")
-					client.Writer.Flush()
+					// go func() {
+					// 	consumeDataPongs(true, shourtcutData)
+					// 	select {
+					// 	case clients <- worker.NewClient(shourtcutData.Conns[0].Server, false):
+					// 		// Prepare data connection 2 and consume pong
+					// 		shourtcutData2 := protocol.Shortcut.Prepare("data", 1, 1)
+					// 		input.ProxyAddr.(*protocol.QueueAddr).Push(shourtcutData2.Address)
+					// 		consumeDataPongs(false, shourtcutData2)
+					// 	default:
+					// 	}
+					// }()
 
-					time.Sleep(5 * time.Millisecond) // Let lambda run
+					// // Get key (recovery if not load)
+					// validated.Wait()
+					// log.Info("Validated, %d", len(clients))
+					// client := <-clients
+					// log.Info("Client from ctrl: %v", client.Ctrl)
+					// client.Writer.WriteMultiBulkSize(5)
+					// client.Writer.WriteBulkString(protocol.CMD_GET)
+					// client.Writer.WriteBulkString("dummy request id")
+					// client.Writer.WriteBulkString("1")
+					// client.Writer.WriteBulkString("obj-1-9")
+					// client.Writer.WriteBulkString("100000")
+					// client.Writer.Flush()
 
-					// Error response
-					// msg, _ := ctrlClient.Reader.ReadError()
-					// log.Error("error: %v", msg)
+					// time.Sleep(5 * time.Millisecond) // Let lambda run
 
-					// Success response
-					client.Reader.ReadBulkString()            // cmd
-					client.Reader.ReadBulkString()            // reqid
-					client.Reader.ReadBulkString()            // chunk id
-					client.Reader.ReadInt()                   // recovery
-					data, _ := client.Reader.ReadBulkString() // stream
-					log.Info("Recovered data of size: %v", len(data))
+					// // Error response
+					// // msg, _ := ctrlClient.Reader.ReadError()
+					// // log.Error("error: %v", msg)
+
+					// // Success response
+					// client.Reader.ReadBulkString()            // cmd
+					// client.Reader.ReadBulkString()            // reqid
+					// client.Reader.ReadBulkString()            // chunk id
+					// client.Reader.ReadInt()                   // recovery
+					// data, _ := client.Reader.ReadBulkString() // stream
+					// log.Info("Recovered data of size: %v", len(data))
 
 					// <-ended
 
