@@ -96,7 +96,7 @@ func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (string
 		doubleCheck = true
 	} else {
 		note := atomic.LoadUint32(&s.safenote)
-		if (!chunk.Backup && (note&RECOVERING_MAIN) > 0) && chunk.Term <= s.lineage.Term ||
+		if (!chunk.Backup && (note&RECOVERING_MAIN) > 0 && chunk.Term <= s.lineage.Term) || // Objects of Term beyond lineage.Term are newly set.
 			(chunk.Backup && (note&RECOVERING_BACKUP) > 0) {
 			// Corresponding lineage is recovering, and the chunk is not just set
 			doubleCheck = true
@@ -114,8 +114,8 @@ func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (string
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
 	} else if atomic.LoadUint64(&chunk.Available) == chunk.Size {
-		// Not recovering
 		if chunk.Body == nil {
+			// Not recovering
 			return "", nil, types.OpError(types.ErrNotFound)
 		} else {
 			return chunk.Id, chunk.Access(), types.OpSuccess()
@@ -412,6 +412,7 @@ func (s *LineageStorage) ClearBackup() {
 		s.repo.Del(keyValue.Key)
 		s.backup.Del(keyValue.Key)
 	}
+	s.backupMeta = nil
 }
 
 func (s *LineageStorage) doCommit(opt *types.CommitOption) {
@@ -852,6 +853,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 					chunk.Term = term.Term
 					chunk.Accessed = op.Accessed
 					chunk.Bucket = op.Bucket
+					chunk.Available = 0
 					// Unlikely, the servingKey can be RESET (see comments below)
 					// For servingKey, the chunk is always added as the first one in the download list and it can't be moved, we simple set Body to nil to free space.
 					// The bottom line, setting Body to nil doesn't hurt if servingKey is new.
@@ -885,7 +887,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 			}
 		}
 		// Remove servingKey from the download list if it is not new and no reset is required.
-		if servingKey != "" && tbds[0].Term <= s.lineage.Term {
+		if servingKey != "" && tbds[0].Available == tbds[0].Size {
 			tbds = tbds[1:]
 		}
 
