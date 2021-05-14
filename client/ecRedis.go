@@ -177,26 +177,14 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 
 	// Filter results
 	chunks := make([][]byte, ret.Len())
-	failed := 0
-	succeed := 0
-	empties := 0
 	for i := 0; i < ret.Len(); i++ {
 		chunks[i] = ret.Ret(i)
-		if chunks[i] == nil {
-			failed++
-		} else if len(chunks[i]) == 0 {
-			log.Warn("Detect empty chunk %s(%d)", stats.ReqId, i)
-			empties++
-		} else {
-			succeed++
-		}
-
 	}
 
 	decodeStart := time.Now()
 	reader, err := c.decode(stats, chunks, int(ret.Size))
 	if err != nil {
-		log.Warn("Stats of %s: failed %d, succeed %d, empties %d", stats.ReqId, failed, succeed, empties)
+		log.Warn("Failed to reconstruct %s,%s: %v", key, stats.ReqId, err)
 		return stats.ReqId, nil, false
 	}
 
@@ -569,12 +557,12 @@ func (c *Client) decode(stats *logEntry, data [][]byte, size int) (ReadAllCloser
 		log.Debug("Verification failed. Reconstructing data...")
 		err := c.EC.Reconstruct(data)
 		if err != nil {
-			log.Warn("Reconstruction failed: %v", err)
+			// log.Warn("Reconstruction failed: %v", err)
 			return nil, err
 		}
 		stats.Corrupted, err = c.EC.Verify(data)
 		if !stats.Corrupted {
-			log.Warn("Verification failed after reconstruction, data could be corrupted: %v", err)
+			// log.Warn("Verification failed after reconstruction, data could be corrupted: %v", err)
 			return nil, err
 		}
 

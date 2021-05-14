@@ -48,7 +48,7 @@ func (meta *LineageMeta) ServingKey() string {
 
 type Lineage interface {
 	IsConsistent(*LineageMeta) (bool, error)
-	ResetBackup()
+	ClearBackup()
 	Commit() (*CommitOption, error)
 	Recover(*LineageMeta) (bool, chan error)
 	Status() LineageStatus
