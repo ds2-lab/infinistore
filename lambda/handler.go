@@ -164,9 +164,6 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status) == 0 {
 			return Lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
-		} else if len(input.Status) == 1 {
-			// No backup info
-			Lineage.ResetBackup()
 		}
 
 		// Preprocess protocol meta and check consistency

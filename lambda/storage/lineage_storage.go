@@ -252,10 +252,6 @@ func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	return meta.Consistent, nil
 }
 
-func (s *LineageStorage) ResetBackup() {
-	s.backupMeta = nil
-}
-
 func (s *LineageStorage) StartTracker() {
 	if s.chanOps == nil {
 		s.lineage.Ops = s.lineage.Ops[:0] // Reset metalogs
