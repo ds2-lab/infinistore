@@ -28,6 +28,7 @@ var (
 	sig      = make(chan os.Signal, 1)
 	dash     *dashboard.Dashboard
 	logFile  *os.File
+	stdErr   *os.File = os.Stderr
 	panicErr interface{}
 )
 
@@ -56,6 +57,7 @@ func main() {
 		}
 
 		syslog.SetOutput(logFile)
+		os.Stderr = logFile
 	}
 
 	// CPU profiling by default
@@ -176,6 +178,7 @@ func finalize(fix bool) {
 
 	// Rest will be cleared from main routine.
 	if logFile != nil {
+		os.Stderr = stdErr
 		syslog.SetOutput(os.Stdout)
 		logFile.Close()
 		logFile = nil
