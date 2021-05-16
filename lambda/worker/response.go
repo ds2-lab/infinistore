@@ -214,13 +214,10 @@ func (r *SimpleResponse) bind(link *Link) {
 type ObjectResponse struct {
 	BaseResponse
 
-	Cmd        string
-	ReqId      string
-	ChunkId    string
-	Val        string
-	Body       []byte
-	BodyStream resp.AllReadCloser
-	Recovered  int64
+	ReqId     string
+	ChunkId   string
+	Val       string
+	Recovered int64
 }
 
 func (r *ObjectResponse) Prepare() {
@@ -233,8 +230,6 @@ func (r *ObjectResponse) Prepare() {
 	if len(r.Val) > 0 {
 		r.AppendBulkString(r.Val)
 	}
-	r.BaseResponse.Body = r.Body
-	r.BaseResponse.BodyStream = r.BodyStream
 }
 
 func (r *ObjectResponse) bind(link *Link) {

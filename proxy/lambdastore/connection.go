@@ -167,6 +167,10 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	// conn.chanWait <- req
 	// Moved end
 	conn.headRequest = req
+	if req.IsResponded() {
+		conn.popRequest()
+		return nil
+	}
 
 	switch req.Name() {
 	case protocol.CMD_SET:
@@ -179,6 +183,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 		req.PrepareForRecover(conn)
 	default:
 		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
+		conn.flagAvailable()
 		// Unrecoverable
 		return nil
 	}
@@ -186,15 +191,10 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	// Updated by Tianium: 20210504
 	// Write timeout is meaningless: small data will be buffered and always success, blobs will be handled by both ends.
 	// TODO: If neccessary (like add support to multi-layer relay), add read timeout on client.
-	if err := req.Flush(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
+	if err := req.Flush(); err != nil {
+		conn.SetErrorResponse(err)
 		conn.log.Warn("Flush request error: %v - %v", req, err)
-
-		// Remove request.
-		conn.popRequest()
-
-		// Close connection
 		conn.close()
-
 		return err
 	}
 	// Set timeout for response.
@@ -202,11 +202,9 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	go func() {
 		if err := req.Timeout(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
 			conn.log.Warn("Request timeout: %v", req)
-
-			// Remove request.
 			conn.popRequest()
-
-			// Late response will be ignored.
+			// close connection to discard late response.
+			conn.close()
 		}
 	}()
 
@@ -335,6 +333,7 @@ func (conn *Connection) ServeLambda() {
 			err = fmt.Errorf("response error: %s", strErr)
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
+			conn.flagAvailable()
 		case resp.TypeBulk:
 			cmd, err := conn.r.ReadBulkString()
 			if err != nil {
@@ -444,6 +443,7 @@ func (conn *Connection) Ping(payload []byte) {
 }
 
 // SetResponse Set response for last request.
+// If parameter release is set, the connection will be flagged available.
 func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, bool) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
@@ -465,9 +465,10 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 	return nil, false
 }
 
+// SetErrorResponse Set response to last request as a error.
+//   You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) bool {
 	if req := conn.popRequest(); req != nil {
-		conn.flagAvailable()
 		return req.SetResponse(err)
 	}
 
@@ -506,12 +507,22 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 }
 
 func (conn *Connection) flagAvailable() bool {
-	if !conn.control && conn.lm != nil {
-		conn.lm.FlagAvailableForRequest(conn)
-		return true
+	if conn.control || conn.lm == nil {
+		return false
 	}
 
-	return false
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	select {
+	case <-conn.closed:
+		// already closed
+		return false
+	default:
+	}
+
+	conn.lm.FlagAvailableForRequest(conn)
+	return true
 }
 
 func (conn *Connection) pongHandler() {
@@ -572,21 +583,27 @@ func (conn *Connection) getHandler(start time.Time) {
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
 	recovered, _ := conn.r.ReadInt()
-	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
-	if counter == nil {
-		conn.log.Warn("Request not found: %s", reqId)
-		// exhaust value field
-		if err := conn.r.SkipBulk(); err != nil {
-			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
-		}
-		return
-	}
 
-	rsp := &types.Response{Cmd: "get"}
+	rsp := &types.Response{Cmd: protocol.CMD_GET}
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
+
+	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	if counter == nil {
+		conn.log.Warn("Request not found: %s", reqId)
+		// Set response and exhaust value
+		_, responded := conn.SetResponse(rsp, false)
+		if err := conn.r.SkipBulk(); err != nil {
+			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+			conn.close()
+			return
+		} else if responded {
+			conn.flagAvailable()
+		}
+		return
+	}
 
 	status := counter.AddSucceeded(chunk, recovered == 1)
 	// Check if chunks are enough? Shortcut response if YES.
@@ -606,6 +623,8 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
+			conn.close()
+			return
 		}
 		conn.flagAvailable()
 		return
@@ -614,7 +633,10 @@ func (conn *Connection) getHandler(start time.Time) {
 	var err error
 	rsp.BodyStream, err = conn.r.StreamBulk()
 	if err != nil {
+		conn.SetErrorResponse(err)
 		conn.log.Warn("Failed to get body reader of response: %v", err)
+		conn.close()
+		return
 	}
 	rsp.BodyStream.(resp.Holdable).Hold()
 

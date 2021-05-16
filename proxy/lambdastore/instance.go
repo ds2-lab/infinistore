@@ -1130,8 +1130,12 @@ func (ins *Instance) FlagClosed(conn *Connection) {
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
-	// On parallel recovering, we will try reroute get requests.
-	if cmd.Name() == protocol.CMD_GET && ins.IsRecovering() && ins.rerouteGetRequest(cmd.GetRequest()) {
+	if req := cmd.GetRequest(); req != nil && req.IsResponded() {
+		// Request is responded
+		return
+	} else if req != nil && req.Cmd == protocol.CMD_GET &&
+		ins.IsRecovering() && ins.rerouteGetRequest(req) {
+		// On parallel recovering, we will try reroute get requests.
 		return
 	}
 

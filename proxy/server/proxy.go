@@ -255,7 +255,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		t2 := time.Now()
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
-			p.log.Error("Error on flush response: %v", err)
+			p.log.Error("Error on flush response %v: %v", rsp, err)
 			return
 		}
 
