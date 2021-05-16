@@ -7,7 +7,6 @@ import (
 	"net"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -307,14 +306,14 @@ func (conn *Connection) ServeLambda() {
 		var respType resp.ResponseType
 		switch ret := retPeek.(type) {
 		case error:
-			if ret == io.EOF || strings.Contains(ret.Error(), "use of closed network connection") {
+			if ret == io.EOF || ret.Error() == "use of closed network connection" {
 				if conn.control {
 					conn.log.Warn("Lambda store disconnected.")
 				} else {
 					conn.log.Debug("Disconnected.")
 				}
 			} else {
-				conn.log.Warn("Failed to peek response type: %s", ret.Error())
+				conn.log.Warn("Failed to peek response type: %v", ret)
 			}
 			conn.close()
 			return
