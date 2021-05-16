@@ -246,6 +246,18 @@ func (conn *Connection) Close() error {
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
+	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	// 1. If lambda is running, lambda will close the connection.
+	//    When we close it here, the connection has been closed.
+	// 2. In current implementation, the instance will close the connection
+	///   if the lambda will not respond to the link any more.
+	//    For data link, it is when the lambda has returned.
+	//    For ctrl link, it is likely that the system is shutting down.
+	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
+		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	}
+	conn.Conn.Close()
+
 	return nil
 }
 
@@ -257,13 +269,6 @@ func (conn *Connection) close() {
 
 	// Call signal function to avoid duplicated close.
 	conn.Close()
-
-	// Connection disconnected. Don't use conn.Conn.Close(), it will stuck and wait for lambda.
-	// Additionally, lambda can tell the connection should be restored instead of closing itself.
-	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
-		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
-	}
-	conn.Conn.Close()
 
 	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()

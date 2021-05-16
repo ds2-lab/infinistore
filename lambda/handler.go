@@ -12,8 +12,6 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo/resp"
 
-	//	"github.com/wangaoone/s3gof3r"
-
 	"math/rand"
 	"net/url"
 	"os"
