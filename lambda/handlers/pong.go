@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	DefaultPongTimeout = 30 * time.Millisecond
+	DefaultPongTimeout = 50 * time.Millisecond
 	DefaultAttempts    = 0 // Disable retrial for backend link intergrated retrial and reconnection.
 
 	Pong = NewPongHandler()
