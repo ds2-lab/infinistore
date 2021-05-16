@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const TICK = 100 * time.Millisecond
@@ -215,6 +216,7 @@ func (t *Timeout) SetLogger(log logger.ILogger) {
 func (t *Timeout) Busy(reason string) {
 	// log.Println("busy")
 	actives := atomic.AddInt32(&t.active, 1)
+	t.lastReason = reason // Acknowledge the ping extension.
 	t.log.Debug("Busy %s(%d)", reason, actives)
 }
 
@@ -227,7 +229,10 @@ func (t *Timeout) DoneBusy(reason string) {
 func (t *Timeout) DoneBusyWithReset(ext time.Duration, reason string) {
 	// log.Printf("done busy with reset %v\n", ext)
 	t.DoneBusy(reason)
-	t.ResetWithExtension(ext, reason)
+	// Unacknowledged ping will be preserved.
+	if t.lastReason != protocol.CMD_PING {
+		t.ResetWithExtension(ext, reason)
+	}
 }
 
 func (t *Timeout) IsBusy() bool {

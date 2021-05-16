@@ -113,11 +113,13 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	if ret.Error() == nil {
 		// construct lambda store response
 		response := &worker.ObjectResponse{
-			Cmd:        c.Name,
-			ReqId:      reqId,
-			ChunkId:    chunkId,
-			BodyStream: stream,
-			Recovered:  recovered,
+			BaseResponse: worker.BaseResponse{
+				Cmd:        c.Name,
+				BodyStream: stream,
+			},
+			ReqId:     reqId,
+			ChunkId:   chunkId,
+			Recovered: recovered,
 		}
 
 		t2 := time.Now()
@@ -221,9 +223,9 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// write Key, clientId, chunkId, body back to proxy
 	response := &worker.ObjectResponse{
-		Cmd:     c.Name,
-		ReqId:   reqId,
-		ChunkId: chunkId,
+		BaseResponse: worker.BaseResponse{Cmd: c.Name},
+		ReqId:        reqId,
+		ChunkId:      chunkId,
 	}
 
 	t2 := time.Now()
@@ -325,11 +327,13 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 
 	// write Key, clientId, chunkId, body back to proxy
 	response := &worker.ObjectResponse{
-		Cmd:        retCmd,
-		ReqId:      reqId,
-		ChunkId:    chunkId,
-		BodyStream: stream,
-		Recovered:  1,
+		BaseResponse: worker.BaseResponse{
+			Cmd:        retCmd,
+			BodyStream: stream,
+		},
+		ReqId:     reqId,
+		ChunkId:   chunkId,
+		Recovered: 1,
 	}
 
 	t2 := time.Now()
@@ -381,9 +385,9 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	if ret.Error() == nil {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{
-			Cmd:     c.Name,
-			ReqId:   reqId,
-			ChunkId: chunkId,
+			BaseResponse: worker.BaseResponse{Cmd: c.Name},
+			ReqId:        reqId,
+			ChunkId:      chunkId,
 		}
 		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
