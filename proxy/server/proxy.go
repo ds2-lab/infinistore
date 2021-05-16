@@ -234,6 +234,8 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 // HandleCallback callback handler
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	wrapper := r.(*types.ProxyResponse)
+	client := redeo.GetClient(wrapper.Context())
+
 	switch rsp := wrapper.Response.(type) {
 	case *types.Response:
 		t := time.Now()
@@ -248,7 +250,10 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		case protocol.CMD_SET:
 			rsp.PrepareForSet(w)
 		default:
-			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)
+			w.AppendErrorf("unable to respond unsupport command %s", wrapper.Request.Cmd)
+			if err := w.Flush(); err != nil {
+				client.Conn().Close()
+			}
 			return
 		}
 		d1 := time.Since(t)
@@ -256,6 +261,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
 			p.log.Error("Error on flush response %v: %v", rsp, err)
+			client.Conn().Close()
 			return
 		}
 
@@ -312,7 +318,10 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// Use more general way to deal error
 	default:
 		w.AppendErrorf("%v", rsp)
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			client.Conn().Close()
+			return
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,6 +12,21 @@ import (
 type ProxyResponse struct {
 	Response interface{}
 	Request  *Request
+
+	ctx context.Context
+}
+
+// Context return the response context
+func (r *ProxyResponse) Context() context.Context {
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return context.Background()
+}
+
+// SetContext sets the client's context
+func (r *ProxyResponse) SetContext(ctx context.Context) {
+	r.ctx = ctx
 }
 
 type Response struct {
