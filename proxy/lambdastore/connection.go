@@ -253,6 +253,7 @@ func (conn *Connection) Close() error {
 	///   if the lambda will not respond to the link any more.
 	//    For data link, it is when the lambda has returned.
 	//    For ctrl link, it is likely that the system is shutting down.
+	// 3. If we know lambda is active, close conn.Conn first.
 	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
 		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	}
@@ -442,7 +443,7 @@ func (conn *Connection) Ping(payload []byte) {
 }
 
 // SetResponse Set response for last request.
-func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
+func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, bool) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
 	if req == nil || !req.IsResponse(rsp) {
@@ -453,8 +454,8 @@ func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) 
 
 	// Lock free: double check that poped is what we peeked.
 	if poped := conn.popRequest(); poped == req {
-		if !conn.control {
-			conn.lm.FlagAvailableForRequest(conn)
+		if release {
+			conn.flagAvailable()
 		}
 		conn.log.Debug("response matched: %v", req)
 		return req, req.SetResponse(rsp)
@@ -465,9 +466,7 @@ func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) 
 
 func (conn *Connection) SetErrorResponse(err error) bool {
 	if req := conn.popRequest(); req != nil {
-		if !conn.control {
-			conn.lm.FlagAvailableForRequest(conn)
-		}
+		conn.flagAvailable()
 		return req.SetResponse(err)
 	}
 
@@ -499,6 +498,15 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 	if err != nil {
 		conn.log.Warn(prompt, err)
 		conn.close()
+		return true
+	}
+
+	return false
+}
+
+func (conn *Connection) flagAvailable() bool {
+	if !conn.control && conn.lm != nil {
+		conn.lm.FlagAvailableForRequest(conn)
 		return true
 	}
 
@@ -584,7 +592,8 @@ func (conn *Connection) getHandler(start time.Time) {
 	if counter.IsLate(status) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
-		req, _ := conn.SetResponse(rsp)
+		// Connection will not be flagged available until SkipBulk() is executed.
+		req, _ := conn.SetResponse(rsp, false)
 		if req != nil {
 			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
@@ -597,6 +606,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
 		}
+		conn.flagAvailable()
 		return
 	}
 
@@ -606,10 +616,10 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.log.Warn("Failed to get body reader of response: %v", err)
 	}
 	rsp.BodyStream.(resp.Holdable).Hold()
-	defer rsp.BodyStream.Close()
 
 	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
-	if req, ok := conn.SetResponse(rsp); !ok {
+	// Connection will not be flagged available until BodyStream is closed.
+	if req, ok := conn.SetResponse(rsp, false); !ok {
 		// Failed to set response, release hold.
 		rsp.BodyStream.(resp.Holdable).Unhold()
 	} else {
@@ -625,6 +635,9 @@ func (conn *Connection) getHandler(start time.Time) {
 			}
 		}
 	}
+
+	rsp.BodyStream.Close() // Close will block until BodyStream unhold.
+	conn.flagAvailable()
 }
 
 func (conn *Connection) setHandler(start time.Time) {
@@ -635,7 +648,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
-	req, ok := conn.SetResponse(rsp)
+	req, ok := conn.SetResponse(rsp, true)
 	if ok {
 		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
@@ -650,7 +663,7 @@ func (conn *Connection) delHandler() {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
-	conn.SetResponse(rsp) // if del is control cmd, should return False
+	conn.SetResponse(rsp, true) // if del is control cmd, should return False
 }
 
 func (conn *Connection) receiveData() {
