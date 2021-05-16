@@ -312,10 +312,6 @@ func (ins *Instance) WarmUp() {
 	ins.flagWarmed()
 }
 
-func (ins *Instance) IsActive() bool {
-	return atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE
-}
-
 func (ins *Instance) Validate(opts ...*ValidateOption) (*Connection, error) {
 	var opt *ValidateOption
 	if len(opts) > 0 {

@@ -150,8 +150,7 @@ func (m *LinkManager) FlagAvailableForRequest(link *Connection) bool {
 		m.log.Debug("Data link available: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
 	} else {
 		m.RemoveDataLink(link)
-		// Directly close connection for grace close. The link will close afterward.
-		link.Conn.Close()
+		link.Close()
 	}
 	return added
 }
