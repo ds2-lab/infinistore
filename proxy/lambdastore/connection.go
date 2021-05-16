@@ -306,7 +306,7 @@ func (conn *Connection) ServeLambda() {
 		var respType resp.ResponseType
 		switch ret := retPeek.(type) {
 		case error:
-			if ret == io.EOF {
+			if ret == io.EOF || ret.Error() == "use of closed network connection" {
 				if conn.control {
 					conn.log.Warn("Lambda store disconnected.")
 				} else {

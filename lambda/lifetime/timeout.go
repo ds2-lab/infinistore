@@ -76,12 +76,16 @@ func TimeoutAfterWithReturn(f func() (interface{}, error), timeout time.Duration
 	return
 }
 
-func GetStreamingDeadline(size int64) time.Time {
+func GetStreamingTimeout(size int64) time.Duration {
 	timeout := time.Duration(size * BANDWIDTH_FACTOR * STREAMING_TIMEOUT_FACTOR)
 	if timeout < time.Second {
 		timeout = time.Second
 	}
-	return time.Now().Add(timeout)
+	return timeout
+}
+
+func GetStreamingDeadline(size int64) time.Time {
+	return time.Now().Add(GetStreamingTimeout(size))
 }
 
 type Timeout struct {

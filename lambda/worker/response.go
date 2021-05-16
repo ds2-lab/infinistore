@@ -14,7 +14,6 @@ import (
 )
 
 var (
-	RequestTimeout  = 1 * time.Second
 	ResponseTimeout = 100 * time.Millisecond
 )
 
@@ -81,7 +80,7 @@ func (r *BaseResponse) Prepare() {
 
 func (r *BaseResponse) Flush() error {
 	// Timeout added here, sometimes redeo may not handle all responses.
-	r.done.SetTimeout(ResponseTimeout)
+	r.done.SetTimeout(r.getTimeout())
 	return r.done.Timeout()
 }
 
@@ -137,7 +136,7 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	client := redeo.GetClient(r.Context())
 	conn := client.Conn()
 
-	conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
+	conn.SetWriteDeadline(time.Now().Add(ResponseTimeout)) // Set deadline for write
 	defer conn.SetWriteDeadline(time.Time{})
 	if err := r.ResponseWriter.Flush(); err != nil {
 		r.err = err
@@ -166,11 +165,21 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	}
 
 	if hasBulk {
-		conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
+		conn.SetWriteDeadline(time.Now().Add(ResponseTimeout)) // Set deadline for write
 		r.err = r.ResponseWriter.Flush()
 	}
 
 	return r.err
+}
+
+func (r *BaseResponse) getTimeout() time.Duration {
+	if r.Body != nil {
+		return lifetime.GetStreamingTimeout(int64(len(r.Body)))
+	} else if r.BodyStream != nil {
+		return lifetime.GetStreamingTimeout(r.BodyStream.Len())
+	} else {
+		return ResponseTimeout
+	}
 }
 
 func (r *BaseResponse) markAttempt() int {
