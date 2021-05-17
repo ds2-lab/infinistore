@@ -3,16 +3,15 @@ package lambdastore
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -321,7 +320,7 @@ func (conn *Connection) ServeLambda() {
 		var respType resp.ResponseType
 		switch ret := retPeek.(type) {
 		case error:
-			if ret == io.EOF || strings.Contains(ret.Error(), "use of closed network connection") {
+			if util.IsConnectionFailed(ret) {
 				if conn.control {
 					conn.log.Warn("Lambda store disconnected.")
 				} else {
@@ -390,12 +389,14 @@ func (conn *Connection) ServeLambda() {
 			}
 		}
 
-		if readErr != nil && readErr == io.EOF {
-			conn.log.Warn("Lambda store disconnected.")
-			conn.close()
-			return
-		} else if readErr != nil {
-			conn.log.Warn("Error on handle response %s: %v", respType, readErr)
+		if readErr != nil {
+			if !util.IsConnectionFailed(readErr) {
+				conn.log.Warn("Error on handle response %s: %v", respType, readErr)
+			} else if conn.control {
+				conn.log.Warn("Lambda store disconnected.")
+			} else {
+				conn.log.Debug("Disconnected.")
+			}
 			conn.close()
 			return
 		}
@@ -503,11 +504,20 @@ func (conn *Connection) ClearResponses() {
 }
 
 func (conn *Connection) peekResponse() {
-	respType, err := conn.r.PeekType()
+	r := conn.r
+	if r == nil {
+		return
+	}
+
+	var ret interface{}
+	ret, err := r.PeekType()
 	if err != nil {
-		conn.respType <- err
-	} else {
-		conn.respType <- respType
+		ret = err
+	}
+	select {
+	case conn.respType <- ret:
+	default:
+		// No consumer. The connection must be closed, abandon.
 	}
 }
 
@@ -612,7 +622,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		_, responded := conn.SetResponse(rsp, false)
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
-			conn.close()
+			conn.Close()
 			return
 		} else if responded {
 			conn.flagAvailable()
