@@ -37,6 +37,10 @@ type CommandlineOptions struct {
 	cluster            string
 	numFunctions       int
 	invoker            string
+
+	// Profiling
+	CpuProfile string
+	MemProfile string
 }
 
 func (o *CommandlineOptions) GetLambdaPrefix() string {
@@ -107,6 +111,9 @@ func CheckUsage(options *CommandlineOptions) {
 	flag.BoolVar(&options.NoFirstD, "disable-first-d", false, "EVALUATION ONLY: Disable first-d optimization.")
 	flag.Uint64Var(&options.funcCapacity, "funcap", 0, "EVALUATION ONLY: Preset capacity(MB) of function instance.")
 	flag.StringVar(&options.invoker, "invoker", "lambda", "EVALUATION ONLY: Use alternative invokers. Try local")
+
+	flag.StringVar(&options.CpuProfile, "cpuprofile", "", "Enable CPU profiling and write cpu profile to `file`")
+	flag.StringVar(&options.MemProfile, "memprofile", "", "Enable memory profiling and write memory profile to `file`")
 
 	flag.Parse()
 	options.NoDashboard = !*showDashboard
