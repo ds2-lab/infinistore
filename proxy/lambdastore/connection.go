@@ -24,6 +24,9 @@ var (
 		Prefix: "Undesignated ",
 		Color:  !global.Options.NoColor,
 	}
+	readerPool sync.Pool
+	writerPool sync.Pool
+
 	ErrConnectionClosed  = errors.New("connection closed")
 	ErrMissingResponse   = errors.New("missing response")
 	ErrUnexpectedCommand = errors.New("unexpected command")
@@ -48,16 +51,27 @@ type Connection struct {
 	closed      chan struct{}
 }
 
-func NewConnection(c net.Conn) *Connection {
+func NewConnection(cn net.Conn) *Connection {
 	conn := &Connection{
-		Conn: c,
-		log:  defaultConnectionLog,
-		// wrap writer and reader
-		w:        resp.NewRequestWriter(c),
-		r:        resp.NewResponseReader(c),
+		Conn:     cn,
+		log:      defaultConnectionLog,
 		chanWait: make(chan *types.Request, 1),
 		respType: make(chan interface{}),
 		closed:   make(chan struct{}),
+	}
+	if v := readerPool.Get(); v != nil {
+		rd := v.(resp.ResponseReader)
+		rd.Reset(cn)
+		conn.r = rd
+	} else {
+		conn.r = resp.NewResponseReader(cn)
+	}
+	if v := writerPool.Get(); v != nil {
+		wr := v.(*resp.RequestWriter)
+		wr.Reset(cn)
+		conn.w = wr
+	} else {
+		conn.w = resp.NewRequestWriter(cn)
 	}
 	defaultConnectionLog.Level = global.Log.GetLevel()
 	return conn
@@ -272,6 +286,11 @@ func (conn *Connection) close() {
 
 	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()
+	var w, r interface{}
+	conn.w, w = nil, conn.w
+	conn.r, r = nil, conn.r
+	readerPool.Put(r)
+	writerPool.Put(w)
 
 	conn.log.Debug("Closed.")
 }

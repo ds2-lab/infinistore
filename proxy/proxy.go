@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"runtime"
+	"runtime/pprof"
 	"sync"
 	"syscall"
 
@@ -45,6 +47,19 @@ func main() {
 
 	var done sync.WaitGroup
 	global.CheckUsage(options)
+
+	if global.Options.CpuProfile != "" {
+		f, err := os.Create(global.Options.CpuProfile)
+		if err != nil {
+			log.Error("could not create CPU profile: %v", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Error("could not start CPU profile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	if options.Debug {
 		log.Level = logger.LOG_LEVEL_ALL
 	}
@@ -159,6 +174,18 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
+
+	if global.Options.MemProfile != "" {
+		f, err := os.Create(global.Options.MemProfile)
+		if err != nil {
+			log.Error("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Error("could not write memory profile: ", err)
+		}
+	}
 }
 
 func finalize(fix bool) {
