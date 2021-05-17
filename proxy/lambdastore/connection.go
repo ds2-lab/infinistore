@@ -129,7 +129,7 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 
 	if err := ctrl.Flush(); err != nil {
 		conn.log.Error("Flush control error: %v - %v", ctrl, err)
-		conn.close()
+		conn.Close()
 		return err
 	}
 
@@ -208,7 +208,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	if err := req.Flush(); err != nil {
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Flush request error: %v - %v", req, err)
-		conn.close()
+		conn.Close()
 		return err
 	}
 	// Set timeout for response.
@@ -218,7 +218,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 			conn.log.Warn("Request timeout: %v", req)
 			conn.popRequest()
 			// close connection to discard late response.
-			conn.close()
+			conn.Close()
 		}
 	}()
 
@@ -239,9 +239,9 @@ func (conn *Connection) popRequest() *types.Request {
 	}
 }
 
-func (conn *Connection) isRequestPending() bool {
-	return len(conn.chanWait) > 0
-}
+// func (conn *Connection) isRequestPending() bool {
+// 	return len(conn.chanWait) > 0
+// }
 
 // Close Signal connection should be closed. Function close() will be called later for actural operation
 func (conn *Connection) Close() error {
@@ -275,6 +275,7 @@ func (conn *Connection) Close() error {
 	return nil
 }
 
+// close must be called from ServeLambda()
 func (conn *Connection) close() {
 	// Notify instance.
 	if conn.instance != nil {
@@ -309,13 +310,8 @@ func (conn *Connection) ServeLambda() {
 		var retPeek interface{}
 		select {
 		case <-conn.closed:
-			if conn.isRequestPending() {
-				// Is there request waiting?
-				retPeek = <-conn.respType
-			} else {
-				conn.close()
-				return
-			}
+			conn.close()
+			return
 		case retPeek = <-conn.respType:
 		}
 
@@ -457,7 +453,7 @@ func (conn *Connection) Ping(payload []byte) {
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush ping error: %v", err)
-		conn.close()
+		conn.Close()
 	}
 }
 
@@ -518,7 +514,7 @@ func (conn *Connection) peekResponse() {
 func (conn *Connection) closeIfError(prompt string, err error) bool {
 	if err != nil {
 		conn.log.Warn(prompt, err)
-		conn.close()
+		conn.Close()
 		return true
 	}
 
@@ -580,7 +576,7 @@ func (conn *Connection) pongHandler() {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
 		conn.log.Warn("Discard rouge PONG for %d.", storeId)
-		conn.close()
+		conn.Close()
 	}
 }
 
@@ -642,7 +638,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
-			conn.close()
+			conn.Close()
 			return
 		}
 		conn.flagAvailable()
@@ -654,7 +650,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	if err != nil {
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Failed to get body reader of response: %v", err)
-		conn.close()
+		conn.Close()
 		return
 	}
 	rsp.BodyStream.(resp.Holdable).Hold()
