@@ -173,6 +173,13 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 }
 
 func (conn *Connection) sendRequest(req *types.Request) error {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.isClosedLocked() {
+		return ErrConnectionClosed
+	}
+
 	// In case there is a request already, wait to be consumed (for response).
 	// Lock free: request sent after headRequest get set.
 	// Moved to SendRequest start
@@ -207,7 +214,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	if err := req.Flush(); err != nil {
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Flush request error: %v - %v", req, err)
-		conn.Close()
+		conn.closeLocked()
 		return err
 	}
 	// Set timeout for response.
@@ -247,11 +254,33 @@ func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	select {
-	case <-conn.closed:
-		// already closed
+	return conn.closeLocked()
+}
+
+// close must be called from ServeLambda()
+func (conn *Connection) close() {
+	// Notify instance.
+	if conn.instance != nil {
+		conn.instance.FlagClosed(conn)
+	}
+
+	// Call signal function to avoid duplicated close.
+	conn.Close()
+
+	// Clear pending requests after TCP connection closed, so current request got chance to return first.
+	conn.ClearResponses()
+	var w, r interface{}
+	conn.w, w = nil, conn.w
+	conn.r, r = nil, conn.r
+	readerPool.Put(r)
+	writerPool.Put(w)
+
+	conn.log.Debug("Closed.")
+}
+
+func (conn *Connection) closeLocked() error {
+	if conn.isClosedLocked() {
 		return nil
-	default:
 	}
 
 	// Signal closed only. This allow ongoing transmission to finish.
@@ -274,25 +303,14 @@ func (conn *Connection) Close() error {
 	return nil
 }
 
-// close must be called from ServeLambda()
-func (conn *Connection) close() {
-	// Notify instance.
-	if conn.instance != nil {
-		conn.instance.FlagClosed(conn)
+func (conn *Connection) isClosedLocked() bool {
+	select {
+	case <-conn.closed:
+		// already closed
+		return true
+	default:
+		return false
 	}
-
-	// Call signal function to avoid duplicated close.
-	conn.Close()
-
-	// Clear pending requests after TCP connection closed, so current request got chance to return first.
-	conn.ClearResponses()
-	var w, r interface{}
-	conn.w, w = nil, conn.w
-	conn.r, r = nil, conn.r
-	readerPool.Put(r)
-	writerPool.Put(w)
-
-	conn.log.Debug("Closed.")
 }
 
 // blocking on lambda peek Type
@@ -624,7 +642,7 @@ func (conn *Connection) getHandler(start time.Time) {
 			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
 			conn.Close()
 			return
-		} else if responded {
+		} else if responded && conn.ackCommand(rsp.Cmd) == nil {
 			conn.flagAvailable()
 		}
 		return
@@ -650,8 +668,9 @@ func (conn *Connection) getHandler(start time.Time) {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
 			conn.Close()
 			return
+		} else if conn.ackCommand(rsp.Cmd) == nil {
+			conn.flagAvailable()
 		}
-		conn.flagAvailable()
 		return
 	}
 
@@ -685,20 +704,25 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	rsp.BodyStream.Close() // Close will block until BodyStream unhold.
-	conn.flagAvailable()
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
+	}
 }
 
 func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET from lambda.")
 
-	rsp := &types.Response{Cmd: "set", Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
+	rsp := &types.Response{Cmd: protocol.CMD_SET, Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
-	req, ok := conn.SetResponse(rsp, true)
+	req, ok := conn.SetResponse(rsp, false)
 	if ok {
 		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
+	}
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
 	}
 }
 
@@ -711,7 +735,10 @@ func (conn *Connection) delHandler() {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
-	conn.SetResponse(rsp, true) // if del is control cmd, should return False
+	conn.SetResponse(rsp, false) // if del is control cmd, should return False
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
+	}
 }
 
 func (conn *Connection) receiveData() {
@@ -751,4 +778,15 @@ func (conn *Connection) recoverHandler() {
 	} else {
 		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
+	conn.ackCommand(protocol.CMD_RECOVER)
+}
+
+func (conn *Connection) ackCommand(cmd string) error {
+	conn.w.WriteCmd(protocol.CMD_ACK)
+	if err := conn.w.Flush(); err != nil {
+		conn.log.Warn("Failed to acknowledge %s: %v", cmd, err)
+		conn.Close()
+		return err
+	}
+	return nil
 }

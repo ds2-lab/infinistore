@@ -101,6 +101,7 @@ const (
 	PONG_RECLAIMED = int64(0x0040)
 
 	CMD_TEST        = "test"
+	CMD_ACK         = "ack"         // Control command
 	CMD_GET         = "get"         // Redis and Lambda command
 	CMD_GET_CHUNK   = "get chunk"   // Client command
 	CMD_SET         = "set"         // Redis and Lambda command

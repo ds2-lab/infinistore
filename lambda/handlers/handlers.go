@@ -55,7 +55,9 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	if session.Requests > 1 {
 		extension = lambdaLife.TICK
 	}
-	defer session.Timeout.DoneBusyWithReset(extension, c.Name)
+	defer Server.WaitAck(c.Name, func() {
+		session.Timeout.DoneBusyWithReset(extension, c.Name)
+	}, client)
 
 	t := time.Now()
 	log.Debug("In GET handler(link:%d)", worker.LinkFromClient(client).ID())
@@ -166,20 +168,18 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	log.Debug("In SET handler(link:%d)", worker.LinkFromClient(client).ID())
 
 	var reqId, chunkId string
-	var finalize func(*types.OpRet, bool, ...time.Duration)
 	cmd := c.Name
-	finalize = func(ret *types.OpRet, wait bool, ds ...time.Duration) {
-		if ret == nil || !ret.IsDelayed() {
-			// Only if error
-			collector.AddRequest(t, types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
-		} else if wait {
-			ret.Wait()
-			collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
-		} else {
-			go finalize(ret, true, ds...)
-			return
-		}
-		session.Timeout.DoneBusyWithReset(extension, cmd)
+	finalize := func(ret *types.OpRet, ds ...time.Duration) {
+		Server.WaitAck(c.Name, func() {
+			if ret != nil && ret.IsDelayed() {
+				ret.Wait()
+				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
+			} else {
+				// Only if error
+				collector.AddRequest(t, types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
+			}
+			session.Timeout.DoneBusyWithReset(extension, cmd)
+		}, client)
 	}
 
 	errRsp := &worker.ErrorResponse{}
@@ -193,7 +193,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		if err := errRsp.Flush(); err != nil {
 			log.Error("Error on flush(error 500): %v", err)
 		}
-		finalize(nil, false)
+		finalize(nil)
 		return
 	}
 
@@ -217,7 +217,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 			Server.SetFailure(client, err)
 		}
 
-		finalize(ret, false)
+		finalize(ret)
 		return
 	}
 
@@ -238,7 +238,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	dt := time.Since(t)
 	log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
-	finalize(ret, false, d1, d2, dt)
+	finalize(ret, d1, d2, dt)
 }
 
 func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
@@ -254,16 +254,12 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 	var ret *types.OpRet
 	cmd := c.Name
-	defer func() {
-		if ret == nil || !ret.IsDelayed() {
-			session.Timeout.DoneBusyWithReset(extension, cmd)
-		} else {
-			go func() {
-				ret.Wait()
-				session.Timeout.DoneBusyWithReset(extension, cmd)
-			}()
+	defer Server.WaitAck(c.Name, func() {
+		if ret != nil && ret.IsDelayed() {
+			ret.Wait()
 		}
-	}()
+		session.Timeout.DoneBusyWithReset(extension, cmd)
+	}, client)
 
 	t := time.Now()
 	log.Debug("In RECOVER handler(link:%d)", worker.LinkFromClient(client).ID())
@@ -363,16 +359,13 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 		extension = lambdaLife.TICK
 	}
 	var ret *types.OpRet
-	defer func() {
-		if ret == nil || !ret.IsDelayed() {
-			session.Timeout.DoneBusyWithReset(extension, c.Name)
-		} else {
-			go func() {
-				ret.Wait()
-				session.Timeout.DoneBusyWithReset(extension, c.Name)
-			}()
+	cmd := c.Name
+	defer Server.WaitAck(c.Name, func() {
+		if ret != nil && ret.IsDelayed() {
+			ret.Wait()
 		}
-	}()
+		session.Timeout.DoneBusyWithReset(extension, cmd)
+	}, client)
 
 	//t := time.Now()
 	log.Debug("In Del Handler")
