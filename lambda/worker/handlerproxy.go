@@ -12,15 +12,17 @@ type HandlerProxy struct {
 }
 
 func (h *HandlerProxy) HandlerFunc(w resp.ResponseWriter, c *resp.Command) {
-	h.TryRevokeToken(redeo.GetClient(c.Context()))
+	h.preProcess(redeo.GetClient(c.Context()))
 	h.handle(w, c)
 }
 
 func (h *HandlerProxy) StreamHandlerFunc(w resp.ResponseWriter, c *resp.CommandStream) {
-	h.TryRevokeToken(redeo.GetClient(c.Context()))
+	h.preProcess(redeo.GetClient(c.Context()))
 	h.streamHandle(w, c)
 }
 
-func (h *HandlerProxy) TryRevokeToken(client *redeo.Client) {
-	h.worker.flagReservationUsed(LinkFromClient(client))
+func (h *HandlerProxy) preProcess(client *redeo.Client) {
+	link := LinkFromClient(client)
+	h.worker.flagReservationUsed(link)
+	h.worker.acknowledge(link)
 }

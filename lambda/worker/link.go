@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/redeo"
 )
 
@@ -34,6 +35,7 @@ type Link struct {
 	once      int32
 	token     *struct{}
 	registry  interface{}
+	acked     promise.Promise
 }
 
 func LinkFromClient(client *redeo.Client) *Link {
@@ -50,8 +52,9 @@ func LinkFromClient(client *redeo.Client) *Link {
 
 func NewLink(ctrl bool) *Link {
 	return &Link{
-		ctrl: ctrl,
-		buff: make(chan interface{}, 1),
+		ctrl:  ctrl,
+		buff:  make(chan interface{}, 1),
+		acked: promise.Resolved(),
 	}
 }
 
@@ -165,6 +168,7 @@ func (ln *Link) close(force bool) {
 		ln.Client.Close()
 		ln.Client = nil
 	}
+	ln.acked.Resolve()
 }
 
 func (ln *Link) migrate() {

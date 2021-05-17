@@ -750,6 +750,9 @@ func main() {
 					// data, _ := client.Reader.ReadBulkString() // stream
 					// log.Info("Recovered data of size: %v", len(data))
 
+					// client.Writer.WriteCmd(protocol.CMD_ACK)
+					// client.Writer.Flush()
+
 					// <-ended
 
 					// // Control link interruption test

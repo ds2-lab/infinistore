@@ -246,6 +246,19 @@ func (r *ObjectResponse) Size() int64 {
 	}
 }
 
+func (r *ObjectResponse) flush(writer resp.ResponseWriter) error {
+	link := LinkFromClient(redeo.GetClient(r.Context()))
+	link.acked.Reset()
+
+	err := r.BaseResponse.flush(writer)
+	if err != nil {
+		return err
+	}
+
+	link.acked.SetTimeout(ResponseTimeout)
+	return nil
+}
+
 // ErrorResponse Response wrapper for errors.
 type ErrorResponse struct {
 	BaseResponse
