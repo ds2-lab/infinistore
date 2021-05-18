@@ -35,8 +35,8 @@ function wait_task(){
     printf "Waiting to finish, task-id $RUNNING "
   fi
   
-  # Wait for the end the last task
-  while :
+  # Wait for the end the last task: timeout in 10 min
+  for j in {0..300}
   do
     sleep 2s
     STATUSCODE=`aws logs describe-export-tasks --task-id "$RUNNING" | grep code | awk -F \" '{ print $4 }'`
@@ -51,6 +51,15 @@ function wait_task(){
       return 1
     fi
   done
+
+  # Abandon
+  if [ "$STATUSCODE" == "RUNNING" ] ; then
+    printf " Timeout, cancelling..."
+    aws logs cancel-export-task --task-id $RUNNING
+  fi
+
+  wait_task $RUNNING
+  return $?
 }
 
 # wait for tasks running now
