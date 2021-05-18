@@ -12,8 +12,6 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo/resp"
 
-	//	"github.com/wangaoone/s3gof3r"
-
 	"math/rand"
 	"net/url"
 	"os"
@@ -748,6 +746,9 @@ func main() {
 					// client.Reader.ReadInt()                   // recovery
 					// data, _ := client.Reader.ReadBulkString() // stream
 					// log.Info("Recovered data of size: %v", len(data))
+
+					// client.Writer.WriteCmd(protocol.CMD_ACK)
+					// client.Writer.Flush()
 
 					// <-ended
 

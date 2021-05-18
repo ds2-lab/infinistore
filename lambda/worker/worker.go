@@ -85,6 +85,7 @@ func NewWorker(lifeId int64) *Worker {
 		closed:      WorkerClosed,
 		proxies:     make([]*HandlerProxy, 0, 10), // 10 for a initial size.
 	}
+	worker.Server.HandleFunc(protocol.CMD_ACK, worker.ackHandler)
 	worker.Server.HandleCallbackFunc(worker.responseHandler)
 	return worker
 }
@@ -443,6 +444,26 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 	return true
 }
 
+func (wrk *Worker) acknowledge(link *Link) {
+	link.acked.Resolve()
+}
+
+func (wrk *Worker) ackHandler(w resp.ResponseWriter, c *resp.Command) {
+	wrk.acknowledge(LinkFromClient(redeo.GetClient(c.Context())))
+}
+
+func (wrk *Worker) WaitAck(cmd string, cb func(), links ...interface{}) {
+	link := wrk.selectLink(links...)
+	go func() {
+		// Wait for resolve or timeout
+		if err := link.acked.Timeout(); err != nil {
+			wrk.log.Warn("Acknowledge of %v: %v", cmd, err)
+			link.acked.Resolve()
+		}
+		cb()
+	}()
+}
+
 // HandleCallback callback handler
 func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp := r.(Response)
@@ -480,6 +501,9 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 		} else {
 			wrk.log.Warn("Error on flush response(%s), abandon attempts: %v", rsp.Command(), err)
 		}
+
+		rsp.close()
+		return
 	}
 
 	rsp.close()

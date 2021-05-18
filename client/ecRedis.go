@@ -491,7 +491,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 
 	val, err := valReader.ReadAll()
 	if err != nil {
-		log.Warn("Error on steaming received chunk %s(%d): %v", reqId, i, err)
+		log.Warn("Error on streaming received chunk %s(%d): %v", reqId, i, err)
 		c.setError(ret, addr, i, err)
 		return
 	}
