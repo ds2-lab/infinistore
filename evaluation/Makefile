@@ -38,10 +38,10 @@ playback-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
 
 playback-static: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-norecovery: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery -log=proxy.log" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
@@ -50,7 +50,7 @@ stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
 
 benchmark: build-bench
-	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -esz 1048576 -d 10 -p 2 -op 0
 	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
 benchmark-recovery: build build-bench
