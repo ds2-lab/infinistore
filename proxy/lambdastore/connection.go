@@ -217,6 +217,10 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 		conn.closeLocked()
 		return err
 	}
+	// Set instance busy. Yes requests will call busy twice:
+	// on schedule(instance.handleRequest) and on request.
+	ins := conn.instance // Save a reference in case the connection being released later.
+	ins.busy()
 	// Set timeout for response.
 	req.SetTimeout(ResponseTimeout)
 	go func() {
@@ -226,6 +230,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 			// close connection to discard late response.
 			conn.Close()
 		}
+		ins.doneBusy()
 	}()
 
 	return nil
