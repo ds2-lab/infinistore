@@ -153,6 +153,7 @@ type Instance struct {
 	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
 	validated       promise.Promise
+	numBusy         int32
 	mu              sync.Mutex
 	closed          chan struct{}
 	coolTimer       *time.Timer
@@ -303,7 +304,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 }
 
 func (ins *Instance) IsBusy() bool {
-	return len(ins.chanCmd) > 0
+	return atomic.LoadInt32(&ins.numBusy) > 0 || len(ins.chanCmd) > 0 || len(ins.chanPriorCmd) > 0
 }
 
 func (ins *Instance) WarmUp() {
@@ -1139,6 +1140,10 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		return
 	}
 
+	// Set instance busy on request.
+	ins.busy()
+	defer ins.doneBusy()
+
 	var err error
 	var attemps = MAX_ATTEMPTS
 	if !cmd.Retriable() {
@@ -1332,6 +1337,14 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	if !ins.IsClosed() && !ins.IsReclaimed() {
 		ins.coolTimer.Reset(ins.coolTimeout)
 	}
+}
+
+func (ins *Instance) busy() {
+	atomic.AddInt32(&ins.numBusy, 1)
+}
+
+func (ins *Instance) doneBusy() {
+	atomic.AddInt32(&ins.numBusy, -1)
 }
 
 func (ins *Instance) CollectData() {
