@@ -11,7 +11,7 @@ const LambdaPrefix = "Store1VPCNode"
 const AWSRegion = "us-east-1"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
-const LambdaMaxDeployments = 400
+const LambdaMaxDeployments = 1000
 
 // Mode of cluster.
 const StaticCluster = "static"
@@ -36,16 +36,16 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
+const DefaultInstanceCapacity = 1024 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 300 * 1000000 // 100MB
+const InstanceOverhead = 200 * 1000000 // 200MB
 
 // Threshold Scaling out avg instance size threshold
 const Threshold = 0.8 // Don't set beyond 0.8
 
 // Maximum chunk per instance
-const ChunkThreshold = 125000 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
+const ChunkThreshold = 8192 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = "" // Leave it empty if Lambda VPC is enabled.
