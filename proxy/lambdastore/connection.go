@@ -112,6 +112,13 @@ func (conn *Connection) BindInstance(ins *Instance) *Connection {
 }
 
 func (conn *Connection) SendControl(ctrl *types.Control) error {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.isClosedLocked() {
+		return ErrConnectionClosed
+	}
+
 	switch ctrl.Name() {
 	case protocol.CMD_DATA:
 		ctrl.PrepareForData(conn)
@@ -604,11 +611,12 @@ func (conn *Connection) pongHandler() {
 		return
 	}
 
-	conn, err = instance.TryFlagValidated(conn, sid, flags)
+	validated, err := instance.TryFlagValidated(conn, sid, flags)
 	if err == nil || err == ErrNotCtrlLink || err == ErrInstanceValidated {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
-		conn.log.Warn("Discard rouge PONG for %d.", storeId)
+		conn.log.Warn("Discard rouge PONG(%v) for %d, current %v", conn, storeId, validated)
+		conn.Conn.Close() // Close connection normally, so lambda will close itself.
 		conn.Close()
 	}
 }

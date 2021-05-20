@@ -91,7 +91,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ResponseTimeout       = 2 * time.Second
-	MinValidationInterval = 20 * time.Millisecond // The minimum interval between validations.
+	MinValidationInterval = 10 * time.Millisecond // The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -666,11 +666,15 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 
 	// 1. Unresolved: wait for validation result.
 	// 2: MinValidationInterval has not passed since last successful valiation: avoid frequent heartbeat.
-	if !ins.validated.IsResolved() ||
-		(ins.validated.Error() == nil && atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval) {
+	if !ins.validated.IsResolved() {
 		ins.mu.Unlock()
-		// Return last validated connection or wait.
 		return castValidatedConnection(ins.validated)
+	}
+	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
+		ins.validated.Error() == nil && !ins.validated.Options().(*ValidateOption).WarmUp &&
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval {
+		ins.mu.Unlock()
+		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
 	// For reclaimed instance, simply return the result of last validation.
@@ -1020,7 +1024,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 	if conn != oldCtrl {
 		if !newSession && oldCtrl != nil && !conn.IsSameWorker(oldCtrl) {
 			// Deny session if session is duplicated and from another worker
-			return conn, ErrDuplicatedSession
+			return oldCtrl, ErrDuplicatedSession
 		} else if newSession {
 			ins.log.Debug("Session %s started.", sid)
 		} else {
@@ -1071,9 +1075,9 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 	validConn, _ := ins.flagValidatedLocked(conn)
 	if validConn != conn {
 		ins.log.Debug("[%v]Already validated", ins)
-		return conn, ErrInstanceValidated
+		return validConn, ErrInstanceValidated
 	} else {
-		return conn, nil
+		return validConn, nil
 	}
 }
 
