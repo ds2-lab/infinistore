@@ -355,8 +355,10 @@ func (ins *Instance) HandleRequests() {
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
 			// Drain priority channel first.
 			// The implementation is not thread safe. As long as this is the only place to read chanPriorCmd, it is ok.
-			for len(ins.chanPriorCmd) > 0 {
-				ins.handleRequest(<-ins.chanPriorCmd)
+			select {
+			case priorCmd := <-ins.chanPriorCmd:
+				ins.handleRequest(priorCmd)
+			default:
 			}
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
@@ -1256,7 +1258,13 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	backup.chanPriorCmd <- req // Rerouted request should not be queued again.
+	select {
+	case backup.chanPriorCmd <- req: // Rerouted request should not be queued again.
+	default:
+		ins.log.Info("We will not try to overload backup node, stop reroute %v", req)
+		return false
+	}
+
 	ins.log.Debug("Rerouted %s to node %d as backup %d of %d.", req.Key, backup.Id(), backup.backingId, backup.backingTotal)
 	return true
 }

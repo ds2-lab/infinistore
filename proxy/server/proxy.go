@@ -219,9 +219,15 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 
 	// Validate the status of the instance
 	instance := p.cluster.Instance(uint64(lambdaDest))
-	if instance == nil || instance.IsReclaimed() || instance.Dispatch(req) != nil {
+	var err error
+	if instance == nil || instance.IsReclaimed() {
+		err = lambdastore.ErrInstanceClosed
+	} else {
+		err = instance.DispatchWithOptions(req, true)
+	}
+	if err != nil {
 		// In both case, the instance can be closed, try relocate.
-		_, err := p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) closed.", lambdaDest))
+		_, err := p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
 		if err != nil {
 			// If relocating still fails, abandon.
 			w.AppendNil()
