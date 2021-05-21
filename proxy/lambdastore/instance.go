@@ -67,7 +67,7 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 10
+	MAX_CMD_QUEUE_LEN = 5
 	MAX_ATTEMPTS      = 3
 	TEMP_MAP_SIZE     = 10
 	BACKING_DISABLED  = 0
@@ -478,18 +478,17 @@ func (ins *Instance) ReserveBacking() error {
 // Start serving as the backup for specified instance.
 // Return false if the instance is backing another instance.
 func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
-
 	if atomic.LoadUint32(&ins.backing) != BACKING_RESERVED {
 		ins.log.Error("Please call ReserveBacking before StartBacking")
 		return false
 	}
 
+	ins.mu.Lock()
 	ins.backingIns = bakIns
 	ins.backingId = bakId
 	ins.backingTotal = total
 	atomic.StoreUint32(&ins.backing, BACKING_ENABLED)
+	ins.mu.Unlock()
 
 	// Manually trigger ping with payload to initiate parallel recovery
 	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total)
@@ -591,11 +590,6 @@ func (ins *Instance) IsReclaimed() bool {
 
 func (ins *Instance) Close() {
 	if ins.IsClosed() {
-		return
-	}
-
-	atomic.CompareAndSwapUint32(&ins.status, INSTANCE_UNSTARTED, INSTANCE_RUNNING)
-	if !atomic.CompareAndSwapUint32(&ins.status, INSTANCE_RUNNING, INSTANCE_CLOSED) {
 		return
 	}
 
