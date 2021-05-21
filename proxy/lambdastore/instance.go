@@ -101,21 +101,24 @@ var (
 	}))
 
 	// Errors
-	ErrInstanceClosed    = errors.New("instance closed")
-	ErrInstanceReclaimed = errors.New("instance reclaimed")
-	ErrInstanceSleeping  = errors.New("instance is sleeping")
-	ErrDuplicatedSession = errors.New("session has started")
-	ErrNotCtrlLink       = errors.New("not control link")
-	ErrInstanceValidated = errors.New("instance has been validated by another connection")
-	ErrInstanceBusy      = errors.New("instance busy")
-	ErrWarmupReturn      = errors.New("return from warmup")
-	ErrUnknown           = errors.New("unknown error")
-	ErrValidationTimeout = errors.New("funciton validation timeout")
+	ErrInstanceClosed     = errors.New("instance closed")
+	ErrInstanceReclaimed  = errors.New("instance reclaimed")
+	ErrInstanceSleeping   = errors.New("instance is sleeping")
+	ErrInstanceRecovering = errors.New("instance is recovering")
+	ErrReservationFailed  = errors.New("reservation failed")
+	ErrDuplicatedSession  = errors.New("session has started")
+	ErrNotCtrlLink        = errors.New("not control link")
+	ErrInstanceValidated  = errors.New("instance has been validated by another connection")
+	ErrInstanceBusy       = errors.New("instance busy")
+	ErrWarmupReturn       = errors.New("return from warmup")
+	ErrUnknown            = errors.New("unknown error")
+	ErrValidationTimeout  = errors.New("funciton validation timeout")
 )
 
 type InstanceManager interface {
 	Instance(uint64) *Instance
 	Recycle(types.LambdaDeployment) error
+	GetCandidateQueue() <-chan *Instance
 }
 
 type Relocator interface {
@@ -391,7 +394,7 @@ func (ins *Instance) startRecoveryLocked() int {
 	}
 
 	// Reserve available backups
-	changes := ins.backups.Reserve(nil)
+	changes := ins.backups.Reserve(CM.GetCandidateQueue())
 
 	// Start backup and build logs
 	var msg strings.Builder
@@ -442,25 +445,30 @@ func (ins *Instance) IsRecovering() bool {
 
 // Check if the instance is available for serving as a backup for specified instance.
 // Return false if the instance is backing another instance.
-func (ins *Instance) ReserveBacking() bool {
+func (ins *Instance) ReserveBacking() error {
 	// Keep this lock free, or it may deadlock sometime. eg. When two instances are trying to backing each other.
-	if ins.IsClosed() || ins.IsRecovering() {
-		return false
+	if ins.IsClosed() {
+		return ErrInstanceClosed
+	} else if ins.IsRecovering() {
+		return ErrInstanceRecovering
 	}
 
 	// We don't check phase because backing and closed due to reclaiming/expiring are exclusive.
 	// If instance is backing, reclaiming and expiring will not close instance.
 	// If instance is closed due to reclaiming/expiring, it is not backing.
 	if !atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_RESERVED) {
-		return false
+		return ErrReservationFailed
 	}
 
 	// Double check, or restore if failed.
-	if ins.IsClosed() || ins.IsRecovering() {
+	if ins.IsClosed() {
 		atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
-		return false
+		return ErrInstanceClosed
+	} else if ins.IsRecovering() {
+		atomic.StoreUint32(&ins.backing, BACKING_DISABLED)
+		return ErrInstanceRecovering
 	}
-	return true
+	return nil
 }
 
 // Start serving as the backup for specified instance.

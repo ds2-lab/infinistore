@@ -35,6 +35,10 @@ func (im *TestInstanceManager) Recycle(dp types.LambdaDeployment) error {
 	return nil
 }
 
+func (im *TestInstanceManager) GetCandidateQueue() <-chan *lambdastore.Instance {
+	return nil
+}
+
 func (im *TestInstanceManager) GetActiveInstances(int) []*lambdastore.Instance {
 	return im.all
 }

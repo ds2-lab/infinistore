@@ -39,7 +39,8 @@ type MovingWindow struct {
 	cursor    *Bucket
 	startTime time.Time
 
-	scaler chan *types.ScaleEvent
+	scaler         chan *types.ScaleEvent
+	candidateQueue *lambdastore.CandidateQueue
 	// scaleCounter int32
 
 	mu   sync.RWMutex
@@ -78,6 +79,7 @@ func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
 	if cluster.numBufferFuncs < 0 {
 		cluster.numBufferFuncs = 0
 	}
+	cluster.candidateQueue = lambdastore.NewCandidateQueue(config.BackupsPerInstance, cluster)
 	return cluster
 }
 
@@ -137,6 +139,7 @@ func (mw *MovingWindow) Close() {
 	}
 
 	close(mw.done)
+	mw.candidateQueue.Close()
 	for i, gins := range mw.group.all {
 		gins.Instance().Close()
 		mw.group.all[i] = nil
@@ -183,6 +186,10 @@ func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
 	return nil
 }
 
+func (mw *MovingWindow) GetCandidateQueue() <-chan *lambdastore.Instance {
+	return mw.candidateQueue.Candidates()
+}
+
 // lambdastore.Relocator implementation
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
 	ins, _, err := mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
@@ -209,6 +216,20 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int, cmd types.Com
 	}
 
 	return ins, true, nil
+}
+
+// lambdastore.CandidateProvider implementation
+func (mw *MovingWindow) GetBackupCandidates(buf []*lambdastore.Instance) int {
+	bucketRange := config.NumActiveBuckets
+	if bucketRange > len(mw.buckets) {
+		bucketRange = len(mw.buckets)
+	}
+	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
+
+	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
+	num, candidates := mw.getBackupsForNode(all, 0, len(buf))
+	copy(buf[:num], candidates)
+	return num
 }
 
 // metastore.InstanceManger implementation
@@ -426,16 +447,24 @@ func (mw *MovingWindow) rand() int {
 
 // only assign backup for new node in bucket
 func (mw *MovingWindow) assignBackupLocked(gall []*GroupInstance) {
-	// When current bucket leaves active window, there backups should not have been expired.
-	bucketRange := config.NumAvailableBuckets
+	// When current bucket leaves active window, backups of node in the bucket should not have been expired.
+	bucketRange := config.NumActiveBuckets
 	if bucketRange > len(mw.buckets) {
 		bucketRange = len(mw.buckets)
 	}
 	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
 
 	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
-	for _, gins := range gall {
-		num, candidates := mw.getBackupsForNode(all, gins.Idx()-startBucket.start.Idx())
+	scale := len(all) / len(gall)
+	for i, gins := range gall {
+		if gins.Idx() >= all[0].Idx() && gins.Idx() <= all[len(all)-1].Idx() {
+			i = int(gins.Idx() - all[0].Idx())
+		} else if scale >= 1 {
+			i *= scale
+		} else if scale < 1 {
+			i = i % len(all)
+		}
+		num, candidates := mw.getBackupsForNode(all, i, config.BackupsPerInstance)
 		node := gins.Instance()
 		node.AssignBackups(num, candidates)
 	}
@@ -506,20 +535,16 @@ func (mw *MovingWindow) testScaledLocked(gins *GroupInstance, bucket *Bucket, re
 	return true
 }
 
-func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int) (int, []*lambdastore.Instance) {
-	numBaks := config.BackupsPerInstance
+func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int, numBaks int) (int, []*lambdastore.Instance) {
 	available := len(gall)
-
-	numTotal := numBaks * 2
-	distance := available / (numTotal + 1) // main + double backup candidates
+	distance := available / (numBaks + 1) // main + double backup candidates
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
 		numBaks = util.Ifelse(numBaks >= available, available-1, numBaks).(int) // Use all
-		numTotal = util.Ifelse(numTotal >= available, available-1, numTotal).(int)
 	}
-	candidates := make([]*lambdastore.Instance, numTotal)
-	for j := 0; j < numTotal; j++ {
+	candidates := make([]*lambdastore.Instance, numBaks)
+	for j := 0; j < numBaks; j++ {
 		candidates[j] = gall[(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
 	}
 	// Because only first numBaks backups will be used initially, shuffle to avoid the same backup set.
