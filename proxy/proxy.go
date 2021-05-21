@@ -37,6 +37,9 @@ var (
 func init() {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	global.Log = log
+	logger.LevelProvider = func(_ logger.ILogger) int {
+		return log.Level
+	}
 	if config.ServerPublicIp != "" {
 		global.ServerIp = config.ServerPublicIp
 	}
@@ -61,7 +64,7 @@ func main() {
 	}
 
 	if options.Debug {
-		log.Level = logger.LOG_LEVEL_ALL
+		global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
 	}
 	log.Color = !options.NoColor
 	if options.LogFile != "" {

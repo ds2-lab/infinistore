@@ -1,6 +1,7 @@
 package lambdastore
 
 import (
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
@@ -50,6 +51,7 @@ type Backups struct {
 	availables int
 	locator    protocol.BackupLocator
 	adapter    BackerGetter
+	log        logger.ILogger
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
@@ -62,6 +64,9 @@ func (b *Backups) Reset(num int, candidates []*Instance) {
 	}
 	b.required = num
 	b.candidates = candidates
+	if b.log == nil {
+		b.log = logger.NilLogger
+	}
 }
 
 func (b *Backups) Len() int {
@@ -138,6 +143,7 @@ func (b *Backups) Reserve(fallback <-chan *Instance) int {
 	}
 
 	// Try fallback after all candidates tested, so duplicated fallback will not success.
+	failovers := 0
 	if fallback != nil {
 		newFailures := 0
 
@@ -163,11 +169,13 @@ func (b *Backups) Reserve(fallback <-chan *Instance) int {
 						b.candidates[i] = candidate
 						b.addToBackups(i, candidate)
 						newFailures = 0
+						failovers++
 						found = true
 						break ForCandidate
 					} // try next
 				default:
 					// Stucked, stop trying.
+					b.log.Warn("%d failovers found before stuck: attempt %d", failovers, j)
 					break ForCandidate
 				}
 			}
@@ -177,6 +185,9 @@ func (b *Backups) Reserve(fallback <-chan *Instance) int {
 			}
 		}
 		failures = newFailures
+	}
+	if failovers > 0 {
+		b.log.Info("%d failover backups added.", failovers)
 	}
 
 	b.locator.Reset(len(b.backups))

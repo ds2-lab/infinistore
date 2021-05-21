@@ -96,6 +96,7 @@ func (mw *MovingWindow) Start() error {
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end))
+	mw.candidateQueue.Start()
 
 	// Set cursor to latest bucket.
 	mw.cursor = bucket

@@ -1,10 +1,11 @@
 package global
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -39,7 +40,7 @@ func init() {
 }
 
 func IsWarmupWithFixedInterval() bool {
-	return Flags & protocol.FLAG_FIXED_INTERVAL_WARMUP > 0
+	return Flags&protocol.FLAG_FIXED_INTERVAL_WARMUP > 0
 }
 
 func GetLogger(prefix string) logger.ILogger {
@@ -47,5 +48,11 @@ func GetLogger(prefix string) logger.ILogger {
 		Prefix: prefix,
 		Level:  Log.GetLevel(),
 		Color:  !Options.NoColor,
+	}
+}
+
+func SetLoggerLevel(level int) {
+	if color, ok := Log.(*logger.ColorLogger); ok {
+		color.Level = level
 	}
 }

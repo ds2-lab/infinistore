@@ -67,12 +67,13 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 10
+	MAX_CMD_QUEUE_LEN = 5
 	MAX_ATTEMPTS      = 3
 	TEMP_MAP_SIZE     = 10
 	BACKING_DISABLED  = 0
 	BACKING_RESERVED  = 1
 	BACKING_ENABLED   = 2
+	BACKING_FORBID    = 3
 
 	DESCRIPTION_UNSTARTED  = "unstarted"
 	DESCRIPTION_CLOSED     = "closed"
@@ -91,7 +92,7 @@ var (
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
 	ResponseTimeout       = 2 * time.Second
-	MinValidationInterval = 10 * time.Millisecond // The minimum interval between validations.
+	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -205,6 +206,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
 	}
+	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
 	return ins
 }
@@ -353,8 +355,10 @@ func (ins *Instance) HandleRequests() {
 		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
 			// Drain priority channel first.
 			// The implementation is not thread safe. As long as this is the only place to read chanPriorCmd, it is ok.
-			for len(ins.chanPriorCmd) > 0 {
-				ins.handleRequest(<-ins.chanPriorCmd)
+			select {
+			case priorCmd := <-ins.chanPriorCmd:
+				ins.handleRequest(priorCmd)
+			default:
 			}
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
@@ -474,18 +478,17 @@ func (ins *Instance) ReserveBacking() error {
 // Start serving as the backup for specified instance.
 // Return false if the instance is backing another instance.
 func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
-
 	if atomic.LoadUint32(&ins.backing) != BACKING_RESERVED {
 		ins.log.Error("Please call ReserveBacking before StartBacking")
 		return false
 	}
 
+	ins.mu.Lock()
 	ins.backingIns = bakIns
 	ins.backingId = bakId
 	ins.backingTotal = total
 	atomic.StoreUint32(&ins.backing, BACKING_ENABLED)
+	ins.mu.Unlock()
 
 	// Manually trigger ping with payload to initiate parallel recovery
 	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total)
@@ -523,6 +526,10 @@ func (ins *Instance) IsBacking(includingPrepare bool) bool {
 	} else {
 		return atomic.LoadUint32(&ins.backing) == BACKING_ENABLED
 	}
+}
+
+func (ins *Instance) ForbidBacking() bool {
+	return atomic.CompareAndSwapUint32(&ins.backing, BACKING_DISABLED, BACKING_FORBID)
 }
 
 // TODO: Add sid support, proxy now need sid to connect.
@@ -568,11 +575,8 @@ func (ins *Instance) Expire() {
 		return
 	}
 
-	ins.mu.Lock()
-	defer ins.mu.Unlock()
-
-	if !ins.IsBacking(true) {
-		ins.closeLocked()
+	if ins.ForbidBacking() {
+		ins.Close()
 	}
 }
 
@@ -599,6 +603,7 @@ func (ins *Instance) closeLocked() {
 	if ins.IsClosed() {
 		return
 	}
+	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
 
 	ins.log.Debug("[%v]Closing...", ins)
 	select {
@@ -607,12 +612,13 @@ func (ins *Instance) closeLocked() {
 	default:
 		close(ins.closed)
 	}
-	atomic.StoreUint32(&ins.status, INSTANCE_CLOSED)
-	// Close all links
-	// TODO: Due to reconnection from lambda side, we may just leave links to be closed by the lambda.
-	ins.lm.Close()
 	atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 	ins.flagValidatedLocked(nil, ErrInstanceClosed)
+
+	// Close all links
+	ins.lm.Close()
+	ins.lm = nil
+
 	ins.log.Info("[%v]Closed", ins)
 
 	// Recycle instance
@@ -682,6 +688,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		ins.validated.Error() == nil && !ins.validated.Options().(*ValidateOption).WarmUp &&
 		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval {
 		ins.mu.Unlock()
+		ins.log.Debug("Validation skipped.")
 		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
@@ -775,57 +782,63 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 
 func (ins *Instance) triggerLambda(opt *ValidateOption) {
 	err := ins.doTriggerLambda(opt)
+	awakeness := atomic.LoadUint32(&ins.awakeness)
 	for {
-		if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
+		// For instance of status maybe, simply current invocation.
+		if awakeness == INSTANCE_MAYBE {
 			return
 		}
 
+		// Handle reclaimation
 		if err != nil && err == ErrInstanceReclaimed {
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 			ins.log.Info("Reclaimed")
 
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
+				// Close() will handle status and validation and we can safely exit.
 				ins.Close()
 				return
 			}
-
-			// Continue to waiting for being validated
 		}
 
+		// Continue to handle validation
 		if ins.validated.IsResolved() {
 			// Don't overwrite the MAYBE status.
-			status := atomic.LoadUint32(&ins.awakeness)
-			if status == INSTANCE_MAYBE {
-				return
-			}
-			if atomic.CompareAndSwapUint32(&ins.awakeness, status, INSTANCE_SLEEPING) {
+			if atomic.CompareAndSwapUint32(&ins.awakeness, awakeness, INSTANCE_SLEEPING) {
+				awakeness = INSTANCE_SLEEPING
 				ins.log.Debug("[%v]Status updated.", ins)
 			} else {
 				ins.log.Error("[%v]Unexpected status.", ins)
 			}
-			return
+			break // Break to proceed after trigger cleanup.
 		} else if ins.validated.Options().(*ValidateOption).WarmUp { // Use ValidationOption of most recent validation to reflect up to date status.
 			// No retry for warming up.
 			// Possible reasons
 			// 1. Pong is delayed and lambda is returned without requesting for recovery, or the lambda will wait for the ending of the recovery.
 			ins.mu.Lock()
-			// Does not affect the MAYBE status.
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 			// No need to return a validated connection. If someone do require the connection, it is an unexpected error.
 			ins.flagValidatedLocked(nil, ErrWarmupReturn)
 			ins.mu.Unlock()
 
 			ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
-			return
+			break // Break to proceed after trigger cleanup.
 		} else {
 			// Validating, retrigger.
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_ACTIVATING)
 
+			// Added by Tianium: Since lambda is stopped, do some cleanup
+			ins.lm.Reset()
+
 			ins.log.Info("[%v]Reactivateing...", ins)
 			err = ins.doTriggerLambda(opt)
+			awakeness = atomic.LoadUint32(&ins.awakeness)
 		}
 	}
+
+	// Added by Tianium: Since lambda is stopped, do some cleanup
+	ins.lm.Reset()
 }
 
 func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
@@ -910,9 +923,6 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	ins.mu.Unlock()
 
 	ins.endSession(event.Sid)
-
-	// Added by Tianium: Since lambda is stopped, do some cleanup
-	ins.lm.Reset()
 
 	if err != nil {
 		ins.Meta.Stale = false
@@ -1165,7 +1175,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	var i int
 	for i = 0; i < attemps; i++ {
 		if i > 0 {
-			ins.log.Debug("Attempt %d", i)
+			ins.log.Info("Attempt %d: %v", i, cmd)
 		}
 		// Check lambda status first
 		validateStart := time.Now()
@@ -1201,6 +1211,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		err = ins.request(ctrlLink, cmd, validateDuration)
 		if err == nil || !cmd.Retriable() { // Request can become streaming, so we need to test again everytime.
 			break
+		} else {
+			ins.log.Warn("Failed to %v: %v", cmd, err)
 		}
 	}
 	if err != nil {
@@ -1240,7 +1252,13 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	backup.chanPriorCmd <- req // Rerouted request should not be queued again.
+	select {
+	case backup.chanPriorCmd <- req: // Rerouted request should not be queued again.
+	default:
+		ins.log.Info("We will not try to overload backup node, stop reroute %v", req)
+		return false
+	}
+
 	ins.log.Debug("Rerouted %s to node %d as backup %d of %d.", req.Key, backup.Id(), backup.backingId, backup.backingTotal)
 	return true
 }
