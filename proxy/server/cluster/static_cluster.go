@@ -177,6 +177,10 @@ func (c *StaticCluster) Recycle(ins types.LambdaDeployment) error {
 	return ErrUnsupported
 }
 
+func (c *StaticCluster) GetCandidateQueue() <-chan *lambdastore.Instance {
+	return nil
+}
+
 // lambdastore.Relocator implementation
 func (c *StaticCluster) Relocate(obj interface{}, chunk int, cmd types.Command) (*lambdastore.Instance, error) {
 	// Not support.

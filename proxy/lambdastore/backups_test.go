@@ -17,12 +17,12 @@ var (
 
 type testBacker int
 
-func (b *testBacker) ReserveBacking() bool {
+func (b *testBacker) ReserveBacking() error {
 	if *b == testBacker(readinessReady) {
 		*b = testBacker(readinessReserved)
-		return true
+		return nil
 	}
-	return false
+	return ErrReservationFailed
 }
 
 func (b *testBacker) StartBacking(ins *Instance, i int, all int) bool {
