@@ -238,6 +238,7 @@ func (ins *Instance) Status() uint64 {
 	}
 	if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
 		failure += FAILURE_MAX_QUEUE_REACHED
+		global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
 	}
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +
