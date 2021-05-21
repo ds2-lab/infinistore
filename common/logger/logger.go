@@ -1,5 +1,11 @@
 package logger
 
+var (
+	LevelProvider = func(logger ILogger) int {
+		return logger.GetLevel()
+	}
+)
+
 // Logger - Interface to pass into Proxy for it to log messages
 type ILogger interface {
 	Trace(format string, args ...interface{})
