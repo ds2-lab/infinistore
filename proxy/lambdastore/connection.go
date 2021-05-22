@@ -271,16 +271,22 @@ func (conn *Connection) Close() error {
 
 // close must be called from ServeLambda()
 func (conn *Connection) close() {
-	// Notify instance.
-	if conn.instance != nil {
-		conn.instance.FlagClosed(conn)
-	}
-
 	// Call signal function to avoid duplicated close.
 	conn.Close()
 
 	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()
+
+	// Remove from link manager
+	if conn.lm != nil {
+		if conn.control {
+			conn.lm.InvalidateControl(conn)
+		} else {
+			conn.lm.RemoveDataLink(conn)
+		}
+		conn.lm = nil
+	}
+	conn.instance = nil
 	var w, r interface{}
 	conn.w, w = nil, conn.w
 	conn.r, r = nil, conn.r
