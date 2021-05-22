@@ -127,7 +127,7 @@ func (conn *Connection) SendPing(payload []byte) error {
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush ping error: %v", err)
-		conn.Close()
+		conn.closeLocked()
 		return err
 	}
 
@@ -158,7 +158,7 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 
 	if err := ctrl.Flush(); err != nil {
 		conn.log.Error("Flush control error: %v - %v", ctrl, err)
-		conn.Close()
+		conn.closeLocked()
 		return err
 	}
 
