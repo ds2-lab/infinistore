@@ -615,9 +615,10 @@ func (ins *Instance) closeLocked() {
 	atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
 	ins.flagValidatedLocked(nil, ErrInstanceClosed)
 
-	// Close all links
+	// Close all links.
 	ins.lm.Close()
-	ins.lm = nil
+
+	// We can't reset components to nil, for lambda can still running.
 
 	ins.log.Info("[%v]Closed", ins)
 
