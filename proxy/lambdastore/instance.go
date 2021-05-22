@@ -1143,15 +1143,6 @@ func (ins *Instance) bye(conn *Connection) {
 	// }
 }
 
-// FlagClosed Notify instance that a connection is closed.
-func (ins *Instance) FlagClosed(conn *Connection) {
-	if conn.control {
-		ins.lm.InvalidateControl(conn) // Only current control affected.
-	} else {
-		ins.lm.RemoveDataLink(conn)
-	}
-}
-
 func (ins *Instance) handleRequest(cmd types.Command) {
 	if req := cmd.GetRequest(); req != nil && req.IsResponded() {
 		// Request is responded
