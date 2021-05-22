@@ -723,11 +723,14 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			if ctrl != nil {
 				if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
 					ins.log.Debug("Ping with payload")
-					ctrl.Ping(opt.Command.(*types.Control).Payload)
+					ctrl.SendPing(opt.Command.(*types.Control).Payload) // Ignore err, see comments below.
 				} else {
-					ctrl.Ping(DefaultPingPayload)
+					ctrl.SendPing(DefaultPingPayload) // Ignore err, see comments below.
 				}
-			} // Ctrl can be nil if disconnected, simply wait for timeout and retry
+			}
+			// In the case that control is nil or fails to send ping, there is not much
+			// we can do. Simply wait for timeout and wish new incoming control or lambda
+			// being returned so that we can retrigger it.
 
 			ins.validated.SetTimeout(connectTimeout)
 		}
