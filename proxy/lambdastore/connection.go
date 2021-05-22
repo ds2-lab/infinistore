@@ -111,6 +111,29 @@ func (conn *Connection) BindInstance(ins *Instance) *Connection {
 	return conn
 }
 
+func (conn *Connection) SendPing(payload []byte) error {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.isClosedLocked() {
+		return ErrConnectionClosed
+	}
+
+	conn.w.WriteMultiBulkSize(2)
+	conn.w.WriteBulkString(protocol.CMD_PING)
+	conn.w.WriteBulk(payload)
+	conn.SetWriteDeadline(time.Now().Add(RequestTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
+	err := conn.w.Flush()
+	if err != nil {
+		conn.log.Warn("Flush ping error: %v", err)
+		conn.Close()
+		return err
+	}
+
+	return nil
+}
+
 func (conn *Connection) SendControl(ctrl *types.Control) error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
@@ -271,12 +294,6 @@ func (conn *Connection) Close() error {
 
 // close must be called from ServeLambda()
 func (conn *Connection) close() {
-	// Call signal function to avoid duplicated close.
-	conn.Close()
-
-	// Clear pending requests after TCP connection closed, so current request got chance to return first.
-	conn.ClearResponses()
-
 	// Remove from link manager
 	if conn.lm != nil {
 		if conn.control {
@@ -284,14 +301,21 @@ func (conn *Connection) close() {
 		} else {
 			conn.lm.RemoveDataLink(conn)
 		}
-		conn.lm = nil
 	}
-	conn.instance = nil
+
+	// Call signal function to avoid duplicated close.
+	conn.Close()
+
+	// Clear pending requests after TCP connection closed, so current request got chance to return first.
+	conn.ClearResponses()
+
 	var w, r interface{}
 	conn.w, w = nil, conn.w
 	conn.r, r = nil, conn.r
 	readerPool.Put(r)
 	writerPool.Put(w)
+	conn.lm = nil
+	conn.instance = nil
 
 	conn.log.Debug("Closed.")
 }
@@ -305,6 +329,7 @@ func (conn *Connection) closeLocked() error {
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
+	// Disconnect connection to trigger close()
 	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
 	// 1. If lambda is running, lambda will close the connection.
 	//    When we close it here, the connection has been closed.
@@ -479,19 +504,6 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 		}
 	}
 	return nil
-}
-
-func (conn *Connection) Ping(payload []byte) {
-	conn.w.WriteMultiBulkSize(2)
-	conn.w.WriteBulkString(protocol.CMD_PING)
-	conn.w.WriteBulk(payload)
-	conn.SetWriteDeadline(time.Now().Add(RequestTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
-	err := conn.w.Flush()
-	if err != nil {
-		conn.log.Warn("Flush ping error: %v", err)
-		conn.Close()
-	}
 }
 
 // SetResponse Set response for last request.
