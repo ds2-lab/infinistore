@@ -7,7 +7,7 @@ fi
 PWD=`dirname $0`
 ENTRY=`date "+%Y%m%d%H%M"`
 ENTRY="/data/$ENTRY"
-NODE_PREFIX="Node"
+NODE_PREFIX="Store1VPCNode"
 
 source $PWD/util.sh
 
@@ -30,7 +30,6 @@ function perform(){
         PREGET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_GET"
 
         update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
-#        wait
         start_proxy $PREPROXY &
         while [ ! -f /tmp/infinicache.pid ]
         do

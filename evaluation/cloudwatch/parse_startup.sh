@@ -23,10 +23,10 @@ fi
 echo "exporting ${PWD}/${LOGSET}_startup.csv"
 for file in $LOGSET/*
 do
-	for zip in ${file}/*/*/*
-    do
-		TS=`head -n 1 ${zip} | awk '{print $1}'`
-        FUNC=`echo "$zip" | awk -F / '{print $4}'`
-        echo "$FUNC,$TS" >> ${PWD}/${LOGSET}_startup.csv
+  for zip in ${file}/*/*/*
+  do
+    TS=`head -n 1 ${zip} | awk '{print $1}'`
+    FUNC=`echo "$zip" | awk -F / '{print $4}'`
+    echo "$FUNC,$TS" >> ${PWD}/${LOGSET}_startup.csv
 	done
 done

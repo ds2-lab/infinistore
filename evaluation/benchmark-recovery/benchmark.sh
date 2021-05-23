@@ -7,8 +7,8 @@ fi
 PWD=`dirname $0`
 BASE=`pwd`/$PWD
 ENTRY=`date "+%Y%m%d%H%M"`
-ENTRY="data/$ENTRY"
-NODE_PREFIX="Your Lambda Function Prefix"
+ENTRY="/data/$ENTRY"
+NODE_PREFIX="Store1VPCNode"
 MINBACKUPS=10
 CLUSTER=12
 TIMEOUTBASE=700
@@ -26,7 +26,7 @@ function perform(){
     BACKUPS=$8
 
     ((NODES=CLUSTER+BACKUPS))
-    ((BYTES=SZ*1024000))
+    ((BYTES=SZ*1000000))
     ((BAKOVERHEAD=MEM/MINBACKUPS))   # Reserved.
     ((SETS=(MEM-OVERHEAD)*10/SZ))  # Default EC configuration: 10+2
     ((N=SECS*1000/INTERVAL))
@@ -87,13 +87,14 @@ function perform(){
 LASTING=(60)
 # Memory settings
 MEMSET=(512 1024 1536 2048 3008)
-SYSSET=(100 100 200 200 300)
+SYSSET=(150 200 300 400 600)     # For sz <= 2M
+# SYSSET=(100 100 150 200 300)   # For sz >= 10M
 # Object size settings
 SZSET=(2 10 50 100)
 # Inter-arrival time settings
-IASET=(200 500 1000 2000)
+IASET=(500 200 1000 2000)
 # # of backup nodes settings
-BAKSET=(10 20 40 80)
+BAKSET=(40 10 20 80)
 CONCURRENCY=1
 MAXKEY=1          # Occupant
 if [ "$1" != "" ]; then
@@ -101,12 +102,14 @@ if [ "$1" != "" ]; then
 fi
 
 mkdir -p $PWD/$ENTRY
-for mem in {0..4}
+for sz in {2..3}
 do
-    for sz in {0..3}
+    for iaIdx in {1..3}
     do
-      iaIdx=1
-      bak=1
+      mem=4
+      # sz=1
+      # iaIdx=0
+      bak=0
       #       seconds       concur       keys    object-size  inter-arrival   memory         overhead       num-backups
       perform ${LASTING[0]} $CONCURRENCY $MAXKEY ${SZSET[sz]} ${IASET[iaIdx]} ${MEMSET[mem]} ${SYSSET[mem]} ${BAKSET[bak]}
     done

@@ -16,7 +16,7 @@ import (
 const (
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
+	ROLE = "arn:aws:iam::022127035044:role/lambda-store"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
@@ -31,17 +31,16 @@ var (
 	key     = flag.String("key", "lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
-	batch   = flag.Int64("batch", 5, "batch Number, no need to modify")
-	mem     = flag.Int64("mem", 256, "the memory of lambda")
-	bucket  = flag.String("S3", "ao.lambda.code", "S3 bucket for lambda code")
+	batch   = flag.Int64("batch", 2, "batch Number, no need to modify")
+	mem     = flag.Int64("mem", 1024, "the memory of lambda")
+	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-eeb536c0"),
-		//aws.String("subnet-f94739f6"),
-		aws.String("subnet-f432faca"),
+		aws.String("subnet-0fd0db0832568af17"),
+		aws.String("subnet-043f6284f2bdcc8c5"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
+		aws.String("sg-079f6cc4e658209c3"),
 	}
 )
 

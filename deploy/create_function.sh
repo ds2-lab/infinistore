@@ -1,12 +1,12 @@
 #!/bin/bash
 
 BASE=`pwd`/`dirname $0`
-PREFIX="CacheNode"
+PREFIX="Store1VPCNode"
 KEY="lambda"
 cluster=400
 mem=1024
 
-S3="mason-leap-lab.infinicache"
+S3="tianium.default"
 
 if [ "$2" != "" ] ; then
   PREFIX="$2"

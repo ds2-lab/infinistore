@@ -1,14 +1,14 @@
 #!/bin/bash
 
 BASE=`pwd`/`dirname $0`
-PREFIX="CacheNode"
+PREFIX="Store1VPCNode"
 KEY="lambda"
 start=0
-cluster=400
+cluster=1000
 mem=1024
 # try -code
 
-S3="mason-leap-lab.infinicache"
+S3="tianium.default"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 

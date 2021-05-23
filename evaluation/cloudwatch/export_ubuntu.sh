@@ -15,7 +15,7 @@ startTime=$(date -d "$start" +%s)000
 endTime=$(date -d "$end" +%s)000
 
 FROM=0
-TO=399
+TO=999
 if [ "$4" != "" ] ; then
   FROM=$4
   TO=$4

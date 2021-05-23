@@ -10,8 +10,8 @@ const (
 )
 
 var (
-	S3_COLLECTOR_BUCKET string = "infinicache.collector"
-	S3_BACKUP_BUCKET    string = "infinicache.backup%s"
+	S3_COLLECTOR_BUCKET string = "tianium.default"
+	S3_BACKUP_BUCKET    string = "tianium.infinicache%s"
 
 	DRY_RUN = false
 )
