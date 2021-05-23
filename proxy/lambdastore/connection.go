@@ -166,9 +166,11 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 }
 
 func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) error {
+	var availableLink *AvailableLink
 	useDataLink := false
-	if len(args) > 0 {
+	if len(args) > 1 {
 		useDataLink, _ = args[0].(bool)
+		availableLink, _ = args[1].(*AvailableLink)
 	}
 
 	if !conn.control {
@@ -179,26 +181,59 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		case <-conn.closed: // Final defense, bounce back to instance and retry.
 			return ErrConnectionClosed
 		}
-	} else if useDataLink {
-		conn.log.Debug("Waiting for available data link %v", req)
-		availableLink := conn.lm.GetAvailableForRequest()
+	}
+
+	// For control link, this should work even control link is closed.
+	if !useDataLink {
+		conn.log.Debug("Waiting for available data link to %v", req)
+		// To avoid multi-source(called from different control link) block, we check both request consumption and link close.
 		select {
 		case availableLink.Request() <- req:
-			return availableLink.Error()
-		case <-conn.closed: // Final defense, bounce back to instance and retry.
-			return ErrConnectionClosed
+		case <-availableLink.Closed():
 		}
+		return availableLink.Error() // Dataonly request will not affected by control reset.
 	} else {
-		conn.log.Debug("Waiting for available link %v", req)
-		availableLink := conn.lm.GetAvailableForRequest()
+		// To avoid multi-source(called from different control link) block, we check both request consumption and link close of both link.
+		conn.log.Debug("Waiting for available link to %v (ctrlwait: %d)", req, len(conn.chanWait))
 		select {
 		case conn.chanWait <- req:
+			// Double check if request has been sent by datalink
+			select {
+			case <-availableLink.Closed():
+				// rollback
+				<-conn.chanWait
+				// availableLink close either because lm has been reset or request has been consumed by another source.
+				err := availableLink.Error()
+				if err != ErrLinkManagerReset {
+					conn.log.Debug("Request has been sent by datalink already: %", req)
+				}
+				return err
+			default:
+			}
 			return conn.sendRequest(req)
 		case availableLink.Request() <- req:
 			return availableLink.Error()
-		case <-conn.closed: // Final defense, bounce back to instance and retry.
-			return ErrConnectionClosed
+		case <-availableLink.Closed():
+			// availableLink close either because lm has been reset or request has been consumed by another source.
+			err := availableLink.Error()
+			if err != ErrLinkManagerReset {
+				conn.log.Debug("Request has been sent by datalink already: %", req)
+			}
+			return err
+		case <-conn.closed:
 		}
+
+		// connection closed: we will keep waiting for data link
+		go func() {
+			select {
+			case availableLink.Request() <- req:
+			case <-availableLink.Closed():
+			}
+			// Success or error on send request will be picked by retrial and trigger another retrial.
+			// Error due to link manager reset will be ignored, in which case a new availableLink instance will be created for new lambda function.
+		}()
+
+		return ErrConnectionClosed
 	}
 }
 

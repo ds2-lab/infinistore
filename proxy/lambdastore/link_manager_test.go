@@ -1,6 +1,7 @@
 package lambdastore
 
 import (
+	"errors"
 	"runtime"
 	"sync"
 
@@ -10,11 +11,15 @@ import (
 	// . "github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 )
 
+var (
+	errRequestSent = errors.New("request sent")
+)
+
 type testLink struct {
 }
 
 func (l *testLink) SendRequest(_ *types.Request, _ ...interface{}) error {
-	return nil
+	return errRequestSent
 }
 
 func (l *testLink) Close() error {
@@ -62,10 +67,12 @@ var _ = Describe("AvailableLinks", func() {
 
 		wg.Add(1)
 		go func() {
+			defer GinkgoRecover()
+
 			al := list.GetRequestPipe()
 			al.Request() <- &types.Request{}
 			Expect(al.link).To(Not(BeNil()))
-			Expect(al.err).To(BeNil())
+			Expect(al.err).To(Equal(errRequestSent))
 			Expect(list.linkRequest).To(BeNil())
 			wg.Done()
 		}()
@@ -88,6 +95,8 @@ var _ = Describe("AvailableLinks", func() {
 
 		wg.Add(1)
 		go func() {
+			defer GinkgoRecover()
+
 			al := list.GetRequestPipe()
 			al.Request() <- &types.Request{}
 			Expect(al.link).To(BeNil())
@@ -179,6 +188,62 @@ var _ = Describe("AvailableLinks", func() {
 
 		list.Reset()
 		Expect(list.Len()).To(Equal(0))
+	})
+
+	It("should get request err successfully", func() {
+		list := newAvailableLinks()
+
+		list.AddAvailable(&testLink{}, false)
+
+		al := list.GetRequestPipe()
+		runtime.Gosched()
+		select {
+		case al.Request() <- &types.Request{}:
+			Expect(al.Error()).To(Equal(errRequestSent))
+		case <-al.Closed():
+			Fail("on successful request, select should not pick Closed()")
+		default:
+			Fail("should not block")
+		}
+	})
+
+	It("should multi-source request return same result", func() {
+		list := newAvailableLinks()
+
+		list.AddAvailable(&testLink{}, false)
+
+		al := list.GetRequestPipe()
+		runtime.Gosched()
+		select {
+		case al.Request() <- &types.Request{}:
+			Expect(al.Error()).To(Equal(errRequestSent))
+		case <-al.Closed():
+			Fail("on successful request, select should not pick Closed()")
+		default:
+			Fail("should not block")
+		}
+
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for second request, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(errRequestSent))
+		default:
+			Fail("should not block")
+		}
+
+		// Test reset cases
+		al = list.GetRequestPipe()
+		list.AddAvailable(&testLink{}, false)
+		list.Reset()
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for request after closed, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrLinkManagerReset))
+		default:
+			Fail("should not block")
+		}
 	})
 
 	It("should AddAvailable thread safe", func() {
