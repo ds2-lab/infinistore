@@ -12,7 +12,7 @@ import (
 
 // ErrServerClosed is returned by the Server after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("migrator: Server closed")
-var ListenTimeout = 30 * time.Second
+var ListenTimeout = 120 * time.Second
 var all = &hashmap.HashMap{}
 
 type Server struct {
@@ -81,6 +81,7 @@ func (srv *Server) Serve() {
 	defer lConn.Close()
 	srv.log.Debug("Source lambda connected: %v", lConn.RemoteAddr())
 
+	srv.listener.SetDeadline(time.Now().Add(ListenTimeout))
 	rConn, err := srv.listener.AcceptTCP()
 	if err != nil {
 		srv.log.Error("Error on accept 2nd incoming connection: %v", err)
