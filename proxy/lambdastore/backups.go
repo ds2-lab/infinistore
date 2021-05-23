@@ -45,6 +45,7 @@ func (iter *BackupIterator) Value() (int, interface{}) {
 
 // Backups for a instace. If not specified, all operation are not thread safe.
 type Backups struct {
+	instance   *Instance
 	backups    []Backer
 	candidates []*Instance
 	required   int
@@ -165,6 +166,8 @@ func (b *Backups) Reserve(fallback <-chan *Instance) int {
 						// Fallback closed, abandon rest.
 						fallback = nil
 						break ForCandidate
+					} else if candidate.Name() == b.instance.Name() {
+						continue
 					} else if err := candidate.ReserveBacking(); err == nil {
 						b.candidates[i] = candidate
 						b.addToBackups(i, candidate)

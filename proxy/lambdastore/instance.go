@@ -206,6 +206,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
 	}
+	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
 	return ins
