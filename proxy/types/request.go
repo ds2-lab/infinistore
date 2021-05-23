@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -40,6 +41,7 @@ type Request struct {
 	conn             Conn
 	status           uint32
 	streamingStarted bool
+	responseTimeout  time.Duration
 	responded        promise.Promise
 }
 
@@ -77,9 +79,6 @@ func (req *Request) PrepareForSet(conn Conn) {
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
-	if req.Body != nil {
-		conn.Writer().WriteBulk(req.Body)
-	}
 	req.conn = conn
 }
 
@@ -91,6 +90,7 @@ func (req *Request) PrepareForGet(conn Conn) {
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
 	req.conn = conn
+	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
 
 func (req *Request) PrepareForDel(conn Conn) {
@@ -118,6 +118,10 @@ func (req *Request) PrepareForRecover(conn Conn) {
 	conn.Writer().WriteBulkString(req.RetCommand)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
 	req.conn = conn
+	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize) // Consider the time to download and cache the object
+	if req.RetCommand == protocol.CMD_GET {
+		req.responseTimeout *= 2
+	}
 }
 
 func (req *Request) Flush() error {
@@ -127,8 +131,17 @@ func (req *Request) Flush() error {
 	conn := req.conn
 	req.conn = nil
 
-	if req.BodyStream != nil {
+	// Write deadline is added back.
+	// When read timeout on lambda side, link close may be delayed and flush may be blocked. This blockage can happen, especially on streaming body.
+	defer conn.SetWriteDeadline(time.Time{})
+	if req.Body != nil {
+		conn.SetWriteDeadline(protocol.GetBodyDeadline(int64(len(req.Body))))
+		if err := conn.Writer().CopyBulk(bytes.NewReader(req.Body), int64(len(req.Body))); err != nil {
+			return err
+		}
+	} else if req.BodyStream != nil {
 		req.streamingStarted = true
+		conn.SetWriteDeadline(protocol.GetBodyDeadline(req.BodyStream.Len()))
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
@@ -138,6 +151,7 @@ func (req *Request) Flush() error {
 		}
 	}
 
+	conn.SetWriteDeadline(protocol.GetHeaderDeadline())
 	return conn.Writer().Flush()
 }
 
@@ -186,12 +200,13 @@ func (req *Request) Abandon() bool {
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }
 
-func (req *Request) SetTimeout(timeout time.Duration) {
-	req.initPromise().SetTimeout(timeout)
-}
-
 func (req *Request) Timeout() error {
-	return req.initPromise().Timeout()
+	if req.responseTimeout < protocol.GetHeaderTimeout() {
+		req.responseTimeout = protocol.GetHeaderTimeout()
+	}
+	p := req.initPromise()
+	p.SetTimeout(req.responseTimeout)
+	return p.Timeout()
 }
 
 func (req *Request) initPromise() promise.Promise {

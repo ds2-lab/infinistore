@@ -198,7 +198,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	// Streaming set.
-	client.Conn().SetReadDeadline(lambdaLife.GetStreamingDeadline(valReader.Len()))
+	client.Conn().SetReadDeadline(protocol.GetBodyDeadline(valReader.Len()))
 	ret := Store.SetStream(key, chunkId, valReader)
 	client.Conn().SetReadDeadline(time.Time{})
 	d1 := time.Since(t)

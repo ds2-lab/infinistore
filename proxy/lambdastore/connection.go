@@ -122,7 +122,7 @@ func (conn *Connection) SendPing(payload []byte) error {
 	conn.w.WriteMultiBulkSize(2)
 	conn.w.WriteBulkString(protocol.CMD_PING)
 	conn.w.WriteBulk(payload)
-	conn.SetWriteDeadline(time.Now().Add(RequestTimeout))
+	conn.SetWriteDeadline(time.Now().Add(DefaultConnectTimeout))
 	defer conn.SetWriteDeadline(time.Time{})
 	err := conn.w.Flush()
 	if err != nil {
@@ -273,9 +273,8 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 		return nil
 	}
 
-	// Updated by Tianium: 20210504
-	// Write timeout is meaningless: small data will be buffered and always success, blobs will be handled by both ends.
-	// TODO: If neccessary (like add support to multi-layer relay), add read timeout on client.
+	// Updated by Tianium: 20210523
+	// Write timeout is added back. See comments in req.Flush()
 	if err := req.Flush(); err != nil {
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Flush request error: %v - %v", req, err)
@@ -286,8 +285,6 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	// on schedule(instance.handleRequest) and on request.
 	ins := conn.instance // Save a reference in case the connection being released later.
 	ins.busy()
-	// Set timeout for response.
-	req.SetTimeout(ResponseTimeout)
 	go func() {
 		if err := req.Timeout(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
 			conn.log.Warn("Request timeout: %v", req)

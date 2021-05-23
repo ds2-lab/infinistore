@@ -90,8 +90,6 @@ var (
 	TriggerTimeout        = 1 * time.Second       // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
 	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
-	RequestTimeout        = 1 * time.Second
-	ResponseTimeout       = 2 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
