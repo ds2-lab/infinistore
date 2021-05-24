@@ -1301,7 +1301,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		}
-		return ctrlLink.SendRequest(req, useDataLink, ins.lm.GetAvailableForRequest()) // AvailableLink instance can be reused within one lambda invocation per request.
+		return ctrlLink.SendRequest(req, useDataLink, ins.lm) // Offer lm, so SendRequest is ctrl link free. (We still need to get ctrl link first to confirm lambda status.)
 
 	case *types.Control:
 		isDataRequest := false

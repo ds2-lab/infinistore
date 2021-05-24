@@ -166,11 +166,11 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 }
 
 func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) error {
-	var availableLink *AvailableLink
+	var lm *LinkManager
 	useDataLink := false
 	if len(args) > 1 {
 		useDataLink, _ = args[0].(bool)
-		availableLink, _ = args[1].(*AvailableLink)
+		lm, _ = args[1].(*LinkManager)
 	}
 
 	if !conn.control {
@@ -184,55 +184,32 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 	}
 
 	// For control link, this should work even control link is closed.
-	if !useDataLink {
+	al := lm.GetAvailableForRequest()
+	al.SetTimeout(DefaultConnectTimeout)
+	if useDataLink {
 		conn.log.Debug("Waiting for available data link to %v", req)
 		// To avoid multi-source(called from different control link) block, we check both request consumption and link close.
 		select {
-		case availableLink.Request() <- req:
-		case <-availableLink.Closed():
+		case al.Request() <- req:
+		case <-al.Closed():
 		}
-		return availableLink.Error() // Dataonly request will not affected by control reset.
-	} else {
-		// To avoid multi-source(called from different control link) block, we check both request consumption and link close of both link.
-		conn.log.Debug("Waiting for available link to %v (ctrlwait: %d)", req, len(conn.chanWait))
-		select {
-		case conn.chanWait <- req:
-			// Double check if request has been sent by datalink
-			select {
-			case <-availableLink.Closed():
-				// rollback
-				<-conn.chanWait
-				// availableLink close either because lm has been reset or request has been consumed by another source.
-				err := availableLink.Error()
-				if err != ErrLinkManagerReset {
-					conn.log.Debug("Request has been sent by datalink already: %", req)
-				}
-				return err
-			default:
-			}
-			return conn.sendRequest(req)
-		case availableLink.Request() <- req:
-			return availableLink.Error()
-		case <-availableLink.Closed():
-			// availableLink close either because lm has been reset or request has been consumed by another source.
-			err := availableLink.Error()
-			if err != ErrLinkManagerReset {
-				conn.log.Debug("Request has been sent by datalink already: %", req)
-			}
+		if err := al.Error(); err != ErrLinkRequestTimeout {
 			return err
-		case <-conn.closed:
+		} else {
+			al = lm.GetAvailableForRequest() // Get another al.
 		}
+	}
 
-		// connection closed: we will keep waiting for data link
-		go func() {
-			select {
-			case availableLink.Request() <- req:
-			case <-availableLink.Closed():
-			}
-			// Success or error on send request will be picked by retrial and trigger another retrial.
-			// Error due to link manager reset will be ignored, in which case a new availableLink instance will be created for new lambda function.
-		}()
-
+	// Fallback to use both link, no timeout set for al.
+	conn.log.Debug("Waiting for available link to %v (ctrlwait: %d)", req, len(conn.chanWait))
+	select {
+	case conn.chanWait <- req:
+		return conn.sendRequest(req)
+	case al.Request() <- req:
+		return al.Error()
+	case <-al.Closed():
+		return al.Error()
+	case <-conn.closed:
 		return ErrConnectionClosed
 	}
 }
