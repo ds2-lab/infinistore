@@ -153,7 +153,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	// Check lineage consistency and recovery if necessary
-	var recoverErrs []chan error
+	var recoverErrs []<-chan error
 	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
@@ -194,7 +194,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			handlers.Pong.SendWithFlags(flags)
 		} else {
 			session.Timeout.Busy("recover")
-			recoverErrs = make([]chan error, 0, inconsistency)
+			recoverErrs = make([]<-chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
 			if !input.IsBackingOnly() && !metas[0].Consistent {
@@ -260,7 +260,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	return meta, nil
 }
 
-func waitForRecovery(chs ...chan error) {
+func waitForRecovery(chs ...<-chan error) {
 	if len(chs) == 1 {
 		for err := range chs[0] {
 			log.Warn("Error on recovering: %v", err)
@@ -272,7 +272,7 @@ func waitForRecovery(chs ...chan error) {
 	var wg sync.WaitGroup
 	for _, ch := range chs {
 		wg.Add(1)
-		go func(ch chan error) {
+		go func(ch <-chan error) {
 			waitForRecovery(ch)
 			wg.Done()
 		}(ch)
@@ -393,13 +393,20 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 					cancelPong = false // Serving key is set and immediate incoming request is expected.
 				}
 				if !consistent {
-					skip = false
 					_, chanErr := Lineage.Recover(meta)
-					session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
-					go func() {
-						defer session.Timeout.DoneBusy(c.Name)
-						waitForRecovery(chanErr)
-					}()
+					// Check for immediate error.
+					select {
+					case err := <-chanErr:
+						log.Warn("Failed to recover: %v", err)
+					default:
+						skip = false
+						session.Timeout.ResetWithExtension(lambdaLife.TICK, c.Name) // Update extension for backup
+						cmd := c.Name
+						go func() {
+							defer session.Timeout.DoneBusy(cmd)
+							waitForRecovery(chanErr)
+						}()
+					}
 				} else {
 					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
 				}
