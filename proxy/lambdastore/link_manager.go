@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -18,7 +19,8 @@ const (
 )
 
 var (
-	ErrLinkManagerReset = errors.New("link manager reset")
+	ErrLinkRequestTimeout = errors.New("link request timeout")
+	ErrLinkManagerReset   = errors.New("link manager reset")
 )
 
 type manageableLink interface {
@@ -211,10 +213,20 @@ func (b *LinkBucket) Reset() {
 }
 
 type AvailableLink struct {
+	links  *AvailableLinks
 	link   manageableLink
 	pipe   chan *types.Request
 	err    error
 	closed chan struct{}
+}
+
+func (l *AvailableLink) SetTimeout(d time.Duration) {
+	go func() {
+		<-time.After(d)
+		if l.link == nil {
+			l.links.resetLinkRequest(l, ErrLinkRequestTimeout)
+		}
+	}()
 }
 
 func (l *AvailableLink) Request() chan<- *types.Request {
@@ -269,23 +281,7 @@ func (l *AvailableLinks) Reset() {
 
 	// Clean pipe
 	if l.linkRequest != nil {
-		l.linkRequest.err = ErrLinkManagerReset
-		close(l.linkRequest.closed)
-		if l.linkRequest.link == nil {
-			// Pipe is waiting for available link
-			top := l.top
-			l.top = l.nextBottomLocked(false)
-			top.next = nil
-			close(top.links) // Close channel to allow pipe routing continue. Pipe will close itself.
-			l.linkRequest = nil
-			return // Nothing left.
-		} else {
-			// Pipe is waiting for request, close it by force. Continue to check links left.
-			// Drain the pipe and update counter here to keep the last statement (l.total = 0) safe
-			l.linkRequest.pipe <- nil // To support multi-source, don't close the pipe.
-			atomic.AddInt32(&l.total, -1)
-		}
-		l.linkRequest = nil
+		l.resetLinkRequestLocked(l.linkRequest, ErrLinkManagerReset)
 	}
 
 	if len(l.top.links) == 0 {
@@ -307,6 +303,77 @@ func (l *AvailableLinks) AddAvailable(link manageableLink, nolimit bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	return l.addAvailableLocked(link, nolimit)
+}
+
+func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.linkRequest != nil {
+		return l.linkRequest
+	}
+
+	l.linkRequest = &AvailableLink{
+		links:  l,
+		pipe:   make(chan *types.Request),
+		closed: make(chan struct{}),
+	}
+	// Pipe go routing is not in the lock
+	go func(al *AvailableLink) {
+		// Wait for available connection
+	Finding:
+		for {
+			select {
+			case al.link = <-l.top.links:
+				break Finding
+			default:
+				if l.top != l.bottom {
+					// Reach end of bucket, looking for next bucket.
+					l.recycleTopBucket()
+				} else {
+					// Wait for next available connection
+					select {
+					case <-al.closed:
+						return
+					case al.link = <-l.top.links:
+						break Finding
+					}
+				}
+			}
+		}
+
+		// Consume request. For support multi-source, the pipe will not be closed. Use select al.Closed() to unblock duplicated request.
+		select {
+		case <-al.closed:
+			return
+		case req := <-al.pipe:
+			// Link request is fulfilled
+
+			// Double check
+			closed := false
+			l.mu.Lock()
+			if l.linkRequest != nil {
+				l.linkRequest = nil
+				atomic.AddInt32(&l.total, -1)
+			} else {
+				closed = true
+			}
+			l.mu.Unlock()
+			if closed {
+				return
+			}
+
+			// Consume link
+			al.err = al.link.SendRequest(req)
+			close(al.closed) // close al only after got err.
+		}
+	}(l.linkRequest)
+
+	return l.linkRequest
+}
+
+func (l *AvailableLinks) addAvailableLocked(link manageableLink, nolimit bool) bool {
 	if !nolimit && l.limit > 0 && int(atomic.LoadInt32(&l.total)) >= l.limit {
 		return false
 	}
@@ -320,73 +387,6 @@ func (l *AvailableLinks) AddAvailable(link manageableLink, nolimit bool) bool {
 			l.nextBottomLocked(true)
 		}
 	}
-}
-
-func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.linkRequest != nil {
-		return l.linkRequest
-	}
-
-	l.linkRequest = &AvailableLink{pipe: make(chan *types.Request), closed: make(chan struct{})}
-	// Pipe go routing is not in the lock
-	go func(al *AvailableLink) {
-		// Wait for available connection
-	Finding:
-		for {
-			select {
-			case al.link = <-l.top.links:
-				break Finding
-			default:
-				if l.top != l.bottom {
-					// Looking for next bucket
-					l.recycleTopBucket()
-				} else {
-					// Wait for next available connection
-					al.link = <-l.top.links
-					break Finding
-				}
-			}
-		}
-		if al.link == nil {
-			// AvailableLinks is cleaning up and top.links is closed.
-			// This setion is triggered by Reset() and locked by Reset()
-
-			// Drain the waiting request, support mutli-source
-		ForDrain:
-			for {
-				select {
-				case <-al.pipe:
-				default:
-					break ForDrain
-				}
-			}
-			return
-		}
-
-		// Consume request. For support multi-source, the pipe will not be closed. Use select al.Closed() to unblock duplicated request.
-		req := <-al.pipe
-		if req == nil {
-			// al is closed
-			return
-		}
-
-		// Link request is fulfilled
-		l.mu.Lock()
-		if l.linkRequest != nil {
-			l.linkRequest = nil
-			atomic.AddInt32(&l.total, -1)
-		}
-		l.mu.Unlock()
-
-		// Consume link
-		al.err = al.link.SendRequest(req)
-		close(al.closed) // close al only after got err.
-	}(l.linkRequest)
-
-	return l.linkRequest
 }
 
 func (l *AvailableLinks) nextBottomLocked(check bool) *LinkBucket {
@@ -422,4 +422,36 @@ func (l *AvailableLinks) recycleBucketLocked(bucket *LinkBucket) *LinkBucket {
 	next := bucket.next
 	l.tail.next = nil
 	return next
+}
+
+func (l *AvailableLinks) resetLinkRequest(al *AvailableLink, err error) {
+	if al == nil {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.resetLinkRequestLocked(al, err)
+}
+
+func (l *AvailableLinks) resetLinkRequestLocked(al *AvailableLink, err error) {
+	if l.linkRequest != al {
+		return
+	}
+
+	l.linkRequest.err = err
+	close(l.linkRequest.closed)
+	if l.linkRequest.link != nil {
+		// Pipe is waiting for request and stopped.
+		if err == ErrLinkManagerReset {
+			// Consume the link, reset will remove all links anyway.
+			atomic.AddInt32(&l.total, -1)
+		} else {
+			// Reuse the link
+			l.addAvailableLocked(l.linkRequest.link, true)
+			l.linkRequest.link = nil
+		}
+	}
+	l.linkRequest = nil
 }

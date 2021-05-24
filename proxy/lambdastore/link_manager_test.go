@@ -4,6 +4,7 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 	. "github.com/onsi/ginkgo"
@@ -98,7 +99,10 @@ var _ = Describe("AvailableLinks", func() {
 			defer GinkgoRecover()
 
 			al := list.GetRequestPipe()
-			al.Request() <- &types.Request{}
+			select {
+			case al.Request() <- &types.Request{}:
+			case <-al.Closed():
+			}
 			Expect(al.link).To(BeNil())
 			Expect(al.err).To(Equal(ErrLinkManagerReset))
 			Expect(list.linkRequest).To(BeNil())
@@ -294,5 +298,91 @@ var _ = Describe("AvailableLinks", func() {
 		Expect(list.Len()).To(Equal(0))
 		Expect(total).To(Equal(0))
 		Expect(buckets).To(Equal(3))
+	})
+
+	It("should basic timeout works", func() {
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for second request, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout))
+		default:
+			Fail("should not block")
+		}
+	})
+
+	It("should timeout compatible with reset", func() {
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+		list.Reset()
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for second request, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrLinkManagerReset))
+		default:
+			Fail("should not block")
+		}
+
+		time.Sleep(200 * time.Millisecond)
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for second request, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrLinkManagerReset))
+		default:
+			Fail("should not block")
+		}
+
+		al = list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
+		list.Reset()
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("for second request, select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout))
+		default:
+			Fail("should not block")
+		}
+	})
+
+	It("should timeout stop on available link", func() {
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+
+		// time.Sleep(10 * time.Millisecond)
+		list.AddAvailable(&testLink{}, false)
+		al.Request() <- &types.Request{}
+
+		<-time.After(200 * time.Millisecond)
+		<-al.Closed()
+		Expect(al.Error()).To(Equal(errRequestSent))
+
+		al = list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+
+		// time.Sleep(10 * time.Millisecond)
+		list.AddAvailable(&testLink{}, false)
+		<-time.After(200 * time.Millisecond)
+
+		select {
+		case al.Request() <- &types.Request{}:
+			Expect(al.Error()).To(Equal(errRequestSent))
+		case <-al.Closed():
+			Fail("on successful request, select should not pick Closed()")
+		default:
+			Fail("should not block")
+		}
 	})
 })
