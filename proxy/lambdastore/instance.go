@@ -684,8 +684,9 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		ins.mu.Unlock()
 		return castValidatedConnection(ins.validated)
 	}
+	lastOpt, _ := ins.validated.Options().(*ValidateOption)
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
-		ins.validated.Error() == nil && !ins.validated.Options().(*ValidateOption).WarmUp &&
+		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
 		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval {
 		ins.mu.Unlock()
 		ins.log.Debug("Validation skipped.")
