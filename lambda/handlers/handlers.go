@@ -55,8 +55,9 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	if session.Requests > 1 {
 		extension = lambdaLife.TICK
 	}
-	defer Server.WaitAck(c.Name, func() {
-		session.Timeout.DoneBusyWithReset(extension, c.Name)
+	cmd := c.Name // Save for defer, command is reused by redeo.
+	defer Server.WaitAck(cmd, func() {
+		session.Timeout.DoneBusyWithReset(extension, cmd)
 	}, client)
 
 	t := time.Now()
@@ -254,7 +255,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 	var ret *types.OpRet
 	cmd := c.Name
-	defer Server.WaitAck(c.Name, func() {
+	defer Server.WaitAck(cmd, func() {
 		if ret != nil && ret.IsDelayed() {
 			ret.Wait()
 		}
@@ -360,7 +361,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 	var ret *types.OpRet
 	cmd := c.Name
-	defer Server.WaitAck(c.Name, func() {
+	defer Server.WaitAck(cmd, func() {
 		if ret != nil && ret.IsDelayed() {
 			ret.Wait()
 		}

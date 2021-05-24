@@ -46,6 +46,8 @@ var (
 	LineageRecoveryContenders = 3
 
 	// Errors
+	ErrRecovering          = errors.New("already recovering")
+	ErrRecovered           = errors.New("already recovered")
 	ErrRecoveryInterrupted = errors.New("recovery interrupted")
 )
 
@@ -87,24 +89,11 @@ func NewLineageStorage(id uint64) *LineageStorage {
 
 // Storage Implementation
 func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (string, []byte, *types.OpRet) {
-	var doubleCheck bool
-
 	// Before getting safely, try what is available so far.
 	chunk, ok := s.helper.get(key)
-	if !ok {
-		// Most likely, this is because an imcomplete lineage.
-		doubleCheck = true
-	} else {
-		note := atomic.LoadUint32(&s.safenote)
-		if (!chunk.Backup && (note&RECOVERING_MAIN) > 0 && chunk.Term <= s.lineage.Term) || // Objects of Term beyond lineage.Term are newly set.
-			(chunk.Backup && (note&RECOVERING_BACKUP) > 0) {
-			// Corresponding lineage is recovering, and the chunk is not just set
-			doubleCheck = true
-		}
-		// else: We are ok to continue.
-	}
-
-	if doubleCheck {
+	// !ok: Most likely, this is because an imcomplete lineage.
+	// not safe: Corresponding lineage is recovering, and the chunk is not just set
+	if !ok || !s.isSafeToGet(chunk) {
 		s.getSafe.Wait()
 		chunk, ok = s.helper.get(key)
 	}
@@ -346,12 +335,29 @@ func (s *LineageStorage) Status() types.LineageStatus {
 // We support partial recovery. Errors during recovery will be sent to returned channel.
 // The recovery ends if returned channel is closed.
 // If the first return value is false, no fast recovery is needed.
-func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, chan error) {
+func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 	if meta.Consistent {
 		return false, nil
 	}
 
 	s.log.Debug("Start recovery of node %d(bak:%v).", meta.Meta.Id, meta.Backup)
+	chanErr := make(chan error, 1)
+	// Flag get as unsafe
+	if !s.delayGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32)) {
+		chanErr <- ErrRecovering
+		return false, chanErr
+	}
+	// Double check consistency
+	consistent, err := s.IsConsistent(meta)
+	if err != nil {
+		s.resetGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
+		chanErr <- err
+		return false, chanErr
+	} else if consistent {
+		s.resetGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
+		chanErr <- ErrRecovered
+		return false, chanErr
+	}
 
 	// Copy lineage data for recovery, update term to the recent record, and we are ready for write operatoins.
 	var old *types.LineageTerm
@@ -383,18 +389,16 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, chan error) {
 		}
 	}
 
-	// Flag get as unsafe
-	s.delayGet(util.Ifelse(meta.Backup, RECOVERING_BACKUP, RECOVERING_MAIN).(uint32))
 	ctx := context.Background()
 	if meta.Backup {
 		newCtx, cancel := context.WithCancel(ctx)
 		ctx = newCtx
 		s.backupRecoveryCanceller = func() {
+			// before canceller take affect, resetGet is called at the end of replaying lineage.
 			s.backupRecoveryCanceller = nil
 			cancel()
 		}
 	}
-	chanErr := make(chan error, 1)
 	go s.doRecover(ctx, old, meta, chanErr)
 
 	// Fast recovery if the node is not backup and significant enough.
@@ -1077,12 +1081,21 @@ func (s *LineageStorage) resetSet() {
 	s.setSafe.Done()
 }
 
-func (s *LineageStorage) delayGet(flag uint32) {
+func (s *LineageStorage) delayGet(flag uint32) bool {
 	old := atomic.LoadUint32(&s.safenote)
+	if old&flag > 0 {
+		// Already delayed
+		return false
+	}
 	for !atomic.CompareAndSwapUint32(&s.safenote, old, old|flag) {
 		old = atomic.LoadUint32(&s.safenote)
+		if old&flag > 0 {
+			// Already delayed
+			return false
+		}
 	}
 	s.getSafe.Add(1)
+	return true
 }
 
 func (s *LineageStorage) resetGet(flag uint32) {
@@ -1090,6 +1103,15 @@ func (s *LineageStorage) resetGet(flag uint32) {
 	old := atomic.LoadUint32(&s.safenote)
 	for !atomic.CompareAndSwapUint32(&s.safenote, old, old&^flag) {
 		old = atomic.LoadUint32(&s.safenote)
+	}
+}
+
+func (s *LineageStorage) isSafeToGet(chunk *types.Chunk) bool {
+	note := atomic.LoadUint32(&s.safenote)
+	if chunk.Backup {
+		return note&RECOVERING_BACKUP == 0
+	} else {
+		return (note&RECOVERING_MAIN) == 0 || chunk.Term > s.lineage.Term // Objects of Term beyond lineage.Term are newly set.
 	}
 }
 

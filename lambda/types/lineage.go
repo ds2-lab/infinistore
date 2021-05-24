@@ -50,7 +50,7 @@ type Lineage interface {
 	IsConsistent(*LineageMeta) (bool, error)
 	ClearBackup()
 	Commit() (*CommitOption, error)
-	Recover(*LineageMeta) (bool, chan error)
+	Recover(*LineageMeta) (bool, <-chan error)
 	Status() LineageStatus
 }
 
