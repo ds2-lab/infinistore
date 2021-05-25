@@ -96,7 +96,9 @@ func (mw *MovingWindow) Start() error {
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end))
-	mw.candidateQueue.Start()
+	if mw.candidateQueue != nil {
+		mw.candidateQueue.Start()
+	}
 
 	// Set cursor to latest bucket.
 	mw.cursor = bucket
@@ -140,7 +142,10 @@ func (mw *MovingWindow) Close() {
 	}
 
 	close(mw.done)
-	mw.candidateQueue.Close()
+	if mw.candidateQueue != nil {
+		mw.candidateQueue.Close()
+		mw.candidateQueue = nil
+	}
 	for i, gins := range mw.group.all {
 		gins.Instance().Close()
 		mw.group.all[i] = nil

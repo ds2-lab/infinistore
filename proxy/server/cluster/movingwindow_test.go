@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"math/rand"
 	"sync"
 
 	. "github.com/onsi/ginkgo"
@@ -15,7 +16,9 @@ var (
 
 var _ = Describe("MovingWindow", func() {
 	It("should success to scale on demand if more active instances are requested", func() {
+		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
+		cluster.candidateQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
 
@@ -30,13 +33,16 @@ var _ = Describe("MovingWindow", func() {
 	})
 
 	It("should success to scale on demand after rotated", func() {
+		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
+		cluster.candidateQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 2))
 
-		Expect(cluster.Rotate()).To(BeTrue())
+		_, _, err := cluster.Rotate()
+		Expect(err).To(BeNil())
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 2))
 
@@ -49,10 +55,12 @@ var _ = Describe("MovingWindow", func() {
 	})
 
 	It("should concurrent scaling ok", func() {
+		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
+		cluster.candidateQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
-		concurrency := 100
+		concurrency := 1000
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 2))
 
@@ -60,10 +68,11 @@ var _ = Describe("MovingWindow", func() {
 		for i := 0; i < concurrency; i++ {
 			done.Add(1)
 			go func() {
-				// defer GinkgoRecover()
+				defer GinkgoRecover()
 
-				instances := cluster.GetActiveInstances(NumFunctions * 3)
-				Expect(len(instances)).To(Equal(NumFunctions * 3))
+				random := rand.Intn(20) + 1
+				instances := cluster.GetActiveInstances(NumFunctions * random)
+				Expect(len(instances)).To(Equal(NumFunctions * random))
 				done.Done()
 			}()
 		}
