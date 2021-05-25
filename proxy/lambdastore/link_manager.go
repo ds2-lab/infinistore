@@ -19,9 +19,17 @@ const (
 )
 
 var (
-	ErrLinkRequestTimeout = errors.New("link request timeout")
-	ErrLinkManagerReset   = errors.New("link manager reset")
+	ErrLinkRequestTimeout = &LinkRequestError{error: errors.New("link request timeout")}
+	ErrLinkManagerReset   = &LinkRequestError{error: errors.New("link manager reset")}
+	ErrNilLink            = &LinkRequestError{error: errors.New("unexpected nil link")}
+
+	// Keep following variables as false. They are only for unit tests.
+	UnitTestMTC1 = false
 )
+
+type LinkRequestError struct {
+	error
+}
 
 type manageableLink interface {
 	SendRequest(*types.Request, ...interface{}) error
@@ -224,6 +232,9 @@ func (l *AvailableLink) SetTimeout(d time.Duration) {
 	go func() {
 		<-time.After(d)
 		if l.link == nil {
+			if UnitTestMTC1 {
+				time.Sleep(100 * time.Millisecond)
+			}
 			l.links.resetLinkRequest(l, ErrLinkRequestTimeout)
 		}
 	}()
@@ -342,6 +353,10 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 				}
 			}
 		}
+		if al.link == nil {
+			l.resetLinkRequest(al, ErrNilLink)
+			return
+		}
 
 		// Consume request. For support multi-source, the pipe will not be closed. Use select al.Closed() to unblock duplicated request.
 		select {
@@ -350,10 +365,15 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 		case req := <-al.pipe:
 			// Link request is fulfilled
 
+			if UnitTestMTC1 {
+				time.Sleep(100 * time.Millisecond)
+			}
+
 			// Double check
 			closed := false
 			l.mu.Lock()
-			if l.linkRequest != nil {
+			// Make sure al is the current active link request. If not, al is closed.
+			if l.linkRequest == al {
 				l.linkRequest = nil
 				atomic.AddInt32(&l.total, -1)
 			} else {
