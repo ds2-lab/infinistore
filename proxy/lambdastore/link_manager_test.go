@@ -347,7 +347,7 @@ var _ = Describe("AvailableLinks", func() {
 		list.Reset()
 		select {
 		case al.Request() <- &types.Request{}:
-			Fail("for second request, select should not pick Request()")
+			Fail("for third request, select should not pick Request()")
 		case <-al.Closed():
 			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout))
 		default:
@@ -384,5 +384,53 @@ var _ = Describe("AvailableLinks", func() {
 		default:
 			Fail("should not block")
 		}
+	})
+
+	It("should nil link be detected and reported", func() {
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond)
+
+		list.AddAvailable(nil, false)
+		runtime.Gosched()
+
+		select {
+		case al.Request() <- &types.Request{}:
+			Fail("select should not pick Request()")
+		case <-al.Closed():
+			Expect(al.Error()).To(Equal(ErrNilLink))
+		default:
+			Fail("should not block")
+		}
+	})
+
+	It("should ok in rare multi-threaded case: link lost after timeout", func() {
+		// Enable slowdown designed for unittest to emulate complex multi-threaded case
+		UnitTestMTC1 = true
+		defer func() { UnitTestMTC1 = false }()
+
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond) // 1: Set link request timeout at 100
+
+		<-time.After(150 * time.Millisecond)  // 2: Timeout at 100, wait another 100 to continue to cancel link request
+		list.AddAvailable(&testLink{}, false) // 3: New link added at 150  (Timeout triggered but we still get the link to proceed)
+		runtime.Gosched()
+
+		select {
+		case al.Request() <- &types.Request{}: // 4: Request wait at 150, wait another 100 to continue to double check and send request.
+			<-time.After(75 * time.Millisecond)                 // 5: Link request cancelled at 200 (Link request cancelled but we still get request to proceed)
+			list.GetRequestPipe()                               // 6: New link request added at 225
+			<-time.After(75 * time.Millisecond)                 // 7: Double check at 250 (Double check if link request cancelled but new link request available)
+			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout)) // 8: Should timeout correct reported.
+		case <-al.Closed():
+			Fail("on successful request, select should not pick Closed()")
+		default:
+			Fail("should not block")
+		}
+
+		list.Reset()
 	})
 })
