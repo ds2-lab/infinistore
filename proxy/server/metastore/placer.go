@@ -105,10 +105,10 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 		ins := instances[test]
 		cmd.GetRequest().InsId = ins.Id()
-		if ins.IsBusy() {
+		if l.testChunk(ins.NumChunks()+1, ins.Size()+uint64(meta.ChunkSize)) || ins.IsBusy() {
 			// Try next group
 			test += len(meta.Placement)
-		} else if err := ins.DispatchWithOptions(cmd, true); err == lambdastore.ErrInstanceBusy {
+		} else if err := ins.DispatchWithOptions(cmd, lambdastore.BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
 			// Try next group
 			test += len(meta.Placement)
 		} else if err != nil {
@@ -131,4 +131,8 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			return ins, nil, nil
 		}
 	}
+}
+
+func (l *DefaultPlacer) testChunk(num int, size uint64) bool {
+	return num > global.Options.GetInstanceChunkThreshold() || size > global.Options.GetInstanceThreshold()
 }
