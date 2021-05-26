@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -47,7 +48,8 @@ type Connection struct {
 	chanWait    chan *types.Request
 	headRequest *types.Request
 	respType    chan interface{}
-	closed      chan struct{}
+	closed      uint32
+	done        chan struct{}
 }
 
 func NewConnection(cn net.Conn) *Connection {
@@ -56,7 +58,7 @@ func NewConnection(cn net.Conn) *Connection {
 		log:      defaultConnectionLog,
 		chanWait: make(chan *types.Request, 1),
 		respType: make(chan interface{}),
-		closed:   make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 	if v := readerPool.Get(); v != nil {
 		rd := v.(resp.ResponseReader)
@@ -115,7 +117,7 @@ func (conn *Connection) SendPing(payload []byte) error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	if conn.isClosedLocked() {
+	if conn.IsClosed() {
 		return ErrConnectionClosed
 	}
 
@@ -127,7 +129,7 @@ func (conn *Connection) SendPing(payload []byte) error {
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush ping error: %v", err)
-		conn.closeLocked()
+		conn.Close()
 		return err
 	}
 
@@ -138,7 +140,8 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	if conn.isClosedLocked() {
+	// Close check can prevent resouce to be used from releasing. However, close signal is not guranteed.
+	if conn.IsClosed() {
 		return ErrConnectionClosed
 	}
 
@@ -158,7 +161,7 @@ func (conn *Connection) SendControl(ctrl *types.Control) error {
 
 	if err := ctrl.Flush(); err != nil {
 		conn.log.Error("Flush control error: %v - %v", ctrl, err)
-		conn.closeLocked()
+		conn.Close()
 		return err
 	}
 
@@ -178,7 +181,7 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		select {
 		case conn.chanWait <- req:
 			return conn.sendRequest(req)
-		case <-conn.closed: // Final defense, bounce back to instance and retry.
+		case <-conn.done: // Final defense, bounce back to instance and retry.
 			return ErrConnectionClosed
 		}
 	}
@@ -209,7 +212,7 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		return al.Error()
 	case <-al.Closed():
 		return al.Error()
-	case <-conn.closed:
+	case <-conn.done:
 		return ErrConnectionClosed
 	}
 }
@@ -218,7 +221,8 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	if conn.isClosedLocked() {
+	// Close check can prevent resouce to be used from releasing. However, close signal is not guranteed.
+	if conn.IsClosed() {
 		return ErrConnectionClosed
 	}
 
@@ -255,7 +259,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	if err := req.Flush(); err != nil {
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Flush request error: %v - %v", req, err)
-		conn.closeLocked()
+		conn.Close()
 		return err
 	}
 	// Set instance busy. Yes requests will call busy twice:
@@ -293,50 +297,23 @@ func (conn *Connection) popRequest() *types.Request {
 // 	return len(conn.chanWait) > 0
 // }
 
+func (conn *Connection) IsClosed() bool {
+	return atomic.LoadUint32(&conn.closed) == 1
+}
+
 // Close Signal connection should be closed. Function close() will be called later for actural operation
 func (conn *Connection) Close() error {
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-
-	return conn.closeLocked()
-}
-
-// close must be called from ServeLambda()
-func (conn *Connection) close() {
-	// Remove from link manager
-	if conn.lm != nil {
-		if conn.control {
-			conn.lm.InvalidateControl(conn)
-		} else {
-			conn.lm.RemoveDataLink(conn)
-		}
-	}
-
-	// Call signal function to avoid duplicated close.
-	conn.Close()
-
-	// Clear pending requests after TCP connection closed, so current request got chance to return first.
-	conn.ClearResponses()
-
-	var w, r interface{}
-	conn.w, w = nil, conn.w
-	conn.r, r = nil, conn.r
-	readerPool.Put(r)
-	writerPool.Put(w)
-	conn.lm = nil
-	conn.instance = nil
-
-	conn.log.Debug("Closed.")
-}
-
-func (conn *Connection) closeLocked() error {
-	if conn.isClosedLocked() {
-		return nil
+	if !atomic.CompareAndSwapUint32(&conn.closed, 0, 1) {
+		return ErrConnectionClosed
 	}
 
 	// Signal closed only. This allow ongoing transmission to finish.
 	conn.log.Debug("Signal to close.")
-	close(conn.closed)
+	select {
+	case <-conn.done:
+	default:
+		close(conn.done)
+	}
 
 	// Disconnect connection to trigger close()
 	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
@@ -355,14 +332,36 @@ func (conn *Connection) closeLocked() error {
 	return nil
 }
 
-func (conn *Connection) isClosedLocked() bool {
-	select {
-	case <-conn.closed:
-		// already closed
-		return true
-	default:
-		return false
+// close must be called from ServeLambda()
+func (conn *Connection) close() {
+	// Remove from link manager
+	if conn.lm != nil {
+		if conn.control {
+			conn.lm.InvalidateControl(conn)
+		} else {
+			conn.lm.RemoveDataLink(conn)
+		}
 	}
+
+	// Putting close in mutex can prevent resouces used by ongoing transactions being released.
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	// Call signal function to avoid duplicated close.
+	conn.Close()
+
+	// Clear pending requests after TCP connection closed, so current request got chance to return first.
+	conn.ClearResponses()
+
+	var w, r interface{}
+	conn.w, w = nil, conn.w
+	conn.r, r = nil, conn.r
+	readerPool.Put(r)
+	writerPool.Put(w)
+	conn.lm = nil
+	conn.instance = nil
+
+	conn.log.Debug("Closed.")
 }
 
 // blocking on lambda peek Type
@@ -378,7 +377,7 @@ func (conn *Connection) ServeLambda() {
 
 		var retPeek interface{}
 		select {
-		case <-conn.closed:
+		case <-conn.done:
 			conn.close()
 			return
 		case retPeek = <-conn.respType:
@@ -589,21 +588,12 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 }
 
 func (conn *Connection) flagAvailable() bool {
-	if conn.control || conn.lm == nil {
+	lm := conn.lm
+	if conn.control || lm == nil || conn.IsClosed() {
 		return false
 	}
 
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-
-	select {
-	case <-conn.closed:
-		// already closed
-		return false
-	default:
-	}
-
-	conn.lm.FlagAvailableForRequest(conn)
+	lm.FlagAvailableForRequest(conn)
 	return true
 }
 
