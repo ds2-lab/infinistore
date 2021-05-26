@@ -170,6 +170,10 @@ func (b *Bucket) scale(num int) (gall []*GroupInstance, err error) {
 		return nil, ErrNotActiveBucket
 	}
 
+	if pool.NumAvailable() < num {
+		return nil, ErrInsufficientDeployments
+	}
+
 	// expand
 	from := b.end
 	b.end, err = b.group.Expand(num)
