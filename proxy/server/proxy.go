@@ -197,8 +197,10 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
-			w.AppendError(err.Error())
-			w.Flush()
+			p.log.Warn("Failed to replace %v: %v", req.Id, err)
+			status := counter.AddReturned(int(dChunkId))
+			req.SetResponse(err)
+			counter.ReleaseIfAllReturned(status)
 			return
 		}
 		if postProcess != nil {
@@ -223,17 +225,17 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	if instance == nil || instance.IsReclaimed() {
 		err = lambdastore.ErrInstanceClosed
 	} else {
-		err = instance.DispatchWithOptions(req, true)
+		err = instance.Dispatch(req)
+	}
+	if err != nil && err != lambdastore.ErrTimeout {
+		// In both case, the instance can be closed, try relocate.
+		_, err = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
 	}
 	if err != nil {
-		// In both case, the instance can be closed, try relocate.
-		_, err := p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
-		if err != nil {
-			// If relocating still fails, abandon.
-			w.AppendNil()
-			w.Flush()
-			p.log.Warn("Failed to request %s: %v", chunkKey, err)
-		}
+		p.log.Warn("Failed to request %v: %v", req.Id, err)
+		status := counter.AddReturned(int(dChunkId))
+		req.SetResponse(err)
+		counter.ReleaseIfAllReturned(status)
 	}
 }
 

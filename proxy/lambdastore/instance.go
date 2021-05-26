@@ -83,6 +83,8 @@ const (
 	DESCRIPTION_ACTIVE     = "active"
 	DESCRIPTION_MAYBE      = "unmanaged"
 	DESCRIPTION_UNDEFINED  = "undefined"
+
+	BUSY_CHECK = 0x0001
 )
 
 var (
@@ -113,6 +115,8 @@ var (
 	ErrWarmupReturn       = errors.New("return from warmup")
 	ErrUnknown            = errors.New("unknown error")
 	ErrValidationTimeout  = errors.New("funciton validation timeout")
+	ErrCapacityExceeded   = errors.New("capacity exceeded")
+	ErrTimeout            = errors.New("queue timeout")
 )
 
 type InstanceManager interface {
@@ -285,10 +289,10 @@ func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 }
 
 func (ins *Instance) Dispatch(cmd types.Command) error {
-	return ins.DispatchWithOptions(cmd, false)
+	return ins.DispatchWithOptions(cmd, 0)
 }
 
-func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) error {
+func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
 		return ErrInstanceClosed
 	}
@@ -298,12 +302,16 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) er
 	case ins.chanCmd <- cmd:
 		// continue after select
 	default:
-		if errorOnBusy {
+		if opts&BUSY_CHECK > 0 {
 			return ErrInstanceBusy
 		}
 
 		// wait to be inserted and continue after select
-		ins.chanCmd <- cmd
+		select {
+		case ins.chanCmd <- cmd:
+		case <-time.After(protocol.GetHeaderTimeout()):
+			return ErrTimeout
+		}
 	}
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
