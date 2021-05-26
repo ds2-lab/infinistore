@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/lambda"
@@ -44,8 +45,16 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	cmd := exec.CommandContext(ctx, "lambda", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		log.Println(err)
+	var wg sync.WaitGroup
+	var err error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err = cmd.Run()
+	}()
+
+	wg.Wait()
+	if err != nil {
 		return nil, err
 	}
 

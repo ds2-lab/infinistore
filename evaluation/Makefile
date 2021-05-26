@@ -7,8 +7,9 @@ prepare:
 
 build: prepare
 	go build -o bin/proxy ../proxy/
-	# go build -o bin/lambda ../lambda/
-	# go build -o bin/preprocess benchmark-recovery/preprocess.go
+
+build-local: build
+	go build -o bin/lambda ../lambda/
 
 build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
@@ -46,6 +47,9 @@ playback-static-norecovery: build build-simulator
 start-server: build
 	./server.sh 1>./log 2>&1 &
 
+start-local: build-local
+	bin/proxy -debug -cluster=static -functions=1 -invoker=local -disable-recovery -ip=127.0.0.1
+
 stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
 
@@ -63,3 +67,7 @@ test: build-bench
 test-redis: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
+
+test-local: build-bench
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
+	bin/redbench -n 10 -c 10 -keymin 1 -keymax 1 -d 1 -p 0 -op 1
