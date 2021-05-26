@@ -82,5 +82,5 @@ cat downloaded/${EXPERIMENT}/simulate-400_proxy.csv | grep bucket, > downloaded/
 cloudwatch/parse.sh downloaded/log/${EXPERIMENT}
 cat downloaded/log/${EXPERIMENT}_bill.csv | grep invocation > downloaded/${EXPERIMENT}/bill.csv
 make build-data
-bin/preprocess -o downloaded/${EXPERIMENT}/recovery.csv -processor workload -fprefix Store1VPCNode downloaded/data/${EXPERIMENT}
+bin/preprocess -o downloaded/${EXPERIMENT}/recovery.csv -processor workload -fprefix FunctionPrefix downloaded/data/${EXPERIMENT}
 ~~~

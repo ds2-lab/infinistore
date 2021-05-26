@@ -1,5 +1,7 @@
 #!/bin/bash
 
+LAMBDAPREFIX="Function Prefix"
+
 PREFIX=$1
 if [ "$PREFIX" == "" ] ; then
   echo "Manual: preprocess prefix"
@@ -31,4 +33,4 @@ cat $OUTPUT/simulate-${CLUSTER}_proxy.csv | grep bucket, > $OUTPUT/bucket.csv
 cloudwatch/parse.sh $DATA/log/$PREFIX
 cat $DATA/log/${PREFIX}_bill.csv | grep invocation > $OUTPUT/bill.csv
 make build-data
-$BIN/preprocess -o $OUTPUT/recovery.csv -processor workload $DATA/data/$PREFIX
+$BIN/preprocess -o $OUTPUT/recovery.csv -processor workload -fprefix $LAMBDAPREFIX $DATA/data/$PREFIX
