@@ -115,6 +115,7 @@ var (
 	ErrUnknown            = errors.New("unknown error")
 	ErrValidationTimeout  = errors.New("funciton validation timeout")
 	ErrCapacityExceeded   = errors.New("capacity exceeded")
+	ErrTimeout            = errors.New("queue timeout")
 )
 
 type InstanceManager interface {
@@ -298,7 +299,11 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 
 		// wait to be inserted and continue after select
-		ins.chanCmd <- cmd
+		select {
+		case ins.chanCmd <- cmd:
+		case <-time.After(protocol.GetHeaderTimeout()):
+			return ErrTimeout
+		}
 	}
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
