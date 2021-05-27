@@ -5,7 +5,7 @@ PREFIX="Store1VPCNode"
 KEY="lambda"
 start=0
 cluster=1000
-mem=1536
+mem=1024
 # try -code
 
 S3="tianium.default"
