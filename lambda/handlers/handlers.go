@@ -134,7 +134,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Debug("Get key:%s, chunk:%s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+		log.Debug("Get key:%s, chunk:%s, duration:%v, prepare: %v, transmission:%v", key, chunkId, dt, d1, d2)
 		collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	} else {
 		var respError *ResponseError

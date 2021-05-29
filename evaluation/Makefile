@@ -15,7 +15,7 @@ build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
-	go build -o bin/redbench github.com/wangaoone/redbench/
+	GO111MODULE=off go build -o bin/redbench github.com/wangaoone/redbench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
@@ -41,6 +41,9 @@ playback-with-dashboard: build build-simulator
 playback-static: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
+playback-static-average: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+
 playback-static-norecovery: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery -log=proxy.log" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
 
@@ -48,7 +51,7 @@ start-server: build
 	./server.sh 1>./log 2>&1 &
 
 start-local: build-local
-	bin/proxy -debug -cluster=static -functions=1 -invoker=local -disable-recovery -ip=127.0.0.1
+	bin/proxy -cluster=static -functions=1 -invoker=local -disable-recovery -ip=127.0.0.1 $(PARAMS)
 
 stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
@@ -70,4 +73,4 @@ test-redis: build-bench
 
 test-local: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
-	bin/redbench -n 10 -c 10 -keymin 1 -keymax 1 -d 1 -p 0 -op 1
+	bin/redbench -n 100 -c 10 -keymin 1 -keymax 1 -d 1 -p 0 -op 1

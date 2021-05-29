@@ -68,7 +68,7 @@ const (
 	FAILURE_MAX_QUEUE_REACHED = 1
 
 	MAX_CMD_QUEUE_LEN                       = 5
-	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 3
+	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
 	MAX_ATTEMPTS                            = 3
 	TEMP_MAP_SIZE                           = 10
 	BACKING_DISABLED                        = 0
@@ -352,6 +352,7 @@ func (ins *Instance) Validate(opts ...*ValidateOption) (*Connection, error) {
 // lambda facing goroutine
 func (ins *Instance) HandleRequests() {
 	for {
+		// High priority channels
 		select {
 		case <-ins.closed:
 			// Handle rest commands in channels
@@ -367,14 +368,17 @@ func (ins *Instance) HandleRequests() {
 			return
 		case cmd := <-ins.chanPriorCmd: // Priority queue get
 			ins.handleRequest(cmd)
-		case cmd := <-ins.chanCmd: /*blocking on lambda facing channel*/
-			// Drain priority channel first.
-			// The implementation is not thread safe. As long as this is the only place to read chanPriorCmd, it is ok.
-			select {
-			case priorCmd := <-ins.chanPriorCmd:
-				ins.handleRequest(priorCmd)
-			default:
-			}
+			continue // Skip low priority channels and reselect
+		default:
+		}
+
+		// Low priority channels
+		select {
+		case <-ins.closed:
+			continue // continue to be handled in high priority section
+		case cmd := <-ins.chanPriorCmd:
+			ins.handleRequest(cmd)
+		case cmd := <-ins.chanCmd:
 			ins.handleRequest(cmd)
 		case <-ins.coolTimer.C:
 			// Warmup will not work until first call.

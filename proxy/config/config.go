@@ -19,7 +19,7 @@ const WindowCluster = "window"
 const Cluster = WindowCluster
 
 // Size of a slice if the cluster implementation support. Client library use this value to initialize chunk placements.
-const SliceSize = 100
+const SliceSize = 95
 
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
 // For window cluster, this must be at least D+P
@@ -36,10 +36,10 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const DefaultInstanceCapacity = 1024 * 1000000 // 1GB
+const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 100 * 1000000 // 200MB
+const InstanceOverhead = 300 * 1000000 // 200MB
 
 // Threshold Scaling out avg instance size threshold
 const Threshold = 0.9 // Don't set beyond 0.8
