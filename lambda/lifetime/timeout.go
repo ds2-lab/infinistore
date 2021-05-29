@@ -124,8 +124,8 @@ func (t *Timeout) StartWithDeadline(deadline time.Time) time.Time {
 	t.deadline = deadline
 
 	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
-	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
-	return t.StartWithCalibration(deadline.Add(-lifeInSeconds))
+	life := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
+	return t.StartWithCalibration(deadline.Add(-life))
 }
 
 func (t *Timeout) EndInterruption() time.Time {
@@ -238,6 +238,15 @@ func (t *Timeout) Enable() bool {
 
 func (t *Timeout) IsDisabled() bool {
 	return atomic.LoadInt32(&t.disabled) > 0
+}
+
+func (t *Timeout) GetDue() time.Time {
+	return t.startAt.Add(t.due)
+}
+
+func (t *Timeout) GetEstimateDue(ext time.Duration) time.Time {
+	_, due := t.getTimeout(ext)
+	return t.startAt.Add(due)
 }
 
 func (t *Timeout) validateTimeout(done <-chan struct{}) {
