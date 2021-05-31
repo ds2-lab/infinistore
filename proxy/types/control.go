@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+var (
+	ErrControlCmd = errors.New("will not retry control command")
+)
+
 type ControlCallback func(*Control, interface{})
 
 type Control struct {
@@ -16,6 +20,7 @@ type Control struct {
 	Payload    []byte
 	*Request
 	conn     Conn
+	err      error
 	Callback ControlCallback
 }
 
@@ -31,8 +36,20 @@ func (req *Control) GetRequest() *Request {
 	return req.Request
 }
 
-func (req *Control) Retriable() bool {
-	return true
+func (req *Control) MarkError(err error) int {
+	req.err = err
+	return 0
+}
+
+func (req *Control) LastError() (int, error) {
+	if req.err == nil {
+		return 1, nil
+	}
+	return 0, req.err
+}
+
+func (req *Control) FailureError() error {
+	return ErrControlCmd
 }
 
 func (ctrl *Control) PrepareForData(conn Conn) {

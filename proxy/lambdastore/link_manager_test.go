@@ -27,6 +27,20 @@ func (l *testLink) Close() error {
 	return nil
 }
 
+type productiveLink struct {
+	alinks *AvailableLinks
+}
+
+func (l *productiveLink) SendRequest(_ *types.Request, _ ...interface{}) error {
+	l.alinks.AddAvailable(l, false)
+	l.alinks.AddAvailable(&productiveLink{alinks: l.alinks}, false)
+	return nil
+}
+
+func (l *productiveLink) Close() error {
+	return nil
+}
+
 func (l *AvailableLinks) count() (int, int) {
 	total := len(l.bottom.links)
 	buckets := 1
@@ -34,8 +48,10 @@ func (l *AvailableLinks) count() (int, int) {
 		total += len(b.links)
 		buckets++
 	}
-	if l.linkRequest != nil {
-		total += 1
+	for elem := l.linkRequests.Front(); elem != nil; elem = elem.Next() {
+		if elem.Value.(*AvailableLink).link != nil {
+			total += 1
+		}
 	}
 	for b := l.bottom.next; b != nil; b = b.next {
 		buckets++
@@ -72,9 +88,9 @@ var _ = Describe("AvailableLinks", func() {
 
 			al := list.GetRequestPipe()
 			al.Request() <- &types.Request{}
+			Expect(al.Error()).To(Equal(errRequestSent))
 			Expect(al.link).To(Not(BeNil()))
-			Expect(al.err).To(Equal(errRequestSent))
-			Expect(list.linkRequest).To(BeNil())
+			Expect(list.linkRequests.Len()).To(Equal(0))
 			wg.Done()
 		}()
 
@@ -105,7 +121,7 @@ var _ = Describe("AvailableLinks", func() {
 			}
 			Expect(al.link).To(BeNil())
 			Expect(al.err).To(Equal(ErrLinkManagerReset))
-			Expect(list.linkRequest).To(BeNil())
+			Expect(list.linkRequests.Len()).To(Equal(0))
 			wg.Done()
 		}()
 
@@ -126,20 +142,20 @@ var _ = Describe("AvailableLinks", func() {
 
 		link := &testLink{}
 		list.AddAvailable(link, false)
-		runtime.Gosched()
+		<-time.After(100 * time.Millisecond) // Wait for a while
 		Expect(list.Len()).To(Equal(1))
 		expectedLink, _ := al.link.(*testLink)
 		Expect(expectedLink).To(Equal(link))
-		var expectedAl *AvailableLink = list.linkRequest
-		Expect(expectedAl).To(Equal(al))
+		Expect(list.linkRequests.Len()).To(Equal(1))
+		Expect(list.linkRequests.Front().Value.(*AvailableLink)).To(Equal(al))
 
 		list.Reset()
 		Expect(list.Len()).To(Equal(0))
 		runtime.Gosched()
 		Expect(list.Len()).To(Equal(0))
-		Expect(al.link).To(Not(BeNil()))
+		Expect(al.link).To(BeNil())
 		Expect(al.err).To(Equal(ErrLinkManagerReset))
-		Expect(list.linkRequest).To(BeNil())
+		Expect(list.linkRequests.Len()).To(Equal(0))
 	})
 
 	It("should limit links", func() {
@@ -159,7 +175,7 @@ var _ = Describe("AvailableLinks", func() {
 		Expect(list.Len()).To(Equal(1))
 
 		al.Request() <- &types.Request{}
-		runtime.Gosched()
+		<-al.Closed() // Wait until closed
 		Expect(list.Len()).To(Equal(0))
 
 		Expect(list.AddAvailable(al.link, false)).To(BeTrue())
@@ -184,7 +200,7 @@ var _ = Describe("AvailableLinks", func() {
 		Expect(list.Len()).To(Equal(2))
 
 		al.Request() <- &types.Request{}
-		runtime.Gosched()
+		<-al.Closed() // Wait until closed
 		Expect(list.Len()).To(Equal(1))
 
 		Expect(list.AddAvailable(al.link, false)).To(BeFalse())
@@ -405,6 +421,47 @@ var _ = Describe("AvailableLinks", func() {
 		}
 	})
 
+	It("should GetRequestPipe thread safe", func() {
+		list := newAvailableLinks()
+		list.SetLimit(10)
+		list.AddAvailable(&productiveLink{alinks: list}, true)
+
+		concurrency := 10
+		n := 10
+
+		// Start multiple consumers
+		var wg sync.WaitGroup
+		wg.Add(concurrency)
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				for j := 0; j < n; j++ {
+					al := list.GetRequestPipe()
+					al.Request() <- &types.Request{}
+					<-al.Closed()
+				}
+				wg.Done()
+			}()
+		}
+
+		// Wait for processing
+		shouldTimeout(func() {
+			wg.Wait()
+		}, func(timeout bool) {
+			Expect(timeout).To(BeFalse())
+		})
+
+		total, _ := list.count()
+		Expect(list.Len()).To(Equal(concurrency))
+		Expect(total).To(Equal(concurrency))
+		// Expect(buckets).To(Equal(3))
+
+		list.Reset()
+		total, _ = list.count()
+		Expect(list.Len()).To(Equal(0))
+		Expect(total).To(Equal(0))
+		// Expect(buckets).To(Equal(3))
+	})
+
 	It("should ok in rare multi-threaded case: link lost after timeout", func() {
 		// Enable slowdown designed for unittest to emulate complex multi-threaded case
 		UnitTestMTC1 = true
@@ -418,7 +475,6 @@ var _ = Describe("AvailableLinks", func() {
 		<-time.After(150 * time.Millisecond)  // 2: Timeout at 100, wait another 100 to continue to cancel link request
 		list.AddAvailable(&testLink{}, false) // 3: New link added at 150  (Timeout triggered but we still get the link to proceed)
 		runtime.Gosched()
-
 		select {
 		case al.Request() <- &types.Request{}: // 4: Request wait at 150, wait another 100 to continue to double check and send request.
 			<-time.After(75 * time.Millisecond)                 // 5: Link request cancelled at 200 (Link request cancelled but we still get request to proceed)
@@ -430,6 +486,46 @@ var _ = Describe("AvailableLinks", func() {
 		default:
 			Fail("should not block")
 		}
+
+		Expect(list.linkRequests.Len()).To(Equal(1))
+		Expect(list.Len()).To(Equal(1))
+		total, _ := list.count()
+		Expect(total).To(Equal(1))
+
+		list.Reset()
+	})
+
+	It("should ok in rare multi-threaded case: link reuse after timeout", func() {
+		// Enable slowdown designed for unittest to emulate complex multi-threaded case
+		UnitTestMTC1 = true
+		defer func() { UnitTestMTC1 = false }()
+
+		list := newAvailableLinks()
+
+		al := list.GetRequestPipe()
+		al.SetTimeout(100 * time.Millisecond) // 1: Set link request timeout at 100
+
+		<-time.After(150 * time.Millisecond)  // 2: Timeout at 100, wait another 100 to continue to cancel link request
+		list.AddAvailable(&testLink{}, false) // 3: New link added at 150  (Timeout triggered but we still get the link to proceed)
+		runtime.Gosched()
+		select {
+		case al.Request() <- &types.Request{}: // 4: Request wait at 150, wait another 100 to continue to double check and send request.
+			old := al.link
+			al.link = nil                       // Mimic multi-threaded situation: al.link not set before timeout exection.
+			<-time.After(75 * time.Millisecond) // 5: Link request cancelled at 200 (Link request cancelled but we still get request to proceed)
+			al.link = old                       // Mimic multi-threaded situation: al.link set in link request.
+			<-time.After(75 * time.Millisecond) // 6: 250 link request double checks if request has been closed.
+			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout))
+		case <-al.Closed():
+			Fail("on successful request, select should not pick Closed()")
+		default:
+			Fail("should not block")
+		}
+
+		Expect(list.linkRequests.Len()).To(Equal(0))
+		Expect(list.Len()).To(Equal(1)) // Link correctly reused
+		total, _ := list.count()
+		Expect(total).To(Equal(1)) // Double check
 
 		list.Reset()
 	})

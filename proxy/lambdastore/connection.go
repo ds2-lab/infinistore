@@ -180,13 +180,18 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
 		select {
 		case conn.chanWait <- req:
-			return conn.sendRequest(req)
+			if conn.IsClosed() {
+				return ErrConnectionClosed
+			}
+			go conn.sendRequest(req)
+			return nil
 		case <-conn.done: // Final defense, bounce back to instance and retry.
 			return ErrConnectionClosed
 		}
 	}
 
 	// For control link, this should work even control link is closed.
+	// Note: We'll not try to use control as fallback on datalink timeout. Control link should never be overloaded, it will be closed by the function worker if PING timeout.
 	al := lm.GetAvailableForRequest()
 	al.SetTimeout(DefaultConnectTimeout)
 	if useDataLink {
@@ -196,34 +201,44 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		case al.Request() <- req:
 		case <-al.Closed():
 		}
-		if err := al.Error(); err != ErrLinkRequestTimeout {
-			return err
-		} else {
-			al = lm.GetAvailableForRequest() // Get another al.
+		return al.Error()
+	} else {
+		conn.log.Debug("Waiting for available link to %v (ctrlwait: %d)", req, len(conn.chanWait))
+		select {
+		case conn.chanWait <- req:
+			al.Close()
+			if conn.IsClosed() {
+				return ErrConnectionClosed
+			}
+			go conn.sendRequest(req)
+			return nil
+		case al.Request() <- req:
+			return al.Error()
+		case <-al.Closed():
+			// Two cases here. All will lead to abandon current attempt.
+			// Reset: the function worker has returned.
+			// Timeout: which also applies to control.
+			return al.Error()
+		case <-conn.done:
+			// If control is closed before got a datalink, simple abandon and make another try after revalidation.
+			al.Close()
+			return ErrConnectionClosed
 		}
-	}
-
-	// Fallback to use both link, no timeout set for al.
-	conn.log.Debug("Waiting for available link to %v (ctrlwait: %d)", req, len(conn.chanWait))
-	select {
-	case conn.chanWait <- req:
-		return conn.sendRequest(req)
-	case al.Request() <- req:
-		return al.Error()
-	case <-al.Closed():
-		return al.Error()
-	case <-conn.done:
-		return ErrConnectionClosed
 	}
 }
 
-func (conn *Connection) sendRequest(req *types.Request) error {
+func (conn *Connection) sendRequest(req *types.Request) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	// Close check can prevent resouce to be used from releasing. However, close signal is not guranteed.
+	// Close check can prevent resource to be used from releasing. However, close signal is not guranteed.
 	if conn.IsClosed() {
-		return ErrConnectionClosed
+		if req.MarkError(ErrConnectionClosed) > 0 {
+			conn.instance.chanPriorCmd <- req
+		} else {
+			req.SetResponse(ErrConnectionClosed)
+		}
+		return
 	}
 
 	// In case there is a request already, wait to be consumed (for response).
@@ -235,7 +250,7 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 	conn.headRequest = req
 	if req.IsResponded() {
 		conn.popRequest()
-		return nil
+		return
 	}
 
 	switch req.Name() {
@@ -251,16 +266,20 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
 		conn.flagAvailable()
 		// Unrecoverable
-		return nil
+		return
 	}
 
 	// Updated by Tianium: 20210523
 	// Write timeout is added back. See comments in req.Flush()
 	if err := req.Flush(); err != nil {
-		conn.SetErrorResponse(err)
+		if req.MarkError(err) > 0 {
+			conn.instance.chanPriorCmd <- req
+		} else {
+			conn.SetErrorResponse(err)
+		}
 		conn.log.Warn("Flush request error: %v - %v", req, err)
 		conn.Close()
-		return err
+		return
 	}
 	// Set instance busy. Yes requests will call busy twice:
 	// on schedule(instance.handleRequest) and on request.
@@ -275,8 +294,6 @@ func (conn *Connection) sendRequest(req *types.Request) error {
 		}
 		ins.doneBusy()
 	}()
-
-	return nil
 }
 
 func (conn *Connection) peekRequest() *types.Request {
@@ -359,7 +376,7 @@ func (conn *Connection) close() {
 	readerPool.Put(r)
 	writerPool.Put(w)
 	conn.lm = nil
-	conn.instance = nil
+	// Don't reset instance to nil, we may need it to resend request.
 
 	conn.log.Debug("Closed.")
 }
@@ -428,8 +445,10 @@ func (conn *Connection) ServeLambda() {
 				conn.pongHandler()
 				break
 			} else if conn.instance == nil {
-				// all other commands require instance association, or could be a rougue request.
-				break
+				// all other commands require instance association, or could be a rouge request.
+				conn.log.Warn("Rouge request, disconnect")
+				conn.close()
+				return
 			}
 
 			switch cmd {
@@ -656,24 +675,31 @@ func (conn *Connection) getHandler(start time.Time) {
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
 	recovered, _ := conn.r.ReadInt()
+	stream, err := conn.r.StreamBulk()
+	if err != nil {
+		conn.SetErrorResponse(err)
+		conn.log.Warn("Failed to get body reader of response: %v", err)
+		conn.Close()
+		return
+	}
+	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano())
 
 	rsp := &types.Response{Cmd: protocol.CMD_GET}
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
+	// Check lambda if it is supported
+	defer conn.finalizeCommmand(rsp.Cmd)
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
 		// Set response and exhaust value
-		_, responded := conn.SetResponse(rsp, false)
-		if err := conn.r.SkipBulk(); err != nil {
-			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+		conn.SetResponse(rsp, false)
+		if err := stream.Close(); err != nil {
 			conn.Close()
-			return
-		} else if responded && conn.ackCommand(rsp.Cmd) == nil {
-			conn.flagAvailable()
+			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
 		}
 		return
 	}
@@ -694,31 +720,22 @@ func (conn *Connection) getHandler(start time.Time) {
 		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
-		if err := conn.r.SkipBulk(); err != nil {
-			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
+		if err := stream.Close(); err != nil {
 			conn.Close()
-			return
-		} else if conn.ackCommand(rsp.Cmd) == nil {
-			conn.flagAvailable()
+			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
 		}
 		return
 	}
 
-	var err error
-	rsp.BodyStream, err = conn.r.StreamBulk()
-	if err != nil {
-		conn.SetErrorResponse(err)
-		conn.log.Warn("Failed to get body reader of response: %v", err)
-		conn.Close()
-		return
-	}
-	rsp.BodyStream.(resp.Holdable).Hold()
+	// Finish the response by setting the BodyStream
+	rsp.BodyStream = stream
+	stream.(resp.Holdable).Hold()
 
 	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
 	// Connection will not be flagged available until BodyStream is closed.
 	if req, ok := conn.SetResponse(rsp, false); !ok {
 		// Failed to set response, release hold.
-		rsp.BodyStream.(resp.Holdable).Unhold()
+		stream.(resp.Holdable).Unhold()
 	} else {
 		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 	}
@@ -733,9 +750,9 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 
-	rsp.BodyStream.Close() // Close will block until BodyStream unhold.
-	if conn.ackCommand(rsp.Cmd) == nil {
-		conn.flagAvailable()
+	// Close will block until BodyStream unhold.
+	if err := stream.Close(); err != nil {
+		conn.Close()
 	}
 }
 
@@ -751,24 +768,23 @@ func (conn *Connection) setHandler(start time.Time) {
 	if ok {
 		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
-	if conn.ackCommand(rsp.Cmd) == nil {
-		conn.flagAvailable()
-	}
+
+	// Check lambda if it is supported
+	conn.finalizeCommmand(rsp.Cmd)
 }
 
 func (conn *Connection) delHandler() {
 	conn.log.Debug("DEL from lambda.")
 
-	rsp := &types.Response{Cmd: "del"}
-
+	rsp := &types.Response{Cmd: protocol.CMD_DEL}
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
 	conn.SetResponse(rsp, false) // if del is control cmd, should return False
-	if conn.ackCommand(rsp.Cmd) == nil {
-		conn.flagAvailable()
-	}
+
+	// Check lambda if it is supported
+	conn.finalizeCommmand(rsp.Cmd)
 }
 
 func (conn *Connection) receiveData() {
@@ -808,7 +824,22 @@ func (conn *Connection) recoverHandler() {
 	} else {
 		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
-	conn.ackCommand(protocol.CMD_RECOVER)
+
+	// Check lambda if it is supported
+	conn.finalizeCommmand(protocol.CMD_RECOVER)
+}
+
+func (conn *Connection) readAndSetDue(ins *Instance) error {
+	due, err := conn.r.ReadInt()
+	if err != nil {
+		// Reset possible optimistic estimation.
+		ins.ResetDue()
+		conn.log.Warn("Failed to read due: %v", err)
+		conn.Close()
+		return err
+	}
+	ins.SetDue(due)
+	return nil
 }
 
 func (conn *Connection) ackCommand(cmd string) error {
@@ -818,5 +849,19 @@ func (conn *Connection) ackCommand(cmd string) error {
 		conn.Close()
 		return err
 	}
+	return nil
+}
+
+func (conn *Connection) finalizeCommmand(cmd string) error {
+	if conn.IsClosed() {
+		conn.instance.ResetDue()
+		return ErrConnectionClosed
+	} else if err := conn.readAndSetDue(conn.instance); err != nil {
+		return err
+	} else if err = conn.ackCommand(cmd); err != nil {
+		return err
+	}
+
+	conn.flagAvailable()
 	return nil
 }

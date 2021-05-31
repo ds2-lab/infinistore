@@ -14,7 +14,7 @@ func Ifelse(expr bool, then interface{}, or interface{}) interface{} {
 }
 
 func IsConnectionFailed(err error) bool {
-	if err == io.EOF {
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		return true
 	} else if netErr, ok := err.(net.Error); ok && (netErr.Timeout() || !netErr.Temporary()) {
 		return true

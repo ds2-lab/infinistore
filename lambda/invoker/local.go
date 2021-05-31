@@ -14,6 +14,11 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
+// LocalInvoker Invoke local lambda function simulation
+// Use throttle to simulate Lambda network: https://github.com/sitespeedio/throttle
+// throttle --up 800000 --down 800000 --rtt 1 (800MB/s, 1ms)
+// throttle stop
+// Use container to simulate Lambda resouce limit
 type LocalInvoker struct {
 }
 
