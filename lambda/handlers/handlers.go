@@ -123,18 +123,19 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			ReqId:     reqId,
 			ChunkId:   chunkId,
 			Recovered: recovered,
+			Extension: extension,
 		}
 
 		t2 := time.Now()
 		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
-			log.Error("Error on flush(get key %s): %v", key, err)
+			log.Error("Error on flush(get %s %s): %v", key, reqId, err)
 			return
 		}
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Debug("Get key:%s, chunk:%s, duration:%v, prepare: %v, transmission:%v", key, chunkId, dt, d1, d2)
+		log.Debug("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
 		collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	} else {
 		var respError *ResponseError
@@ -147,7 +148,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		errResponse := &worker.ErrorResponse{Error: respError}
 		Server.AddResponses(errResponse, client)
 		if err := errResponse.Flush(); err != nil {
-			log.Error("Error on flush: %v", err)
+			log.Error("Error on flush error %v: %v", respError, err)
 		}
 		collector.AddRequest(t, types.OP_GET, respError.Status(), reqId, "-1", 0, 0, time.Since(t), 0, session.Id)
 	}
@@ -227,6 +228,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		BaseResponse: worker.BaseResponse{Cmd: c.Name},
 		ReqId:        reqId,
 		ChunkId:      chunkId,
+		Extension:    extension,
 	}
 
 	t2 := time.Now()
@@ -331,6 +333,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 		ReqId:     reqId,
 		ChunkId:   chunkId,
 		Recovered: 1,
+		Extension: extension,
 	}
 
 	t2 := time.Now()
@@ -382,6 +385,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 			BaseResponse: worker.BaseResponse{Cmd: c.Name},
 			ReqId:        reqId,
 			ChunkId:      chunkId,
+			Extension:    extension,
 		}
 		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {

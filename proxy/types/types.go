@@ -40,7 +40,12 @@ type Command interface {
 	Name() string
 	String() string
 	GetRequest() *Request
-	Retriable() bool
+	// MarkError Mark an failure attempt to send request, return attempts left.
+	MarkError(error) int
+	// LastError Get last failure attempt, return attempts left and last error.
+	LastError() (int, error)
+	// FailureError Get error for failure (no attempt left.)
+	FailureError() error
 	Flush() error
 }
 

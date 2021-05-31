@@ -19,6 +19,7 @@ const (
 )
 
 var (
+	ErrLinkRequestClosed  = &LinkRequestError{error: errors.New("link request closed")}
 	ErrLinkRequestTimeout = &LinkRequestError{error: errors.New("link request timeout")}
 	ErrLinkManagerReset   = &LinkRequestError{error: errors.New("link manager reset")}
 	ErrNilLink            = &LinkRequestError{error: errors.New("unexpected nil link")}
@@ -53,13 +54,15 @@ type LinkManager struct {
 }
 
 func NewLinkManager(ins *Instance) *LinkManager {
-	return &LinkManager{
+	lm := &LinkManager{
 		instance:   ins,
 		availables: newAvailableLinks(),
 		dataLinks:  hashmap.New(100),
 		pendings:   list.New(),
 		log:        ins.log,
 	}
+	lm.availables.log = ins.log
+	return lm
 }
 
 func (m *LinkManager) GetControl() *Connection {
@@ -114,6 +117,10 @@ func (m *LinkManager) InvalidateControl(link manageableLink) {
 	m.log.Debug("Invalidated control %v", link)
 }
 
+func (m *LinkManager) SetMaxActiveDataLinks(num int) {
+	m.availables.SetLimit(num)
+}
+
 func (m *LinkManager) AddDataLink(link *Connection) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -157,7 +164,7 @@ func (m *LinkManager) FlagAvailableForRequest(link *Connection) bool {
 
 	added := m.availables.AddAvailable(link, false)
 	if added {
-		m.log.Debug("Data link available: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
+		m.log.Debug("Data link reused:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
 	} else {
 		m.RemoveDataLink(link)
 		// Directly close connection for grace close. The link will close afterward.
@@ -221,7 +228,9 @@ func (b *LinkBucket) Reset() {
 }
 
 type AvailableLink struct {
-	links  *AvailableLinks
+	links *AvailableLinks
+	elem  *list.Element
+
 	link   manageableLink
 	pipe   chan *types.Request
 	err    error
@@ -244,6 +253,10 @@ func (l *AvailableLink) Request() chan<- *types.Request {
 	return l.pipe
 }
 
+func (l *AvailableLink) Close() {
+	l.links.resetLinkRequest(l, ErrLinkRequestClosed)
+}
+
 func (l *AvailableLink) Closed() <-chan struct{} {
 	return l.closed
 }
@@ -261,18 +274,21 @@ type AvailableLinks struct {
 	limit  int
 
 	// Offer pipe support
-	linkRequest *AvailableLink
+	linkRequests list.List
 
-	mu sync.Mutex
+	log logger.ILogger
+	mu  sync.Mutex
 }
 
 func newAvailableLinks() *AvailableLinks {
 	links := &AvailableLinks{
 		top:   &LinkBucket{links: make(chan manageableLink, LinkBucketSize)},
 		limit: ActiveLinks,
+		log:   logger.NilLogger,
 	}
 	links.bottom = links.top
 	links.tail = links.top
+	links.linkRequests.Init()
 	return links
 }
 
@@ -286,13 +302,26 @@ func (l *AvailableLinks) SetLimit(limit int) int {
 	return old
 }
 
+func (l *AvailableLinks) OffsetLimit(offset int, max int) int {
+	old := l.limit
+	new := l.limit + offset
+	if new < 1 {
+		l.limit = 1
+	} else if new > max {
+		l.limit = max
+	} else {
+		l.limit = new
+	}
+	return old
+}
+
 func (l *AvailableLinks) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	// Clean pipe
-	if l.linkRequest != nil {
-		l.resetLinkRequestLocked(l.linkRequest, ErrLinkManagerReset)
+	for elem := l.linkRequests.Front(); elem != nil; elem = l.linkRequests.Front() {
+		l.resetLinkRequestLocked(elem.Value.(*AvailableLink), ErrLinkManagerReset)
 	}
 
 	if len(l.top.links) == 0 {
@@ -302,7 +331,7 @@ func (l *AvailableLinks) Reset() {
 	// Drain top
 	for l.top != l.bottom {
 		l.top.Reset()
-		l.top = l.recycleBucketLocked(l.top)
+		l.top = l.recycleTopLocked(l.top)
 	}
 	l.top.Reset()
 
@@ -321,15 +350,12 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.linkRequest != nil {
-		return l.linkRequest
-	}
-
-	l.linkRequest = &AvailableLink{
+	al := &AvailableLink{
 		links:  l,
 		pipe:   make(chan *types.Request),
 		closed: make(chan struct{}),
 	}
+	al.elem = l.linkRequests.PushBack(al)
 	// Pipe go routing is not in the lock
 	go func(al *AvailableLink) {
 		// Wait for available connection
@@ -346,6 +372,7 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 					// Wait for next available connection
 					select {
 					case <-al.closed:
+						// al.link has not been set, it's safe to return
 						return
 					case al.link = <-l.top.links:
 						break Finding
@@ -354,15 +381,16 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 			}
 		}
 		if al.link == nil {
-			l.resetLinkRequest(al, ErrNilLink)
+			al.links.resetLinkRequest(al, ErrNilLink)
 			return
 		}
 
 		// Consume request. For support multi-source, the pipe will not be closed. Use select al.Closed() to unblock duplicated request.
+		var req *types.Request
 		select {
 		case <-al.closed:
-			return
-		case req := <-al.pipe:
+			// continue to handle link
+		case req = <-al.pipe:
 			// Link request is fulfilled
 
 			if UnitTestMTC1 {
@@ -370,31 +398,45 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 			}
 
 			// Double check
-			closed := false
 			l.mu.Lock()
-			// Make sure al is the current active link request. If not, al is closed.
-			if l.linkRequest == al {
-				l.linkRequest = nil
-				atomic.AddInt32(&l.total, -1)
+			if al.elem == nil {
+				req = nil // reset req to flag link request is closed
 			} else {
-				closed = true
+				// total := atomic.AddInt32(&l.total, -1)
+				al.links.linkRequests.Remove(al.elem) // Ready to close
+				al.elem = nil
 			}
 			l.mu.Unlock()
-			if closed {
-				return
-			}
-
-			// Consume link
-			al.err = al.link.SendRequest(req)
-			close(al.closed) // close al only after got err.
 		}
-	}(l.linkRequest)
+		var availables int32
+		if al.link != nil {
+			// Update counter.
+			// If resetLinkRequestLocked handled the link on ErrLinkManagerReset, link was reset.
+			availables = atomic.AddInt32(&l.total, -1)
+		}
 
-	return l.linkRequest
+		if req == nil {
+			// handle link, RESET will remove all links anyway.
+			if al.link != nil && al.err != ErrLinkManagerReset {
+				// Reuse the link, addAvailableLocked will add l.total back.
+				l.addAvailableLocked(al.link, true)
+			}
+			al.link = nil
+			return
+		}
+
+		// Consume link
+		al.err = al.link.SendRequest(req)
+		close(al.closed) // close al only after got err.
+		al.links.log.Debug("Data link consumed:%v, available: %d", al.link, availables)
+	}(al)
+
+	return al
 }
 
 func (l *AvailableLinks) addAvailableLocked(link manageableLink, nolimit bool) bool {
 	if !nolimit && l.limit > 0 && int(atomic.LoadInt32(&l.total)) >= l.limit {
+		// log.Printf("limited? %d, %d", l.limit, atomic.LoadInt32(&l.total))
 		return false
 	}
 
@@ -432,11 +474,16 @@ func (l *AvailableLinks) recycleTopBucket() (*LinkBucket, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.top = l.recycleBucketLocked(l.top)
+	// Ensure top != bottom, and so does top != tail
+	if l.top == l.bottom || len(l.top.links) > 0 {
+		return l.top, false
+	}
+
+	l.top = l.recycleTopLocked(l.top)
 	return l.top, true
 }
 
-func (l *AvailableLinks) recycleBucketLocked(bucket *LinkBucket) *LinkBucket {
+func (l *AvailableLinks) recycleTopLocked(bucket *LinkBucket) *LinkBucket {
 	l.tail.next = bucket // Append old top to tail
 	l.tail = bucket      // Update tail to old top
 	next := bucket.next
@@ -456,22 +503,21 @@ func (l *AvailableLinks) resetLinkRequest(al *AvailableLink, err error) {
 }
 
 func (l *AvailableLinks) resetLinkRequestLocked(al *AvailableLink, err error) {
-	if l.linkRequest != al {
+	// al is not necessarily closed if request is sending.
+	if al.elem == nil {
 		return
 	}
+	l.linkRequests.Remove(al.elem)
+	al.elem = nil
 
-	l.linkRequest.err = err
-	close(l.linkRequest.closed)
-	if l.linkRequest.link != nil {
-		// Pipe is waiting for request and stopped.
-		if err == ErrLinkManagerReset {
-			// Consume the link, reset will remove all links anyway.
-			atomic.AddInt32(&l.total, -1)
-		} else {
-			// Reuse the link
-			l.addAvailableLocked(l.linkRequest.link, true)
-			l.linkRequest.link = nil
-		}
+	// Do close
+	al.err = err
+	close(al.closed)
+
+	// Link is set out of mutex, leave al to handle link.
+	// An exception is ErrLinkManagerReset, it asks for immediate result.
+	if al.link != nil && al.err == ErrLinkManagerReset {
+		atomic.AddInt32(&l.total, -1)
+		al.link = nil
 	}
-	l.linkRequest = nil
 }

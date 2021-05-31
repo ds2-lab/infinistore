@@ -3,11 +3,13 @@ package worker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
+	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -45,6 +47,9 @@ type Response interface {
 	// Mark an attempt to flush response, return attempts left.
 	markAttempt() int
 
+	// Get number of max attempts
+	maxAttempts() int
+
 	// Abandon the response
 	abandon(error)
 
@@ -70,6 +75,10 @@ type BaseResponse struct {
 }
 
 func (r *BaseResponse) Command() string {
+	return r.Cmd
+}
+
+func (r *BaseResponse) String() string {
 	return r.Cmd
 }
 
@@ -111,7 +120,7 @@ func (r *BaseResponse) bind(link *Link) {
 func (r *BaseResponse) bindImpl(inst Response, link *Link) {
 	if r.link == nil {
 		if r.Attempts == 0 {
-			r.Attempts = MaxAttempts
+			r.Attempts = 1
 		}
 		r.done = promise.NewPromise()
 		r.inst = inst
@@ -186,6 +195,10 @@ func (r *BaseResponse) markAttempt() int {
 	return r.Attempts - r.attempted
 }
 
+func (r *BaseResponse) maxAttempts() int {
+	return r.Attempts
+}
+
 func (r *BaseResponse) abandon(err error) {
 	r.err = err
 	r.close()
@@ -217,6 +230,11 @@ type ObjectResponse struct {
 	ChunkId   string
 	Val       string
 	Recovered int64
+	Extension time.Duration
+}
+
+func (r *ObjectResponse) String() string {
+	return fmt.Sprintf("%s %s(%s)", r.Cmd, r.ReqId, r.ChunkId)
 }
 
 func (r *ObjectResponse) Prepare() {
@@ -251,7 +269,16 @@ func (r *ObjectResponse) flush(writer resp.ResponseWriter) error {
 
 	err := r.BaseResponse.flush(writer)
 	if err != nil {
+		// link.acked.Resolve()
 		return err
+	}
+
+	if r.Extension > time.Duration(0) {
+		writer.AppendInt(lifetime.GetSession().Timeout.GetEstimateDue(r.Extension).UnixNano())
+		if err = writer.Flush(); err != nil {
+			// link.acked.Resolve()
+			return err
+		}
 	}
 
 	link.acked.SetTimeout(ResponseTimeout)
@@ -263,6 +290,10 @@ type ErrorResponse struct {
 	BaseResponse
 
 	Error interface{}
+}
+
+func (e *ErrorResponse) String() string {
+	return fmt.Sprintf("%v", e.Error)
 }
 
 func (e *ErrorResponse) Prepare() {

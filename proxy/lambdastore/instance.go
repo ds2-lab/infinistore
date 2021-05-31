@@ -69,7 +69,6 @@ const (
 
 	MAX_CMD_QUEUE_LEN                       = 5
 	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
-	MAX_ATTEMPTS                            = 3
 	TEMP_MAP_SIZE                           = 10
 	BACKING_DISABLED                        = 0
 	BACKING_RESERVED                        = 1
@@ -173,6 +172,7 @@ type Instance struct {
 	// Connection management
 	lm       *LinkManager
 	sessions *hashmap.HashMap
+	due      int64
 
 	// Backup fields
 	backups      Backups
@@ -213,6 +213,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
+	ins.lm.SetMaxActiveDataLinks(MAX_CMD_QUEUE_LEN)
 	return ins
 }
 
@@ -705,11 +706,15 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return castValidatedConnection(ins.validated)
 	}
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
+	goodDue := ins.due > time.Now().Add(-MinValidationInterval).UnixNano()
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
 		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
-		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && time.Since(ins.validated.ResolvedAt()) < MinValidationInterval {
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE &&
+		(time.Since(ins.validated.ResolvedAt()) < MinValidationInterval || goodDue) {
 		ins.mu.Unlock()
-		ins.log.Debug("Validation skipped.")
+		if goodDue {
+			ins.log.Info("Validation skipped. due in %v", time.Duration(ins.due-time.Now().UnixNano()))
+		}
 		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
@@ -1181,16 +1186,10 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	ins.busy()
 	defer ins.doneBusy()
 
-	var err error
-	var attemps = MAX_ATTEMPTS
-	if !cmd.Retriable() {
-		attemps = 1
-	}
-
-	var i int
-	for i = 0; i < attemps; i++ {
-		if i > 0 {
-			ins.log.Info("Attempt %d: %v", i, cmd)
+	leftAttempts, lastErr := cmd.LastError()
+	for leftAttempts > 0 {
+		if lastErr != nil {
+			ins.log.Info("Attempt %d: %v", types.MAX_ATTEMPTS-leftAttempts+1, cmd)
 		}
 		// Check lambda status first
 		validateStart := time.Now()
@@ -1223,23 +1222,22 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		}
 
 		// Make request
-		err = ins.request(ctrlLink, cmd, validateDuration)
-		if err == nil || !cmd.Retriable() { // Request can become streaming, so we need to test again everytime.
+		lastErr = ins.request(ctrlLink, cmd, validateDuration)
+		leftAttempts = cmd.MarkError(err)
+		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
-			ins.log.Warn("Failed to %v: %v", cmd, err)
+			ins.log.Warn("Failed to %v: %v", cmd, lastErr)
 		}
 	}
-	if err != nil {
-		if attemps > 1 && i == attemps {
-			ins.log.Error("Max retry reaches, give up: %v", err)
-		} else if cmd.Retriable() {
-			ins.log.Error("Abandon retrial: %v", err)
+	if lastErr != nil {
+		if leftAttempts == 0 {
+			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		} else {
-			ins.log.Error("Can not retry a streaming request, give up: %v", err)
+			ins.log.Error("Abandon retrial: %v", lastErr)
 		}
 		if request, ok := cmd.(*types.Request); ok {
-			request.SetResponse(err)
+			request.SetResponse(lastErr)
 		}
 	}
 
@@ -1408,4 +1406,12 @@ func (ins *Instance) FlagDataCollected(ok string) {
 
 	ins.log.Debug("Data collected: %s", ok)
 	global.DataCollected.Done()
+}
+
+func (ins *Instance) SetDue(due int64) {
+	ins.due = due
+}
+
+func (ins *Instance) ResetDue() {
+	ins.due = time.Now().UnixNano()
 }

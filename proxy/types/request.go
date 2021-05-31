@@ -22,6 +22,12 @@ const (
 	REQUEST_RESPONDED = 2
 
 	CHANGE_PLACEMENT = 0x0001
+	MAX_ATTEMPTS     = 3
+)
+
+var (
+	ErrStreamingReq       = errors.New("can not retry a streaming request")
+	ErrMaxAttemptsReached = errors.New("max attempts reached")
 )
 
 type Request struct {
@@ -37,12 +43,16 @@ type Request struct {
 	Info           interface{}
 	Changes        int
 	CollectorEntry interface{}
+	QueuedAt       time.Time
 
 	conn             Conn
 	status           uint32
 	streamingStarted bool
 	responseTimeout  time.Duration
 	responded        promise.Promise
+	err              error
+	leftAttempts     int
+	reason           error
 }
 
 func (req *Request) String() string {
@@ -57,8 +67,31 @@ func (req *Request) GetRequest() *Request {
 	return req
 }
 
-func (req *Request) Retriable() bool {
-	return req.BodyStream == nil || !req.streamingStarted
+func (req *Request) MarkError(err error) int {
+	req.err = err
+	if req.BodyStream != nil && req.streamingStarted {
+		req.leftAttempts = 0
+		req.reason = ErrStreamingReq
+	} else if req.leftAttempts == 0 {
+		req.leftAttempts = MAX_ATTEMPTS - 1
+	} else {
+		req.leftAttempts--
+	}
+	return req.leftAttempts
+}
+
+func (req *Request) LastError() (int, error) {
+	if req.err == nil && req.leftAttempts == 0 {
+		req.leftAttempts = MAX_ATTEMPTS
+	}
+	return req.leftAttempts, req.err
+}
+
+func (req *Request) FailureError() error {
+	if req.reason != nil {
+		return req.reason
+	}
+	return ErrMaxAttemptsReached
 }
 
 func (req *Request) Size() int64 {
