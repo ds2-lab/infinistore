@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 
 	// "strings"
 
@@ -29,7 +30,8 @@ var (
 	Concurrency = types.DownloadConcurrency
 	Buckets     = 1
 
-	ErrTrackerNotStarted = errors.New("tracker not started")
+	ErrTrackerNotStarted     = errors.New("tracker not started")
+	ErrFailedToRecoverObject = errors.New("fail to recover object on demand")
 )
 
 type PersistHelper interface {
@@ -62,10 +64,41 @@ func NewPersistentStorage(id uint64) *PersistentStorage {
 	return storage
 }
 
+// Storage Implementation
+func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (string, []byte, *types.OpRet) {
+	chunk, ok := s.helper.get(key)
+	if !ok {
+		// No entry
+		return "", nil, types.OpError(types.ErrNotFound)
+	} else if atomic.LoadUint64(&chunk.Available) == chunk.Size {
+		if chunk.Body == nil {
+			// Not recovering
+			return "", nil, types.OpError(types.ErrNotFound)
+		} else {
+			return chunk.Id, chunk.Access(), types.OpSuccess()
+		}
+	} else {
+		// Recovering, wait to be notified.
+		chunk.Notifier.Wait()
+		if chunk.Available == chunk.Size {
+			return chunk.Id, chunk.Access(), types.OpSuccess()
+		} else {
+			return "", nil, types.OpError(types.ErrNotFound)
+		}
+	}
+}
+
 func (s *PersistentStorage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
-	chunk := types.NewChunk(key, chunkId, val)
-	chunk.Term = 1
-	chunk.Bucket = s.getBucket(key)
+	chunk, ok := s.helper.get(key)
+	if !ok {
+		chunk = s.helper.newChunk(key, chunkId, uint64(len(val)), val)
+	} else {
+		// No version control at store level, val can be changed.
+		chunk.Body = val
+		chunk.Size = uint64(len(val))
+		chunk.Available = chunk.Size
+	}
+
 	s.set(key, chunk)
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
@@ -92,28 +125,55 @@ func (s *PersistentStorage) setWithOption(key string, chunkId string, val []byte
 	}
 }
 
+func (s *PersistentStorage) newChunk(key string, chunkId string, size uint64, val []byte) *types.Chunk {
+	chunk := types.NewChunk(key, chunkId, val)
+	chunk.Size = size
+	chunk.Term = 1
+	chunk.Bucket = s.getBucket(key)
+	return chunk
+}
+
 func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64) *types.OpRet {
 	_, _, err := s.helper.getWithOption(key, nil)
 	if err.Error() == nil {
 		return err
 	}
 
-	bucket := s.getBucket(key)
-	writer := aws.NewWriteAtBuffer(make([]byte, size))
+	chunk := s.helper.newChunk(key, chunkId, size, nil)
+	chunk.Notifier.Add(1)
+	inserted, loaded := s.repo.GetOrInsert(key, chunk)
+	chunk = inserted.(*types.Chunk)
+	if loaded {
+		chunk.Notifier.Wait()
+		if chunk.Available == chunk.Size {
+			return types.OpSuccess()
+		} else {
+			return types.OpError(ErrFailedToRecoverObject)
+		}
+	}
 
+	chunk.Body = make([]byte, size) // Pre-allocate fixed sized buffer.
 	downloader := s.getS3Downloader()
 	ctx := aws.BackgroundContext()
 	ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
 	if err := downloader.Download(ctx, func(input *mys3.BatchDownloadObject) {
-		input.Object.Bucket = s.bucket(&bucket)
+		input.Object.Bucket = s.bucket(&chunk.Bucket)
 		input.Object.Key = aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key))
 		input.Size = size
-		input.Writer = writer
+		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
+		input.After = func() error {
+			atomic.AddUint64(&chunk.Available, uint64(input.Downloaded))
+			return nil
+		}
 	}); err != nil {
+		s.repo.Del(key)
+		chunk.Notifier.Done()
 		return types.OpError(err)
 	}
 
-	return s.helper.setWithOption(key, chunkId, writer.Bytes(), &types.OpWrapper{Persisted: true})
+	ret := s.helper.setWithOption(key, chunkId, chunk.Body, &types.OpWrapper{Persisted: true})
+	chunk.Notifier.Done()
+	return ret
 }
 
 func (s *PersistentStorage) getBucket(key string) string {

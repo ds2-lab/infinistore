@@ -95,26 +95,10 @@ func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (string
 	// not safe: Corresponding lineage is recovering, and the chunk is not just set
 	if !ok || !s.isSafeToGet(chunk) {
 		s.getSafe.Wait()
-		chunk, ok = s.helper.get(key)
 	}
 
 	// Now we're safe to proceed.
-	if !ok {
-		// No entry
-		return "", nil, types.OpError(types.ErrNotFound)
-	} else if atomic.LoadUint64(&chunk.Available) == chunk.Size {
-		if chunk.Body == nil {
-			// Not recovering
-			return "", nil, types.OpError(types.ErrNotFound)
-		} else {
-			return chunk.Id, chunk.Access(), types.OpSuccess()
-		}
-	} else {
-		// Recovering, wait to be notified.
-		// s.log.Debug("Waiting for the available of %s, availability: %d of %d", chunk.Key, atomic.LoadUint64(&chunk.Available), chunk.Size)
-		chunk.Notifier.Wait()
-		return chunk.Id, chunk.Access(), types.OpSuccess()
-	}
+	return s.PersistentStorage.getWithOption(key, opt)
 }
 
 func (s *LineageStorage) set(key string, chunk *types.Chunk) {
@@ -132,36 +116,18 @@ func (s *LineageStorage) setWithOption(key string, chunkId string, val []byte, o
 	defer s.lineageMu.Unlock()
 	// s.log.Debug("in mutex of setting key %v", key)
 
+	return s.PersistentStorage.setWithOption(key, chunkId, val, opt)
+}
+
+func (s *LineageStorage) newChunk(key string, chunkId string, size uint64, val []byte) *types.Chunk {
 	chunk := types.NewChunk(key, chunkId, val)
+	chunk.Size = size
 	chunk.Term = 1
 	if s.lineage != nil {
 		chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
 		chunk.Bucket = s.getBucket(key)
 	}
-	s.set(key, chunk)
-	if s.chanOps != nil {
-		op := &types.OpWrapper{
-			LineageOp: types.LineageOp{
-				Op:       types.OP_SET,
-				Key:      key,
-				Id:       chunkId,
-				Size:     chunk.Size,
-				Accessed: chunk.Accessed,
-				Bucket:   chunk.Bucket,
-			},
-			OpRet: types.OpDelayedSuccess(),
-			Body:  val,
-		}
-		// Copy options. Field "Persisted" only so far.
-		if opt != nil {
-			op.Persisted = opt.Persisted
-		}
-		s.chanOps <- op
-		// s.log.Debug("local set ok, key %v", key)
-		return op.OpRet
-	} else {
-		return types.OpSuccess()
-	}
+	return chunk
 }
 
 func (s *LineageStorage) Del(key string, chunkId string) *types.OpRet {
