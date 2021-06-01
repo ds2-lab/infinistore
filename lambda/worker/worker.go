@@ -151,27 +151,32 @@ func (wrk *Worker) CloseWithOptions(opts ...bool) {
 		graceful = opts[0]
 	}
 
-	wrk.mu.Lock()
-	defer wrk.mu.Unlock()
-
-	if graceful && atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosing) {
-		// Graceful close is requested, wait for close.
-		wrk.readyToClose.Wait()
-		atomic.StoreInt32(&wrk.closed, WorkerClosed)
-	} else if !atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosed) {
-		// Closing or closed
+	if !atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosing) {
 		return
 	}
+	if graceful {
+		// Graceful close is requested, wait for close.
+		wrk.readyToClose.Wait()
+	}
 
+	wrk.mu.Lock()
+
+	atomic.StoreInt32(&wrk.closed, WorkerClosed)
 	wrk.ctrlLink.Close()
 	wrk.clearDataLinksLocked()
 	atomic.StoreInt32(&wrk.numLinks, 0)
+
+	wrk.mu.Unlock()
 
 	wrk.readyToClose.Wait()
 	wrk.log.Info("Closed")
 }
 
 func (wrk *Worker) IsClosed() bool {
+	if wrk.isClosedLocked() {
+		return true
+	}
+
 	wrk.mu.RLock()
 	defer wrk.mu.RUnlock()
 
@@ -179,7 +184,7 @@ func (wrk *Worker) IsClosed() bool {
 }
 
 func (wrk *Worker) isClosedLocked() bool {
-	return atomic.LoadInt32(&wrk.closed) == WorkerClosed
+	return atomic.LoadInt32(&wrk.closed) != WorkerRunning
 }
 
 func (wrk *Worker) Handler(fn redeo.HandlerFunc) redeo.HandlerFunc {
@@ -204,18 +209,14 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 		return nil
 	}
 
-	wrk.mu.RLock()
-
+	// It's no harm to call locked version
 	if wrk.isClosedLocked() {
-		wrk.mu.RUnlock()
 		rsp.abandon(ErrWorkerClosed)
 		return ErrWorkerClosed
 	}
 
 	// Select link to use by parameter.
 	link := wrk.selectLink(links...)
-
-	wrk.mu.RUnlock()
 
 	// Link will only be binded once. We use binded link to add the response.
 	rsp.bind(link)
@@ -290,16 +291,13 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 
 		wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
 
-		wrk.mu.Lock()
 		// Recheck if server closed in mutex
-		if atomic.LoadInt32(&wrk.closed) == WorkerClosed {
+		if wrk.IsClosed() {
 			conn.Close()
-			wrk.mu.Unlock()
 			wrk.readyToClose.Done()
 			return
 		}
 		link.Reset(conn)
-		wrk.mu.Unlock()
 
 		// Send a heartbeat on the link immediately to confirm store information.
 		// The heartbeat will be queued and send once worker started.
@@ -399,15 +397,12 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	}
 	wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
 
-	wrk.mu.Lock()
 	// Recheck if server closed in mutex
-	if atomic.LoadInt32(&wrk.closed) == WorkerClosed {
+	if wrk.IsClosed() {
 		conn.Close()
-		wrk.mu.Unlock()
 		return ErrWorkerClosed
 	}
 	link.Reset(conn)
-	wrk.mu.Unlock()
 
 	// Send a heartbeat on the link immediately to confirm store information.
 	// The heartbeat will be queued and send once worker started.
@@ -456,16 +451,23 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 		return false
 	}
 
-	wrk.mu.Lock()
-	if wrk.availableTokens != nil {
-		if balance := atomic.AddInt32(&wrk.balance, 1); balance > 0 {
-			wrk.availableTokens <- token
-			wrk.log.Debug("Token recycled, spare links: %d", wrk.startBalance-balance)
-		} else {
-			wrk.log.Debug("Link consumed, spare links: %d", wrk.startBalance-balance)
-		}
+	availableTokens := wrk.availableTokens
+	if availableTokens == nil {
+		return false
 	}
-	wrk.mu.Unlock()
+
+	if balance := atomic.AddInt32(&wrk.balance, 1); balance > 0 {
+		select {
+		case wrk.availableTokens <- token:
+			wrk.log.Debug("Token recycled, spare links: %d", wrk.startBalance-balance)
+		default:
+			wrk.log.Warn("Token overflowed(balance: %d), reset balance.", balance)
+			// TODO: This is a dangrous reset. However, program should not reach here, we'll debug this once we see the warning.
+			atomic.StoreInt32(&wrk.balance, int32(len(wrk.availableTokens)))
+		}
+	} else {
+		wrk.log.Debug("Link consumed, spare links: %d", wrk.startBalance-balance)
+	}
 	runtime.Gosched() // Encourage create another connection quickly.
 	return true
 }

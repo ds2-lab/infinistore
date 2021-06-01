@@ -29,7 +29,7 @@ type Link struct {
 	id        int
 	addr      string
 	ctrl      bool
-	buff      chan interface{}
+	buff      []interface{}
 	lastError error
 	mu        sync.RWMutex
 	once      int32
@@ -53,7 +53,7 @@ func LinkFromClient(client *redeo.Client) *Link {
 func NewLink(ctrl bool) *Link {
 	return &Link{
 		ctrl:  ctrl,
-		buff:  make(chan interface{}, 1),
+		buff:  make([]interface{}, 0, 1),
 		acked: promise.Resolved(),
 	}
 }
@@ -88,7 +88,7 @@ func (ln *Link) Reset(conn net.Conn) {
 	ln.lastError = nil
 	ln.Client = redeo.NewClient(conn)
 	ln.Client.SetContext(context.WithValue(ln.Client.Context(), ctxKeyLink, ln))
-	// Move cached responses
+	// Move cached responses, ln.buff can be nil
 	if len(ln.buff) > 0 {
 		go ln.migrate()
 	}
@@ -96,6 +96,11 @@ func (ln *Link) Reset(conn net.Conn) {
 
 // Add asynchronize response, error if the client is closed.
 func (ln *Link) AddResponses(rsp interface{}) error {
+	if atomic.LoadInt32(&ln.once) == LinkClosed {
+		rsp.(Response).abandon(ErrLinkClosed)
+		return ErrLinkClosed
+	}
+
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
@@ -103,9 +108,11 @@ func (ln *Link) AddResponses(rsp interface{}) error {
 		rsp.(Response).abandon(ErrLinkClosed)
 		return ErrLinkClosed
 	} else if ln.Client == nil {
-		ln.buff <- rsp
+		// Client Uninitialized
+		ln.buff = append(ln.buff, rsp)
 	} else if err := ln.Client.AddResponses(rsp); err != nil {
-		ln.buff <- rsp
+		// Client closed
+		ln.buff = append(ln.buff, rsp)
 	}
 	return nil
 }
@@ -144,13 +151,10 @@ func (ln *Link) Close() {
 
 	atomic.StoreInt32(&ln.once, LinkClosed)
 	ln.close(false)
-	// Drain responses
+	// Drain responses, ln.buff can be nil
 	if len(ln.buff) > 0 {
-		for rsp := range ln.buff {
+		for _, rsp := range ln.buff {
 			rsp.(Response).abandon(ErrLinkClosed)
-			if len(ln.buff) == 0 {
-				break
-			}
 		}
 	}
 }
@@ -176,10 +180,8 @@ func (ln *Link) migrate() {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	for rsp := range ln.buff {
+	for _, rsp := range ln.buff {
 		ln.Client.AddResponses(rsp)
-		if len(ln.buff) == 0 {
-			break
-		}
 	}
+	ln.buff = ln.buff[:0]
 }
