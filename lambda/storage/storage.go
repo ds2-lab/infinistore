@@ -27,6 +27,7 @@ type StorageHelper interface {
 	getWithOption(string, *types.OpWrapper) (string, []byte, *types.OpRet)
 	set(string, *types.Chunk)
 	setWithOption(string, string, []byte, *types.OpWrapper) *types.OpRet
+	newChunk(string, string, uint64, []byte) *types.Chunk
 }
 
 // Storage with lineage
@@ -103,9 +104,13 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 }
 
 func (s *Storage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
-	chunk := types.NewChunk(key, chunkId, val)
+	chunk := s.helper.newChunk(key, chunkId, uint64(len(val)), val)
 	s.helper.set(key, chunk)
 	return types.OpSuccess()
+}
+
+func (s *Storage) newChunk(key string, chunkId string, size uint64, val []byte) *types.Chunk {
+	return types.NewChunk(key, chunkId, val)
 }
 
 // Set chunk

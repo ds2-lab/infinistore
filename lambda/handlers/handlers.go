@@ -71,6 +71,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId, stream, ret := Store.GetStream(key)
 	// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
 	if ret.Error() == types.ErrNotFound && Persist != nil {
+		log.Debug("Key not found locally, try recovery: %v %s", key, reqId)
 		if Lineage != nil {
 			log.Warn("Key not found while recovery is enabled: %v", key)
 		}
