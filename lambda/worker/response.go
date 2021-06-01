@@ -222,6 +222,20 @@ func (r *SimpleResponse) bind(link *Link) {
 	r.BaseResponse.bindImpl(r, link)
 }
 
+type BadResponse struct {
+	BaseResponse
+}
+
+func (r *BadResponse) bind(link *Link) {
+	r.BaseResponse.bindImpl(r, link)
+}
+
+func (r *BadResponse) flush(writer resp.ResponseWriter) error {
+	stuck := make(chan struct{})
+	<-stuck
+	return nil
+}
+
 // ObjectResponse Response wrapper for objects.
 type ObjectResponse struct {
 	BaseResponse

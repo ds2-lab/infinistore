@@ -193,7 +193,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 			// PONG represents the node is ready to serve, no fast recovery required.
 			handlers.Pong.SendWithFlags(flags)
 		} else {
-			session.Timeout.Busy("recover")
+			session.Timeout.Busy("fast recover")
 			recoverErrs = make([]<-chan error, 0, inconsistency)
 
 			// Meta 0 is always the main meta
@@ -233,6 +233,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Wait until recovered to avoid timeout on recovery.
 	if recoverErrs != nil {
 		waitForRecovery(recoverErrs...)
+		// Release busy first. It's no harm if recoveredHandler failed or timeout on executing recoveredHandler, next invocation will cover it.
+		session.Timeout.DoneBusy("fast recover")
+
 		// Signal proxy the recover procedure is done.
 		// Normally the recovery of main repository is longer than backup, so we just wait all is done.
 		if flags&protocol.PONG_RECOVERY > 0 {
@@ -242,10 +245,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				// Continue...
 			}
 		}
-		session.Timeout.DoneBusy("recover")
 	}
 
 	// Adaptive timeout control
+	log.Debug("Waiting for timeout...")
 	meta := wait(session, Lifetime).ProtocolStatus()
 	Server.Pause()
 	log.Debug("Output meta: %v", meta)
@@ -486,15 +489,14 @@ func initMigrateHandler() error {
 }
 
 func byeHandler() error {
-	if DRY_RUN {
-		log.Info("Bye")
-		return nil
-	}
 	// init backup cmd
-	rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-		w.AppendBulkString(rsp.Cmd)
-	})
-	return rsp.Flush()
+	// rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+	// 	w.AppendBulkString(rsp.Cmd)
+	// })
+	// return rsp.Flush()
+
+	// Disable
+	return nil
 }
 
 func main() {
