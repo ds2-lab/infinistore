@@ -213,6 +213,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 	}
 	if req.responded != nil {
 		req.responded.Resolve(rsp)
+		req.responded = nil
 	}
 	if req.Client != nil {
 		ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
