@@ -9,6 +9,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/store"
 	"github.com/mason-leap-lab/infinicache/lambda/worker"
@@ -17,6 +18,7 @@ import (
 var (
 	DefaultPongTimeout = 50 * time.Millisecond
 	DefaultAttempts    = 0 // Disable retrial for backend link intergrated retrial and reconnection.
+	NoTimeout          = false
 
 	Pong = NewPongHandler()
 
@@ -31,19 +33,16 @@ type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
 	// at the same time.
 	limiter   chan int
-	timeout   *time.Timer
 	mu        sync.Mutex
-	done      chan struct{}
 	pong      pong // For test
 	fail      fail // For test
-	cancelled bool
+	requested promise.Promise
 }
 
 func NewPongHandler() *PongHandler {
 	handler := &PongHandler{
-		limiter: make(chan int, 1),
-		timeout: time.NewTimer(0),
-		done:    make(chan struct{}, 1),
+		limiter:   make(chan int, 1),
+		requested: promise.Resolved(),
 	}
 	handler.pong = sendPong
 	handler.fail = setFailure
@@ -56,11 +55,10 @@ func (p *PongHandler) Issue(retry bool) bool {
 
 	attempts := 0
 	if retry {
-		attempts = DefaultAttempts
+		attempts = DefaultAttempts - 1
 	}
 	select {
 	case p.limiter <- attempts:
-		p.cancelled = false
 		return true
 	default:
 		// if limiter is full, move on
@@ -91,11 +89,7 @@ func (p *PongHandler) SendToLink(link *worker.Link, flags int64) error {
 // Cancel Flag expected request is received and cancel pong retrial.
 func (p *PongHandler) Cancel() {
 	p.mu.Lock()
-	p.cancelled = true
-	select {
-	case p.done <- struct{}{}:
-	default:
-	}
+	p.requested.Resolve()
 	// cancel limiter
 	select {
 	case <-p.limiter:
@@ -107,7 +101,7 @@ func (p *PongHandler) Cancel() {
 
 // IsCancelled If the expected request has been received and pong has benn cancelled.
 func (p *PongHandler) IsCancelled() bool {
-	return p.cancelled
+	return p.requested.IsResolved()
 }
 
 func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) error {
@@ -130,13 +124,11 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 		// Abandon
 		return nil
 	}
-	// Drain possible cancel signal
-	if !retrial {
-		select {
-		case <-p.done:
-		default:
-		}
-	}
+	// Refresh promise
+	p.requested.Resolve()
+	p.requested.Reset()
+
+	// Do send
 	pongLog(flags, link)
 	if err := p.pong(link, flags); err != nil {
 		log.Error("Error on PONG flush: %v", err)
@@ -148,22 +140,22 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 		p.limiter <- attempts - 1
 
 		// Set timeout
-		p.setTimeout(DefaultPongTimeout)
+		p.requested.SetTimeout(DefaultPongTimeout)
 
 		// Monitor and wait
 		go func() {
-			if p.waitTimeout() {
-				log.Warn("retry PONG")
+			if p.requested.Timeout() != nil {
+				log.Warn("PONG timeout, retry")
 				p.sendImpl(flags, link, true)
 			}
 		}()
-	} else if link == nil {
+	} else if link == nil && !NoTimeout {
 		// For ack/pong, link will be disconnected if no attempt left.
-		p.setTimeout(DefaultPongTimeout)
+		p.requested.SetTimeout(DefaultPongTimeout)
 
 		// Monitor and wait
 		go func() {
-			if p.waitTimeout() {
+			if p.requested.Timeout() != nil {
 				log.Warn("PONG timeout, disconnect")
 				p.fail(link, &PongError{error: errPongTimeout, flags: flags})
 			}
@@ -171,32 +163,6 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 	}
 
 	return nil
-}
-
-func (p *PongHandler) setTimeout(timeout time.Duration) {
-	// Drain timer
-	if !p.timeout.Stop() {
-		select {
-		case <-p.timeout.C:
-		default:
-		}
-	}
-	p.timeout.Reset(timeout)
-}
-
-func (p *PongHandler) waitTimeout() bool {
-	select {
-	case <-p.timeout.C:
-		// Timeout. double confirm p.done.
-		select {
-		case <-p.done:
-			return false
-		default:
-			return true
-		}
-	case <-p.done:
-		return false
-	}
 }
 
 func pongLog(flags int64, link *worker.Link) {
