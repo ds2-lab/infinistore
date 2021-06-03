@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -11,11 +12,23 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
+const (
+	DONE_CLOSE = 0
+	DONE_QUIT  = 1
+)
+
+var (
+	ErrClosed = errors.New("dashboard closed")
+)
+
 type Dashboard struct {
 	*ui.Grid
 	ClusterView *views.ClusterView
 	GroupedView *views.GroupedClusterView
 	LogView     *views.LogView
+	StatusView  *views.StatusView
+	done        chan int
+	lastError   error
 }
 
 func NewDashboard() *Dashboard {
@@ -28,18 +41,23 @@ func NewDashboard() *Dashboard {
 		ClusterView: views.NewClusterView(" Nodes "),
 		GroupedView: views.NewGroupedClusterView(" Nodes "),
 		LogView:     views.NewLogView(" Logs ", global.Options.LogFile),
+		done:        make(chan int, 1),
 	}
+	dashboard.StatusView = views.NewStatusView(dashboard)
 	// Full screen
 	termWidth, termHeight := ui.TerminalDimensions()
 	dashboard.Grid.SetRect(0, 0, termWidth, termHeight)
 
 	// Layout
 	dashboard.Grid.Set(
-		ui.NewRow(4.0/5,
+		ui.NewRow(16.0/20,
 			ui.NewCol(1.0/1, dashboard.GroupedView),
 		),
-		ui.NewRow(1.0/5,
+		ui.NewRow(3.0/20,
 			ui.NewCol(1.0/1, dashboard.LogView),
+		),
+		ui.NewRow(1.0/20,
+			ui.NewCol(1.0/1, dashboard.StatusView),
 		),
 	)
 
@@ -53,15 +71,15 @@ func NewDashboard() *Dashboard {
 // }
 
 func (dash *Dashboard) ConfigCluster(cluster interface{}, cols int) {
-	switch cluster.(type) {
+	switch stats := cluster.(type) {
 	case types.ClusterStats:
 		dash.Grid.Items[0].Entry = dash.ClusterView
-		dash.ClusterView.Cluster = cluster.(types.ClusterStats)
+		dash.ClusterView.Cluster = stats
 		dash.ClusterView.Cols = 25
 		dash.ClusterView.Update()
 	case types.GroupedClusterStats:
 		dash.Grid.Items[0].Entry = dash.GroupedView
-		dash.GroupedView.Cluster = cluster.(types.GroupedClusterStats)
+		dash.GroupedView.Cluster = stats
 		dash.GroupedView.Cols = cols
 		dash.GroupedView.Update()
 	default:
@@ -73,7 +91,7 @@ func (dash *Dashboard) Update() {
 	ui.Render(dash)
 }
 
-func (dash *Dashboard) Start() {
+func (dash *Dashboard) Start() error {
 	uiEvents := ui.PollEvents()
 	ticker := time.NewTicker(time.Second).C
 	for {
@@ -82,7 +100,7 @@ func (dash *Dashboard) Start() {
 		case e := <-uiEvents:
 			switch e.ID {
 			case "q", "<C-c>":
-				return
+				return nil
 			case "<Resize>":
 				payload := e.Payload.(ui.Resize)
 				dash.SetRect(0, 0, payload.Width, payload.Height)
@@ -91,10 +109,32 @@ func (dash *Dashboard) Start() {
 			}
 		case <-ticker:
 			// ui.Render(dash)
+		case code := <-dash.done:
+			if code == DONE_QUIT {
+				return dash.lastError
+			} else {
+				return ErrClosed
+			}
 		}
 	}
 }
 
 func (dash *Dashboard) Close() {
+	// avoid block
+	select {
+	case <-dash.done:
+	default:
+	}
+	dash.done <- DONE_CLOSE
 	ui.Close()
+}
+
+func (dash *Dashboard) Quit(reason string) {
+	// avoid block
+	select {
+	case <-dash.done:
+	default:
+	}
+	dash.lastError = errors.New(reason)
+	dash.done <- DONE_QUIT
 }
