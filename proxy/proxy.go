@@ -100,9 +100,12 @@ func main() {
 	if !options.NoDashboard {
 		dash = dashboard.NewDashboard()
 		go func() {
-			defer finalize(false)
-			dash.Start()
-			sig <- syscall.SIGINT
+			defer finalize(true)
+			if err := dash.Start(); err == nil {
+				sig <- syscall.SIGINT
+			} else if err != dashboard.ErrClosed {
+				panic(err)
+			}
 		}()
 	}
 
@@ -198,19 +201,21 @@ func finalize(fix bool) {
 		dash = nil
 	}
 
-	// If fixable, try close server normally.
-	if fix {
-		if err := recover(); err != nil {
-			log.Error("%v", err)
-			return
-		}
-	}
-
 	// Rest will be cleared from main routine.
 	if logFile != nil {
 		os.Stderr = stdErr
 		syslog.SetOutput(os.Stdout)
 		logFile.Close()
 		logFile = nil
+	}
+
+	// If fixable, try close server normally.
+	if !fix {
+		return
+	}
+
+	if err := recover(); err != nil {
+		log.Error("%v", err)
+		sig <- syscall.SIGINT
 	}
 }
