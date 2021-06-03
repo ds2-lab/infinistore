@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	MemLimit = uint64(800 * 1024 * 1024)
+	MemLimit = uint64(900 * 1024 * 1024)
 )
 
 type StatusView struct {

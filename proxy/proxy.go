@@ -216,6 +216,19 @@ func finalize(fix bool) {
 
 	if err := recover(); err != nil {
 		log.Error("%v", err)
+
+		if global.Options.MemProfile != "" {
+			f, err := os.Create(global.Options.MemProfile + "crash")
+			if err != nil {
+				log.Error("could not create memory profile: ", err)
+			}
+			defer f.Close() // error handling omitted for example
+			runtime.GC()    // get up-to-date statistics
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				log.Error("could not write memory profile: ", err)
+			}
+		}
+
 		sig <- syscall.SIGINT
 	}
 }
