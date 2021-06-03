@@ -479,7 +479,9 @@ func (wrk *Worker) acknowledge(link *Link) {
 func (wrk *Worker) ackHandler(w resp.ResponseWriter, c *resp.Command) {
 	link := LinkFromClient(redeo.GetClient(c.Context()))
 	wrk.acknowledge(link)
-	wrk.reserveDataLink(link, nil)
+	if !link.IsControl() {
+		wrk.reserveDataLink(link, nil)
+	}
 }
 
 func (wrk *Worker) WaitAck(cmd string, cb func(), links ...interface{}) {
