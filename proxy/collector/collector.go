@@ -25,14 +25,16 @@ var (
 	LogCluster      nanolog.Handle
 	LogBucketRotate nanolog.Handle
 
-	// LogStart Component of LogChunk, fields: cmd, reqId, chunk, startedAt
-	LogStart nanolog.Handle = 10001
-	// LogValidate Component of LogChunk, fields: validatedAt
-	LogValidate nanolog.Handle = 10002
-	// LogProxy Component of LogChunk, fields: firstByteReceivedAt, headerReceivedAt, bodyReceivedAt, recoveryFlag
-	LogProxy nanolog.Handle = 10003
-	// LogServer2Client Component of LogChunk, fields: headerSentAt, bodySentAt, allSentAt, endedAt
-	LogServer2Client nanolog.Handle = 10004
+	// LogRequestStart Component of LogChunk, fields: cmd, reqId, chunk, startedAt
+	LogRequestStart nanolog.Handle = 10001
+	// LogRequestValidation Component of LogChunk, fields: validatedAt
+	LogRequestValidation nanolog.Handle = 10002
+	// LogRequestFuncResponse Component of LogChunk, fields: firstByteReceivedAt, headerReceivedAt, bodyReceivedAt, recoveryFlag
+	LogRequestFuncResponse nanolog.Handle = 10003
+	// LogRequestProxyResponse Component of LogChunk, fields: headerSentAt, bodySentAt, allSentAt, endedAt
+	LogRequestProxyResponse nanolog.Handle = 10004
+	// LogRequestAbadon Abandon request log entry.
+	LogRequestAbandon nanolog.Handle = 10009
 
 	ErrUnexpectedEntry = errors.New("unexpected log entry")
 
@@ -143,7 +145,7 @@ func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (
 		return nil, nil
 	}
 
-	if handle == LogStart {
+	if handle == LogRequestStart {
 		entry := pool.Get().(*DataEntry).reset()
 		entry.cmd = args[0].(string)
 		entry.reqId = args[1].(string)
@@ -157,10 +159,10 @@ func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (
 		return nil, ErrUnexpectedEntry
 	}
 	switch handle {
-	case LogValidate:
+	case LogRequestValidation:
 		entry.validate = args[0].(int64)
 		return entry, nil
-	case LogProxy:
+	case LogRequestFuncResponse:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 		entry.firstByte = args[0].(int64) - entry.start
@@ -173,7 +175,7 @@ func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (
 			return entry, nil
 		}
 		// Duration has been set, because the request is late and finished. Continue and complete LogChunk
-	case LogServer2Client:
+	case LogRequestProxyResponse:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 		entry.server2Client = args[0].(int64)
@@ -186,6 +188,9 @@ func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (
 			return entry, nil
 		}
 		// All done. Continue and complete LogChunk
+	case LogRequestAbandon:
+		pool.Put(entry)
+		return nil, nil
 	default:
 		return nil, ErrUnexpectedEntry
 	}

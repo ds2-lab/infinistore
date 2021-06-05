@@ -23,7 +23,20 @@ const (
 
 var (
 	emptySlice = make([]*types.Request, 100) // Large enough to cover most cases.
+	mu         sync.Mutex
 )
+
+func getEmptySlice(size int) []*types.Request {
+	if size <= len(emptySlice) {
+		return emptySlice[:size]
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if size > len(emptySlice) {
+		emptySlice = make([]*types.Request, len(emptySlice)*((size-1)/len(emptySlice)+1))
+	}
+	return emptySlice[:size]
+}
 
 type RequestCoordinator struct {
 	pool     *sync.Pool
@@ -64,14 +77,8 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 		l := int(d + p)
 		if cap(counter.Requests) < l {
 			counter.Requests = make([]*types.Request, l)
-		} else {
-			if cap(emptySlice) < l {
-				emptySlice = make([]*types.Request, cap(emptySlice)*2)
-			}
-			if len(counter.Requests) != l {
-				counter.Requests = counter.Requests[:l]
-			}
-			copy(counter.Requests, emptySlice[:l])
+		} else if len(counter.Requests) != l {
+			counter.Requests = counter.Requests[:l]
 		}
 		// Release initalization lock
 		counter.initialized.Done()
@@ -98,6 +105,7 @@ func (c *RequestCoordinator) Load(reqId string) interface{} {
 func (c *RequestCoordinator) Clear(item interface{}) {
 	reqId, ok := item.(string)
 	if ok {
+		// reserved for types except RequestCounter
 		c.registry.Del(reqId)
 		return
 	}
@@ -109,6 +117,7 @@ func (c *RequestCoordinator) tryClearCounter(item interface{}) bool {
 	counter, ok := item.(*RequestCounter)
 	if ok {
 		c.registry.Del(counter.reqId)
+		copy(counter.Requests, getEmptySlice(len(counter.Requests))) // reset to nil and release memory
 		c.pool.Put(counter)
 	}
 
