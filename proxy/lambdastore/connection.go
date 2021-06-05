@@ -712,9 +712,9 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Connection will not be flagged available until SkipBulk() is executed.
 		req, _ := conn.SetResponse(rsp, false)
 		if req != nil {
-			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
+			_, err := collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
-				conn.log.Warn("LogProxy err %v", err)
+				conn.log.Warn("LogRequestFuncResponse err %v", err)
 			}
 		}
 		counter.ReleaseIfAllReturned(status)
@@ -737,7 +737,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Failed to set response, release hold.
 		stream.(resp.Holdable).Unhold()
 	} else {
-		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
+		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 	}
 	// Abandon rest chunks.
 	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
@@ -766,7 +766,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
 	req, ok := conn.SetResponse(rsp, false)
 	if ok {
-		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
+		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
 
 	// Check lambda if it is supported

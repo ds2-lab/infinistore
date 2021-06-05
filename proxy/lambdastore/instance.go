@@ -1297,7 +1297,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 	cmdName := cmd.Name()
 	switch req := cmd.(type) {
 	case *types.Request:
-		collector.CollectRequest(collector.LogValidate, req.CollectorEntry, int64(validateDuration))
+		collector.CollectRequest(collector.LogRequestValidation, req.CollectorEntry, int64(validateDuration))
 
 		// Select link
 		useDataLink := req.Size() > MaxControlRequestSize // Changes: will fallback to ctrl link.
