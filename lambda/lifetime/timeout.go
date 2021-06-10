@@ -273,24 +273,6 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 				// Nothing
 			}
 
-			// t.session.Lock()
-			// // Double check timeout after locked.
-			// if len(t.reset) > 0 || t.IsDisabled() {
-			// 	// pass
-			// } else if t.IsBusy() {
-			// 	t.resetLocked()
-			// } else if t.Since() < t.due {
-			// 	// FIXME: This is just a precaution check, remove if possible.
-			// 	t.log.Debug("Unexpected timeout before due (%v / %v), try reset.", t.Since(), t.due)
-			// 	t.resetLocked()
-			// } else if t.OnTimeout != nil && t.OnTimeout(t) { // Final chance to deny timeout.
-			// 	t.c <- ti
-			// 	t.timeout = true
-			// 	t.OnTimeout = nil
-			// 	t.interruptAt = time.Now()
-			// }
-			// t.session.Unlock()
-
 			// Pre-confirmation check
 			if t.Confirm != nil && !t.tryTimeout(false) {
 				continue
@@ -318,7 +300,6 @@ func (t *Timeout) resetLocked() {
 		<-t.reset
 		t.reset <- t.lastExtension
 	}
-	t.busyExtension = 0
 }
 
 func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
