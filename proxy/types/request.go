@@ -28,6 +28,9 @@ const (
 var (
 	ErrStreamingReq       = errors.New("can not retry a streaming request")
 	ErrMaxAttemptsReached = errors.New("max attempts reached")
+	ErrResponded          = errors.New("responded")
+	ErrNoClient           = errors.New("no client set")
+	ErrNotSuppport        = errors.New("not support")
 )
 
 type Request struct {
@@ -206,30 +209,29 @@ func (req *Request) IsResponse(rsp *Response) bool {
 		req.Id.ChunkId == rsp.Id.ChunkId
 }
 
-func (req *Request) SetResponse(rsp interface{}) bool {
+func (req *Request) SetResponse(rsp interface{}) error {
 	req.MarkReturned()
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
-		return false
+		return ErrResponded
 	}
 	if req.responded != nil {
 		req.responded.Resolve(rsp)
 		req.responded = nil
 	}
-	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
-
-		// Release reference so chan can be garbage collected.
-		req.Client = nil
-		return ret == nil
+	if req.Client == nil {
+		return ErrNoClient
 	}
 
-	return true
+	ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
+	// Release reference so chan can be garbage collected.
+	req.Client = nil
+	return ret
 }
 
 // Only appliable to GET so far.
-func (req *Request) Abandon() bool {
+func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
-		return false
+		return ErrNotSuppport
 	}
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }

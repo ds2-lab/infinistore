@@ -89,7 +89,8 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	TriggerTimeout        = 1 * time.Second       // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	TriggerTimeout        = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	RTT                   = 2 * time.Millisecond
 	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
@@ -175,13 +176,14 @@ type Instance struct {
 	due      int64
 
 	// Backup fields
-	backups      Backups
-	recovering   uint32           // # of backups in use, also if the recovering > 0, the instance is recovering.
-	writtens     *hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
-	backing      uint32           // backing status, 0 for non backing, 1 for reserved, 2 for backing.
-	backingIns   *Instance
-	backingId    int // Identifier for backup, ranging from [0, # of backups)
-	backingTotal int // Total # of backups ready for backing instance.
+	backups          Backups
+	recovering       uint32           // # of backups in use, also if the recovering > 0, the instance is recovering.
+	writtens         *hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
+	backing          uint32           // backing status, 0 for non backing, 1 for reserved, 2 for backing.
+	backingIns       *Instance
+	backingId        int // Identifier for backup, ranging from [0, # of backups)
+	backingTotal     int // Total # of backups ready for backing instance.
+	rerouteThreshold uint64
 }
 
 func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
@@ -195,9 +197,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins := &Instance{
 		Deployment: dp,
 		Meta: Meta{
-			Term:     1,
-			Capacity: global.Options.GetInstanceCapacity(),
-			size:     config.InstanceOverhead,
+			Term: 1,
 		}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awakeness:    INSTANCE_SLEEPING,
 		chanCmd:      make(chan types.Command, MAX_CMD_QUEUE_LEN),
@@ -210,6 +210,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
 	}
+	ins.Meta.ResetCapacity(global.Options.GetInstanceCapacity(), 0)
 	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
@@ -511,7 +512,7 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	ins.mu.Unlock()
 
 	// Manually trigger ping with payload to initiate parallel recovery
-	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total)
+	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total, ins.getRerouteThreshold())
 	if err != nil {
 		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
 	} else {
@@ -706,15 +707,12 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return castValidatedConnection(ins.validated)
 	}
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
-	goodDue := ins.due > time.Now().Add(-MinValidationInterval).UnixNano()
+	goodDue := time.Duration(ins.due - time.Now().Add(RTT).UnixNano())
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
 		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
-		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE &&
-		(time.Since(ins.validated.ResolvedAt()) < MinValidationInterval || goodDue) {
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 {
 		ins.mu.Unlock()
-		if goodDue {
-			ins.log.Info("Validation skipped. due in %v", time.Duration(ins.due-time.Now().UnixNano()))
-		}
+		ins.log.Info("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
@@ -891,23 +889,24 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	var status protocol.Status
 	if !ins.IsBacking(false) {
 		// Main store only
-		status = protocol.Status{*ins.Meta.ToProtocolMeta(ins.Id())}
-		status[0].Tip = tips.Encode()
+		status = protocol.Status{Metas: []protocol.Meta{*ins.Meta.ToProtocolMeta(ins.Id())}}
+		status.Metas[0].Tip = tips.Encode()
 	} else {
 		// Main store + backing store
-		status = protocol.Status{
+		status = protocol.Status{Metas: []protocol.Meta{
 			*ins.Meta.ToProtocolMeta(ins.Id()),
 			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
-		}
+		}}
 		if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
 			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
-			status[0].Tip = tips.Encode()
+			status.Metas[0].Tip = tips.Encode()
 			tips = &url.Values{}
 		}
 		// Add backing infos to tips
 		tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(ins.backingId))
 		tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(ins.backingTotal))
-		status[1].Tip = tips.Encode()
+		tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(ins.getRerouteThreshold(), 10))
+		status.Metas[1].Tip = tips.Encode()
 	}
 	var localFlags uint64
 	if atomic.LoadUint32(&ins.phase) != PHASE_ACTIVE {
@@ -972,8 +971,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		var outputStatus protocol.Status
 		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
 			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
-		} else if len(outputStatus) > 0 {
-			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus[0]) // Ignore backing store
+		} else if len(outputStatus.Metas) > 0 {
+			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
 			if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
 				// Reclaimed
 				ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
@@ -1124,6 +1123,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		ins.log.Debug("[%v]Already validated", ins)
 		return validConn, ErrInstanceValidated
 	} else {
+		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano()) // Set MinValidationInterval
 		return validConn, nil
 	}
 }
@@ -1227,10 +1227,12 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
+			ins.ResetDue() // Force ping on error
 			ins.log.Warn("Failed to %v: %v", cmd, lastErr)
 		}
 	}
 	if lastErr != nil {
+		ins.ResetDue() // Force ping on error
 		if leftAttempts == 0 {
 			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		} else {
@@ -1262,6 +1264,11 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	backup, ok := ins.backups.GetByKey(req.Key)
 	if !ok {
 		// Backup is not available, can be recovered or simply not available.
+		return false
+	}
+
+	// No reroute for chunk larger than threshold()
+	if req.Size() > int64(ins.getRerouteThreshold()) {
 		return false
 	}
 
@@ -1414,4 +1421,11 @@ func (ins *Instance) SetDue(due int64) {
 
 func (ins *Instance) ResetDue() {
 	ins.due = time.Now().UnixNano()
+}
+
+func (ins *Instance) getRerouteThreshold() uint64 {
+	if ins.rerouteThreshold == 0 {
+		ins.rerouteThreshold = ins.Meta.EffectiveCapacity() / uint64(ins.backups.Len()) / 2
+	}
+	return ins.rerouteThreshold
 }

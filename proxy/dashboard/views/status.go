@@ -33,10 +33,11 @@ func NewStatusView(dash DashControl) *StatusView {
 
 func (v *StatusView) Draw(buf *ui.Buffer) {
 	runtime.ReadMemStats(&v.memStat)
-	if v.maxMemory < v.memStat.HeapAlloc {
-		v.maxMemory = v.memStat.HeapAlloc
+	mem := v.memStat.Sys - v.memStat.HeapSys - v.memStat.GCSys + v.memStat.HeapInuse
+	if v.maxMemory < mem {
+		v.maxMemory = mem
 	}
-	v.Text = fmt.Sprintf("Mem: %s, Max: %s", humanize.Bytes(v.memStat.HeapAlloc), humanize.Bytes(v.maxMemory))
+	v.Text = fmt.Sprintf("Mem: %s, Max: %s", humanize.Bytes(mem), humanize.Bytes(v.maxMemory))
 
 	// Draw overwrite
 	v.Block.Draw(buf)

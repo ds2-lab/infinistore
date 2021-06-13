@@ -10,11 +10,12 @@ import (
 
 type LineageMeta struct {
 	*protocol.Meta
-	Consistent  bool
-	Backup      bool
-	BackupId    int
-	BackupTotal int
-	Tips        url.Values
+	Consistent   bool
+	Backup       bool
+	BackupId     int
+	BackupTotal  int
+	MaxChunkSize uint64
+	Tips         url.Values
 }
 
 func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
@@ -29,14 +30,9 @@ func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
 	// Parse backup id
 	if sId := lm.Tips.Get(protocol.TIP_BACKUP_KEY); sId != "" {
 		lm.Backup = true
-		lm.BackupId, err = strconv.Atoi(sId)
-		if err != nil {
-			return
-		}
-		lm.BackupTotal, err = strconv.Atoi(lm.Tips.Get(protocol.TIP_BACKUP_TOTAL))
-		if err != nil {
-			return
-		}
+		lm.BackupId, _ = strconv.Atoi(sId)
+		lm.BackupTotal, _ = strconv.Atoi(lm.Tips.Get(protocol.TIP_BACKUP_TOTAL))
+		lm.MaxChunkSize, _ = strconv.ParseUint(lm.Tips.Get(protocol.TIP_MAX_CHUNK), 10, 64)
 	}
 
 	return
@@ -109,15 +105,15 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 	case 0:
 		return protocol.Status{}
 	case 1:
-		return protocol.Status{*s[0]}
+		return protocol.Status{Metas: []protocol.Meta{*s[0]}}
 	case 2:
-		return protocol.Status{*s[0], *s[1]}
+		return protocol.Status{Metas: []protocol.Meta{*s[0], *s[1]}}
 	default:
-		status := make(protocol.Status, len(s))
+		metas := make([]protocol.Meta, len(s))
 		for i := 0; i < len(s); i++ {
-			status[i] = *s[i]
+			metas[i] = *s[i]
 		}
-		return status
+		return protocol.Status{Metas: metas}
 	}
 }
 

@@ -833,7 +833,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 				}
 			}
 			// New or reset chunk
-			if chunk == nil && s.isRecoverable(op.Key, meta, false) {
+			if chunk == nil && s.isRecoverable(op, meta, false) {
 				// Main repository or backup repository if backup ID matches.
 				chunk := &types.Chunk{
 					Key:      op.Key,
@@ -1018,16 +1018,16 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 	return receivedBytes, nil
 }
 
-func (s *LineageStorage) isRecoverable(key string, meta *types.LineageMeta, verify bool) bool {
+func (s *LineageStorage) isRecoverable(op *types.LineageOp, meta *types.LineageMeta, verify bool) bool {
 	if !meta.Backup {
 		return true
 	}
 	s.backupLocator.Reset(int(meta.BackupTotal))
-	target, _, _ := s.backupLocator.Locate(key)
-	if target == meta.BackupId {
+	target, _, _ := s.backupLocator.Locate(op.Key)
+	if target == meta.BackupId && (meta.MaxChunkSize == 0 || op.Size <= meta.MaxChunkSize) {
 		return true
 	} else if verify {
-		s.log.Warn("Detected backup reroute error, expected %d, actual %d, key %s", meta.BackupId, target, key)
+		s.log.Warn("Detected backup reroute error, expected %d, actual %d, key %s", meta.BackupId, target, op.Key)
 	}
 	return false
 }

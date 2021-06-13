@@ -33,7 +33,11 @@ func (i *InputEvent) IsBackingOnly() bool {
 	return (i.Flags & FLAG_BACKING_ONLY) > 0
 }
 
-type Status []Meta
+type Status struct {
+	Capacity uint64 `json:"cap"`
+	Mem      uint64 `json:"mem"`
+	Metas    []Meta `json:"metas"`
+}
 
 type Meta struct {
 	// Lambda ID
@@ -124,4 +128,6 @@ const (
 	TIP_BACKUP_TOTAL = "baks"
 	// TIP_SERVING_KEY Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
+	// TIP_MAX_CHUNK Max chunk size can be backed up.
+	TIP_MAX_CHUNK = "max"
 )

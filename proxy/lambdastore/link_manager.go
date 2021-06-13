@@ -121,6 +121,10 @@ func (m *LinkManager) SetMaxActiveDataLinks(num int) {
 	m.availables.SetLimit(num)
 }
 
+func (m *LinkManager) DataLinks() *AvailableLinks {
+	return m.availables
+}
+
 func (m *LinkManager) AddDataLink(link *Connection) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
