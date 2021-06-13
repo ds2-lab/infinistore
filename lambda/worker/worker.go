@@ -60,9 +60,10 @@ type Worker struct {
 
 	// Dynamic connection
 	availableTokens chan *struct{}
-	balance         int32
-	startBalance    int32
+	minDLs          int32 // Minimum data links required.
+	spareDLs        int32 // # of spared data links.
 	dataLinks       *list.List
+	updatedAt       time.Time
 
 	// Proxies container
 	proxies []*HandlerProxy
@@ -78,7 +79,7 @@ func NewWorker(lifeId int64) *Worker {
 	worker := &Worker{
 		id:       rand.Int31(),
 		Server:   redeo.NewServer(nil),
-		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_ALL, Color: false, Prefix: "Worker:"},
+		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_ALL, Color: true, Prefix: "Worker:"},
 		ctrlLink: NewLink(true),
 		// dataLink:    NewLink(false),
 		heartbeater: new(DefaultHeartbeater),
@@ -240,6 +241,41 @@ func (wrk *Worker) SetFailure(link interface{}, err error) {
 	wrk.selectLink(link).Invalidate(err)
 }
 
+// VerifyDataLinks Verify the number of available data links at proxy side.
+func (wrk *Worker) VerifyDataLinks(availableLinks int, reportedAt time.Time) {
+	if reportedAt.Before(wrk.updatedAt) {
+		// Reported data are out of date.
+		wrk.log.Debug("Discard out of date link report: %d, reported before %v", availableLinks, wrk.updatedAt.Sub(reportedAt))
+		return
+	}
+
+	available := int32(availableLinks)
+	spares := atomic.LoadInt32(&wrk.spareDLs)
+	if available == spares {
+		return
+	}
+
+	diff := available - spares
+	wrk.updateSpareDLs(diff, reportedAt)
+	if available >= wrk.minDLs {
+		wrk.log.Info("Correct data links, corrected %d, spare links: %d.", diff, atomic.LoadInt32(&wrk.spareDLs))
+		return
+	}
+
+	borrowed := 0
+For:
+	for i := available; i < wrk.minDLs; i++ {
+		select {
+		case wrk.availableTokens <- &struct{}{}:
+			borrowed++
+		default:
+			// Unlikely, but token list is full.
+			break For
+		}
+	}
+	wrk.log.Warn("Insufficient data links, corrected %d, borrowed: %d, spare links: %d.", diff, borrowed, atomic.LoadInt32(&wrk.spareDLs))
+}
+
 func (wrk *Worker) ensureConnection(link *Link, proxyAddr net.Addr, opts *WorkerOptions, started *sync.WaitGroup) error {
 	if !link.Initialize() {
 		// Initilized.
@@ -349,13 +385,14 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 }
 
 func (wrk *Worker) reserveConnection(links *list.List, proxyAddr net.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
-	wrk.availableTokens = make(chan *struct{}, MinDataLinks)
+	wrk.availableTokens = make(chan *struct{}, opts.MinDataLinks)
 	// Fill tokens
 	for i := 0; i < opts.MinDataLinks; i++ {
 		wrk.availableTokens <- &struct{}{}
 	}
-	wrk.balance = int32(len(wrk.availableTokens))
-	wrk.startBalance = wrk.balance
+	wrk.minDLs = int32(len(wrk.availableTokens))
+	wrk.spareDLs = 0
+	wrk.updatedAt = time.Now()
 	ch := wrk.availableTokens
 	for token := range ch {
 		if link := wrk.reserveDataLink(nil, token); link == nil {
@@ -426,11 +463,11 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 }
 
 func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
-	balance := atomic.AddInt32(&wrk.balance, -1)
-	defer wrk.log.Debug("Link available, spare links: %d", wrk.startBalance-balance)
+	spares := wrk.updateSpareDLs(1)
+	defer wrk.log.Debug("Link available, spare links: %d", spares)
 
 	// We will not create new link if there are spare links
-	if balance < 0 && link == nil {
+	if spares > wrk.minDLs && link == nil {
 		return link
 	}
 
@@ -456,17 +493,18 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 		return false
 	}
 
-	if balance := atomic.AddInt32(&wrk.balance, 1); balance > 0 {
+	if spares := wrk.updateSpareDLs(-1); spares < wrk.minDLs {
 		select {
 		case wrk.availableTokens <- token:
-			wrk.log.Debug("Token recycled, spare links: %d", wrk.startBalance-balance)
+			wrk.log.Debug("Token recycled, spare links: %d", spares)
 		default:
-			wrk.log.Warn("Token overflowed(balance: %d), reset balance.", balance)
+			wrk.log.Warn("Token overflowed(balance: %d), reset balance.", spares)
 			// TODO: This is a dangrous reset. However, program should not reach here, we'll debug this once we see the warning.
-			atomic.StoreInt32(&wrk.balance, int32(len(wrk.availableTokens)))
+			atomic.StoreInt32(&wrk.spareDLs, int32(len(wrk.availableTokens)))
+			wrk.updatedAt = time.Now()
 		}
 	} else {
-		wrk.log.Debug("Link consumed, spare links: %d", wrk.startBalance-balance)
+		wrk.log.Debug("Link consumed, spare links: %d", spares)
 	}
 	runtime.Gosched() // Encourage create another connection quickly.
 	return true
@@ -598,6 +636,18 @@ func (wrk *Worker) clearDataLinksLocked() {
 		link.Close()
 		wrk.log.Debug("%v cleared", link)
 	}
+}
+
+func (wrk *Worker) updateSpareDLs(change int32, reports ...time.Time) int32 {
+	reportedAt := time.Now()
+	if len(reports) > 0 {
+		reportedAt = reports[0]
+	}
+	spares := atomic.AddInt32(&wrk.spareDLs, change)
+	if reportedAt.After(wrk.updatedAt) {
+		wrk.updatedAt = reportedAt
+	}
+	return spares
 }
 
 type TestClient struct {

@@ -347,7 +347,9 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 
 func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 	// Drain payload anyway.
-	payload := c.Arg(0).Bytes()
+	datalinks, _ := c.Arg(0).Int()
+	reportedAt, _ := c.Arg(1).Int()
+	payload := c.Arg(2).Bytes()
 
 	session := lambdaLife.GetSession()
 	if session == nil {
@@ -370,6 +372,7 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	log.Debug("PING")
+	Server.VerifyDataLinks(int(datalinks), time.Unix(0, reportedAt))
 	handlers.Pong.SendWithFlags(protocol.PONG_FOR_CTRL)
 
 	// Deal with payload

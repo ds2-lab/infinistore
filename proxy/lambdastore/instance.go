@@ -88,7 +88,8 @@ const (
 var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
-	TriggerTimeout        = 1 * time.Second       // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	TriggerTimeout        = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	RTT                   = 2 * time.Millisecond
 	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
@@ -698,15 +699,12 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return castValidatedConnection(ins.validated)
 	}
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
-	goodDue := ins.due > time.Now().Add(-MinValidationInterval).UnixNano()
+	goodDue := time.Duration(ins.due - time.Now().Add(RTT).UnixNano())
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
 		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
-		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE &&
-		(time.Since(ins.validated.ResolvedAt()) < MinValidationInterval || goodDue) {
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 {
 		ins.mu.Unlock()
-		if goodDue {
-			ins.log.Info("Validation skipped. due in %v", time.Duration(ins.due-time.Now().UnixNano()))
-		}
+		ins.log.Info("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
@@ -1116,6 +1114,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		ins.log.Debug("[%v]Already validated", ins)
 		return validConn, ErrInstanceValidated
 	} else {
+		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano()) // Set MinValidationInterval
 		return validConn, nil
 	}
 }
@@ -1219,10 +1218,12 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
+			ins.ResetDue() // Force ping on error
 			ins.log.Warn("Failed to %v: %v", cmd, lastErr)
 		}
 	}
 	if lastErr != nil {
+		ins.ResetDue() // Force ping on error
 		if leftAttempts == 0 {
 			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		} else {
