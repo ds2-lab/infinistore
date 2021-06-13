@@ -37,7 +37,8 @@ var (
 	ExpectedGOMAXPROCS = 2
 	DefaultStatus      = protocol.Status{}
 
-	log = Log
+	log     = Log
+	memStat runtime.MemStats
 )
 
 func init() {
@@ -160,16 +161,16 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		handlers.Pong.SendWithFlags(flags)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
-		if len(input.Status) == 0 {
+		if len(input.Status.Metas) == 0 {
 			return Lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
 		}
 
 		// Preprocess protocol meta and check consistency
-		metas := make([]*types.LineageMeta, len(input.Status))
+		metas := make([]*types.LineageMeta, len(input.Status.Metas))
 		var err error
 		var inconsistency int
 		for i := 0; i < len(metas); i++ {
-			metas[i], err = types.LineageMetaFromProtocol(&input.Status[i])
+			metas[i], err = types.LineageMetaFromProtocol(&input.Status.Metas[i])
 			if err != nil {
 				return Lineage.Status().ProtocolStatus(), err
 			}
@@ -250,6 +251,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Adaptive timeout control
 	log.Debug("Waiting for timeout...")
 	meta := wait(session, Lifetime).ProtocolStatus()
+	meta.Capacity = uint64(lambdaLife.MemoryLimitInMB * 1000000)
 	Server.Pause()
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
@@ -257,9 +259,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 	gcStart := time.Now()
 	runtime.GC()
+	runtime.ReadMemStats(&memStat)
+	meta.Mem = memStat.Sys - memStat.HeapSys - memStat.GCSys + memStat.HeapInuse
 	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
-	log.Info("served %d, interrupted: %d", session.Timeout.Since(), session.Timeout.Interrupted())
+	log.Info("served: %d, interrupted: %d, mem: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(), float64(meta.Mem)/1000000)
 	return meta, nil
 }
 
@@ -522,7 +526,7 @@ func main() {
 
 		var input protocol.InputEvent
 		input.Sid = "dummysid"
-		input.Status = make(protocol.Status, 1, 2)
+		input.Status = protocol.Status{Metas: make([]protocol.Meta, 1, 2)}
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
 		// })
@@ -533,14 +537,14 @@ func main() {
 		flag.StringVar(&input.Prefix, "prefix", "log/dryrun", "Experiment data prefix")
 		flag.IntVar(&input.Log, "log", logger.LOG_LEVEL_ALL, "Log level")
 		flag.Uint64Var(&input.Flags, "flags", 0, "Flags to customize node behavior, see common/types/types.go")
-		flag.Uint64Var(&input.Status[0].Term, "term", 1, "Lineage.Term")
-		flag.Uint64Var(&input.Status[0].Updates, "updates", 0, "Lineage.Updates")
-		flag.Float64Var(&input.Status[0].DiffRank, "diffrank", 0, "Difference rank")
-		flag.StringVar(&input.Status[0].Hash, "hash", "", "Lineage.Hash")
-		flag.Uint64Var(&input.Status[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
-		flag.Uint64Var(&input.Status[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
-		flag.Uint64Var(&input.Status[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
-		flag.StringVar(&input.Status[len(input.Status)-1].Tip, "tip", "", "Tips in http query format: bak=1&baks=10")
+		flag.Uint64Var(&input.Status.Metas[0].Term, "term", 1, "Lineage.Term")
+		flag.Uint64Var(&input.Status.Metas[0].Updates, "updates", 0, "Lineage.Updates")
+		flag.Float64Var(&input.Status.Metas[0].DiffRank, "diffrank", 0, "Difference rank")
+		flag.StringVar(&input.Status.Metas[0].Hash, "hash", "", "Lineage.Hash")
+		flag.Uint64Var(&input.Status.Metas[0].SnapshotTerm, "snapshot", 0, "Snapshot.Term")
+		flag.Uint64Var(&input.Status.Metas[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
+		flag.Uint64Var(&input.Status.Metas[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
+		flag.StringVar(&input.Status.Metas[len(input.Status.Metas)-1].Tip, "tip", "", "Tips in http query format: bak=1&baks=10")
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
@@ -578,18 +582,18 @@ func main() {
 		// 	defer pprof.StopCPUProfile()
 		// }
 
-		input.Status[0].Id = input.Id
-		tips, err := url.ParseQuery(input.Status[len(input.Status)-1].Tip)
+		input.Status.Metas[0].Id = input.Id
+		tips, err := url.ParseQuery(input.Status.Metas[len(input.Status.Metas)-1].Tip)
 		if err != nil {
-			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status[len(input.Status)-1].Tip, err)
+			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status.Metas[len(input.Status.Metas)-1].Tip, err)
 		}
 
 		var payload *protocol.Meta
 		if *statusAsPayload {
 			payload = &protocol.Meta{}
-			*payload = input.Status[0]
+			*payload = input.Status.Metas[0]
 			input.Id++
-			input.Status[0] = protocol.Meta{
+			input.Status.Metas[0] = protocol.Meta{
 				Id:   input.Id,
 				Term: 1,
 			}
@@ -1043,7 +1047,7 @@ func main() {
 					for i := 0; i < *numToInsert; i++ {
 						val := make([]byte, *sizeToInsert)
 						rand.Read(val)
-						if ret := Store.Set(fmt.Sprintf("obj-%d-%d", input.Id, int(input.Status[0].DiffRank)+i), "0", val); ret.Error() != nil {
+						if ret := Store.Set(fmt.Sprintf("obj-%d-%d", input.Id, int(input.Status.Metas[0].DiffRank)+i), "0", val); ret.Error() != nil {
 							log.Error("Error on set obj-%d: %v", i, ret.Error())
 						}
 					}

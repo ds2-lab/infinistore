@@ -7,6 +7,7 @@ import (
 
 	"github.com/kelindar/binary"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 )
 
 // type ChuckMeta {
@@ -59,7 +60,15 @@ type Meta struct {
 
 func (m *Meta) ResetCapacity(capacity uint64, used uint64) {
 	m.Capacity = capacity
-	m.size = used
+	atomic.StoreUint64(&m.size, used+m.ReservedCapacity())
+}
+
+func (m *Meta) EffectiveCapacity() uint64 {
+	return m.Capacity - m.ReservedCapacity()
+}
+
+func (m *Meta) ReservedCapacity() uint64 {
+	return config.InstanceOverhead
 }
 
 func (m *Meta) Size() uint64 {
@@ -122,11 +131,12 @@ func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
 	}
 }
 
-func (m *Meta) ToCmdPayload(id uint64, key int, total int) ([]byte, error) {
+func (m *Meta) ToCmdPayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
 	meta := m.ToProtocolMeta(id)
 	tips := &url.Values{}
 	tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(key))
 	tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(total))
+	tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(maxChunkSize, 10))
 	meta.Tip = tips.Encode()
 
 	return binary.Marshal(meta)

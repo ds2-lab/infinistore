@@ -36,15 +36,15 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	args = append(args, fmt.Sprintf("-proxy=%s", input.Proxy))
 	args = append(args, fmt.Sprintf("-log=%d", input.Log))
 	args = append(args, fmt.Sprintf("-flags=%d", input.Flags))
-	if len(input.Status) > 0 {
-		args = append(args, fmt.Sprintf("-term=%d", input.Status[0].Term))
-		args = append(args, fmt.Sprintf("-updates=%d", input.Status[0].Updates))
-		args = append(args, fmt.Sprintf("-diffrank=%f", input.Status[0].DiffRank))
-		args = append(args, fmt.Sprintf("-hash=%s", input.Status[0].Hash))
-		args = append(args, fmt.Sprintf("-snapshot=%d", input.Status[0].SnapshotTerm))
-		args = append(args, fmt.Sprintf("-snapshotupdates=%d", input.Status[0].SnapshotUpdates))
-		args = append(args, fmt.Sprintf("-snapshotsize=%d", input.Status[0].SnapshotSize))
-		args = append(args, fmt.Sprintf("-tip=%s", input.Status[0].Tip))
+	if len(input.Status.Metas) > 0 {
+		args = append(args, fmt.Sprintf("-term=%d", input.Status.Metas[0].Term))
+		args = append(args, fmt.Sprintf("-updates=%d", input.Status.Metas[0].Updates))
+		args = append(args, fmt.Sprintf("-diffrank=%f", input.Status.Metas[0].DiffRank))
+		args = append(args, fmt.Sprintf("-hash=%s", input.Status.Metas[0].Hash))
+		args = append(args, fmt.Sprintf("-snapshot=%d", input.Status.Metas[0].SnapshotTerm))
+		args = append(args, fmt.Sprintf("-snapshotupdates=%d", input.Status.Metas[0].SnapshotUpdates))
+		args = append(args, fmt.Sprintf("-snapshotsize=%d", input.Status.Metas[0].SnapshotSize))
+		args = append(args, fmt.Sprintf("-tip=%s", input.Status.Metas[0].Tip))
 	}
 
 	cmd := exec.CommandContext(ctx, "lambda", args...)
