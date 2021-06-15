@@ -146,8 +146,7 @@ func (s *LineageStorage) Del(key string, chunkId string) *types.OpRet {
 
 	chunk.Term = util.Ifelse(s.lineage != nil, s.lineage.Term+1, 1).(uint64) // Add one to reflect real term.
 	chunk.Access()
-	chunk.Deleted = true
-	chunk.Body = nil
+	chunk.Delete()
 
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
@@ -810,7 +809,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 
 				if op.Op == types.OP_DEL {
 					// Deletion after set will be dealed on recovering objects.
-					chunk.Deleted = true
+					chunk.Status = types.CHUNK_DELETED
 					chunk.Body = nil
 				} else if op.Key == servingKey {
 					// Updaet data of servingKey, overwrite is OK.
@@ -827,7 +826,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 				} else {
 					// Reset
 					// Although unlikely, dealing reset by deleting it first and add it later.
-					chunk.Deleted = true
+					chunk.Status = types.CHUNK_DELETED
 					chunk.Body = nil
 					chunk = nil // Reset to nil, so it can be added back later.
 				}
@@ -876,7 +875,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 
 	// Now tbds are settled, initiate notifiers
 	for _, tbd := range tbds {
-		if !tbd.Deleted {
+		if !tbd.IsDeleted() {
 			tbd.Notifier.Add(1)
 		}
 	}
@@ -942,7 +941,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 				}
 			}
 
-			if tbds[i].Deleted {
+			if tbds[i].IsDeleted() {
 				// Skip deleted objects
 				atomic.AddUint32(&succeed, 1)
 				continue

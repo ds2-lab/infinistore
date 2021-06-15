@@ -80,8 +80,14 @@ func (s *Storage) getWithOption(key string, opt *types.OpWrapper) (string, []byt
 	if !ok {
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
+	}
+
+	val := chunk.Access()
+	if chunk.IsDeleted() {
+		return chunk.Id, nil, types.OpError(types.ErrDeleted)
 	} else {
-		return chunk.Id, chunk.Access(), types.OpSuccess()
+		// Ensure val is available regardless chunk is deleted or not.
+		return chunk.Id, val, types.OpSuccess()
 	}
 }
 
@@ -129,10 +135,13 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 }
 
 func (s *Storage) Del(key string, chunkId string) *types.OpRet {
-	_, ok := s.helper.get(key)
+	chunk, ok := s.helper.get(key)
 	if !ok {
 		return types.OpError(types.ErrNotFound)
 	}
+
+	chunk.Access()
+	chunk.Delete()
 
 	return types.OpSuccess()
 }

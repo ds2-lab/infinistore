@@ -735,11 +735,12 @@ func main() {
 					// 	default:
 					// 	}
 					// }()
-
-					// // Get key (recovery if not load)
 					// validated.Wait()
 					// log.Info("Validated, %d", len(clients))
 					// client := <-clients
+
+					// // Get key (recovery if not load)
+					// client := ctrlClient
 					// log.Info("Client from ctrl: %v", client.Ctrl)
 					// client.Writer.WriteMultiBulkSize(5)
 					// client.Writer.WriteBulkString(protocol.CMD_GET)
@@ -749,22 +750,65 @@ func main() {
 					// client.Writer.WriteBulkString("100000")
 					// client.Writer.Flush()
 
-					// time.Sleep(5 * time.Millisecond) // Let lambda run
-
 					// // Error response
-					// // msg, _ := ctrlClient.Reader.ReadError()
-					// // log.Error("error: %v", msg)
+					// if ret, _ := client.Reader.PeekType(); ret == resp.TypeError {
+					// 	msg, _ := client.Reader.ReadError()
+					// 	log.Error("error: %v", msg)
+					// } else {
+					// 	// Success response
+					// 	client.Reader.ReadBulkString()            // cmd
+					// 	client.Reader.ReadBulkString()            // reqid
+					// 	client.Reader.ReadBulkString()            // chunk id
+					// 	client.Reader.ReadInt()                   // recovery
+					// 	data, _ := client.Reader.ReadBulkString() // stream
+					// 	log.Info("Recovered data of size: %v", len(data))
+					// 	client.Reader.ReadInt() // TTL
 
-					// // Success response
-					// client.Reader.ReadBulkString()            // cmd
-					// client.Reader.ReadBulkString()            // reqid
-					// client.Reader.ReadBulkString()            // chunk id
-					// client.Reader.ReadInt()                   // recovery
-					// data, _ := client.Reader.ReadBulkString() // stream
-					// log.Info("Recovered data of size: %v", len(data))
+					// 	client.Writer.WriteCmd(protocol.CMD_ACK)
+					// 	client.Writer.Flush()
 
-					// client.Writer.WriteCmd(protocol.CMD_ACK)
-					// client.Writer.Flush()
+					// 	// Recover after delete test.
+					// 	// // Delete request
+					// 	// client.Writer.WriteMultiBulkSize(4)
+					// 	// client.Writer.WriteBulkString(protocol.CMD_DEL)
+					// 	// client.Writer.WriteBulkString("dummy request id")
+					// 	// client.Writer.WriteBulkString("1")
+					// 	// client.Writer.WriteBulkString("obj-1-9")
+					// 	// client.Writer.Flush()
+
+					// 	// time.Sleep(5 * time.Millisecond) // Let lambda run
+
+					// 	// client.Reader.ReadBulkString() // cmd
+					// 	// client.Reader.ReadBulkString() // reqid
+					// 	// client.Reader.ReadBulkString() // chunk id
+					// 	// client.Reader.ReadInt()        // TTL
+					// 	// client.Writer.WriteCmd(protocol.CMD_ACK)
+					// 	// client.Writer.Flush()
+					// 	// log.Info("Deleted")
+
+					// 	// // Recover
+					// 	// client.Writer.WriteMultiBulkSize(6)
+					// 	// client.Writer.WriteBulkString(protocol.CMD_RECOVER)
+					// 	// client.Writer.WriteBulkString("dummy request id")
+					// 	// client.Writer.WriteBulkString("1")
+					// 	// client.Writer.WriteBulkString("obj-1-9")
+					// 	// client.Writer.WriteBulkString(protocol.CMD_GET)
+					// 	// client.Writer.WriteBulkString("100000")
+					// 	// client.Writer.Flush()
+
+					// 	// time.Sleep(5 * time.Millisecond) // Let lambda run
+
+					// 	// client.Reader.ReadBulkString()           // cmd
+					// 	// client.Reader.ReadBulkString()           // reqid
+					// 	// client.Reader.ReadBulkString()           // chunk id
+					// 	// client.Reader.ReadInt()                  // recovery
+					// 	// data, _ = client.Reader.ReadBulkString() // stream
+					// 	// log.Info("Recovered data of size: %v", len(data))
+					// 	// client.Reader.ReadInt() // TTL
+
+					// 	// client.Writer.WriteCmd(protocol.CMD_ACK)
+					// 	// client.Writer.Flush()
+					// }
 
 					// <-ended
 

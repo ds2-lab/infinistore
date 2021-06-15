@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
-	"sync/atomic"
 
 	// "strings"
 
@@ -30,8 +29,7 @@ var (
 	Concurrency = types.DownloadConcurrency
 	Buckets     = 1
 
-	ErrTrackerNotStarted     = errors.New("tracker not started")
-	ErrFailedToRecoverObject = errors.New("fail to recover object on demand")
+	ErrTrackerNotStarted = errors.New("tracker not started")
 )
 
 type PersistHelper interface {
@@ -70,21 +68,28 @@ func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (str
 	if !ok {
 		// No entry
 		return "", nil, types.OpError(types.ErrNotFound)
-	} else if atomic.LoadUint64(&chunk.Available) == chunk.Size {
-		if chunk.Body == nil {
-			// Not recovering
-			return "", nil, types.OpError(types.ErrNotFound)
-		} else {
-			return chunk.Id, chunk.Access(), types.OpSuccess()
-		}
+	}
+
+	val := chunk.Access()
+	if chunk.IsDeleted() {
+		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+	} else if chunk.IsAvailable() {
+		// Ensure val is available regardless chunk is deleted or not.
+		return chunk.Id, val, types.OpSuccess()
+	}
+
+	// Recovering, wait to be notified.
+	chunk.WaitRecovered()
+
+	// Check again
+	val = chunk.Access()
+	if chunk.IsDeleted() {
+		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+	} else if chunk.IsAvailable() {
+		// Ensure val is available regardless chunk is deleted or not.
+		return chunk.Id, val, types.OpSuccess()
 	} else {
-		// Recovering, wait to be notified.
-		chunk.Notifier.Wait()
-		if chunk.Available == chunk.Size {
-			return chunk.Id, chunk.Access(), types.OpSuccess()
-		} else {
-			return "", nil, types.OpError(types.ErrNotFound)
-		}
+		return chunk.Id, nil, types.OpError(types.ErrIncomplete)
 	}
 }
 
@@ -140,19 +145,21 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 	}
 
 	chunk := s.helper.newChunk(key, chunkId, size, nil)
-	chunk.Notifier.Add(1)
+	chunk.Delete() // Delete to ensure call PrepareRecover() succssfully
+	chunk.PrepareRecover()
 	inserted, loaded := s.repo.GetOrInsert(key, chunk)
 	chunk = inserted.(*types.Chunk)
-	if loaded {
-		chunk.Notifier.Wait()
-		if chunk.Available == chunk.Size {
+	if loaded && !chunk.PrepareRecover() {
+		chunk.WaitRecovered()
+		if chunk.IsAvailable() {
 			return types.OpSuccess()
 		} else {
-			return types.OpError(ErrFailedToRecoverObject)
+			return types.OpError(types.ErrIncomplete)
 		}
 	}
 
 	chunk.Body = make([]byte, size) // Pre-allocate fixed sized buffer.
+	chunk.StartRecover()
 	downloader := s.getS3Downloader()
 	ctx := aws.BackgroundContext()
 	ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
@@ -162,17 +169,21 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		input.Size = size
 		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
 		input.After = func() error {
-			atomic.AddUint64(&chunk.Available, uint64(input.Downloaded))
+			chunk.AddRecovered(uint64(input.Downloaded), false)
+			if !chunk.IsAvailable() {
+				return types.ErrIncomplete
+			}
 			return nil
 		}
 	}); err != nil {
-		s.repo.Del(key)
-		chunk.Notifier.Done()
+		chunk.NotifyRecovered()
 		return types.OpError(err)
 	}
 
+	// This is to reuse persistent implementation.
+	// Chunk inserted previously will be loaded, and no new chunk will be created.
 	ret := s.helper.setWithOption(key, chunkId, chunk.Body, &types.OpWrapper{Persisted: true})
-	chunk.Notifier.Done()
+	chunk.NotifyRecovered()
 	return ret
 }
 
