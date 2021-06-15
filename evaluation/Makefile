@@ -42,7 +42,7 @@ playback-static: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-average: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95 -debug" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-norecovery: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery -log=proxy.log" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
@@ -73,7 +73,7 @@ test-redis: build-bench
 
 test-local: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
-	bin/redbench -n 100 -c 3 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 50
+	bin/redbench -n 100 -c 5 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 100
 
 test-local-small: build-bench
 	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -sz 100 -d 1 -p 0 -op 0
