@@ -134,7 +134,6 @@ func (p *LRUPlacer) Insert(key string, newMeta *Meta) (*Meta, MetaPostProcess, e
 }
 
 func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdastore.Instance, MetaPostProcess, error) {
-	p.log.Debug("Placing %s", meta.ChunkKey(chunkId))
 	instance, post, err := p.FindPlacement(meta, chunkId)
 	if err != nil {
 		return instance, post, err
@@ -153,8 +152,6 @@ func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdast
 // 4. Remap to smaller "Size" of instance between target instance and remapped instance according to "chunk" in
 //    relocation array.
 func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instance, MetaPostProcess, error) {
-	p.log.Debug("Finding placement %s", meta.ChunkKey(chunkId))
-
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
