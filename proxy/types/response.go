@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -32,7 +31,7 @@ func (r *ProxyResponse) SetContext(ctx context.Context) {
 type Response struct {
 	Id         Id
 	Cmd        string
-	Size       int64
+	Size       string
 	Body       []byte
 	BodyStream resp.AllReadCloser
 	Status     int64
@@ -44,16 +43,18 @@ func (rsp *Response) String() string {
 	return fmt.Sprintf("%s %v", rsp.Cmd, rsp.Id)
 }
 
-func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {
+func (rsp *Response) PrepareForSet(w resp.ResponseWriter, seq int64) {
+	w.AppendInt(seq)
 	w.AppendBulkString(rsp.Id.ReqId)
 	w.AppendBulkString(rsp.Id.ChunkId)
 	w.AppendBulk(rsp.Body)
 	rsp.w = w
 }
 
-func (rsp *Response) PrepareForGet(w resp.ResponseWriter) {
+func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
+	w.AppendInt(seq)
 	w.AppendBulkString(rsp.Id.ReqId)
-	w.AppendBulkString(strconv.FormatInt(rsp.Size, 10))
+	w.AppendBulkString(rsp.Size)
 	if rsp.Body == nil && rsp.BodyStream == nil {
 		w.AppendBulkString("-1")
 	} else {

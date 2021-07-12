@@ -227,7 +227,7 @@ var _ = Describe("Placer", func() {
 		for i := 0; i < n; i++ {
 			for j := 0; j < shards; j++ {
 				lambdaId := sess % numCluster
-				queues[lambdaId] <- placer.NewMeta(strconv.Itoa(i), int64(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0)
+				queues[lambdaId] <- placer.NewMeta(strconv.Itoa(i), strconv.Itoa(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0)
 				sess++
 			}
 		}
@@ -268,7 +268,7 @@ var _ = Describe("Placer", func() {
 						fmt.Printf("Set %d@%s: %v\n", m.lastChunk, meta.Key, meta.Placement)
 						conns.Done()
 					}
-				}(placer.NewMeta(strconv.Itoa(i), int64(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0))
+				}(placer.NewMeta(strconv.Itoa(i), strconv.Itoa(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0))
 				sess++
 			}
 		}

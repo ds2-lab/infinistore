@@ -90,7 +90,7 @@ func NewLRUPlacer(store *MetaStore, cluster InstanceManager) *LRUPlacer {
 	return placer
 }
 
-func (p *LRUPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
+func (p *LRUPlacer) NewMeta(key string, size string, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
 	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	if meta.slice == nil {
 		meta.slice = p.cluster.GetSlice(sliceSize)

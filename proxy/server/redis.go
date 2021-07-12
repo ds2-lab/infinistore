@@ -17,14 +17,14 @@ import (
 )
 
 type RedisAdapter struct {
-	server       *redeo.Server
-	proxy        *Proxy
-	d            int
-	p            int
-	addresses    []string
-	localAddr    string
-	localIdx     int
-	log          logger.ILogger
+	server    *redeo.Server
+	proxy     *Proxy
+	d         int
+	p         int
+	addresses []string
+	localAddr string
+	localIdx  int
+	log       logger.ILogger
 }
 
 var (
@@ -120,7 +120,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
-	shortcut := protocol.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d + a.p)
+	shortcut := protocol.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d+a.p)
 	if shortcut.Client == nil {
 		var addresses []string
 		if len(a.addresses) == 0 {
@@ -134,8 +134,8 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
 		client.Dial(addresses)
 		shortcut.Client = client
-		for _, conn := range shortcut.Conns {
-			go a.server.ServeForeignClient(conn.Server, false)
+		shortcut.OnValidate = func(mock *protocol.MockConn) {
+			go a.server.ServeForeignClient(mock.Server, false)
 		}
 		go func() {
 			redeoClient.WaitClose()

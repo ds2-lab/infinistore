@@ -41,6 +41,7 @@ github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24
 github.com/beorn7/perks v1.0.0/go.mod h1:KWe93zE9D1o94FZ5RNwFwVgaQK1VOXiVxmqh+CedLV8=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bgentry/speakeasy v0.1.0/go.mod h1:+zsyZBPWlz7T6j88CTgSN5bM796AkVf0kBD4zp0CCIs=
+github.com/bsm/pool v0.8.1 h1:WS5zo7o629vWBnTWOKOJfRCvWxwS3Yh7NDOk1TiPBeo=
 github.com/bsm/pool v0.8.1/go.mod h1:20l4nKLbEi8m4F5GWdtu7CZh4DPWwalpLeuqwDYZ1vY=
 github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72 h1:fUmDBbSvv1uOzo/t8WaxZMVb7BxJ8JECo5lGoR9c5bA=
 github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72/go.mod h1:OEE5igu/CDjGegM1Jn6ZMo7R6LlV/JChAkjfQQIRLpg=
@@ -228,6 +229,8 @@ github.com/mason-leap-lab/redeo v1.1.7 h1:HIZhBkwY4sahPnYH9SfoZG3I10B70WXYZzj2n1
 github.com/mason-leap-lab/redeo v1.1.7/go.mod h1:YxTqTJR9f+KO8eP8TjsAFST+Lz4BcuyE/8pgvBAJAOQ=
 github.com/mason-leap-lab/redeo v1.1.8 h1:YT74dttktffIAPhk3Se1Z/Swlz3k7KkqL+f8Fe19mI0=
 github.com/mason-leap-lab/redeo v1.1.8/go.mod h1:YxTqTJR9f+KO8eP8TjsAFST+Lz4BcuyE/8pgvBAJAOQ=
+github.com/mason-leap-lab/redeo v1.1.9 h1:Vj+dHNPdA4BSqQHwpQQ2R13qeN3PbK9nqF3WiOEzB+M=
+github.com/mason-leap-lab/redeo v1.1.9/go.mod h1:YxTqTJR9f+KO8eP8TjsAFST+Lz4BcuyE/8pgvBAJAOQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
 github.com/mattn/go-colorable v0.1.4 h1:snbPLB8fVfU9iwbbo30TPtbLRzwWu6aJS6Xh4eaaviA=
 github.com/mattn/go-colorable v0.1.4/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=

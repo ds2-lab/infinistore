@@ -25,7 +25,7 @@ type InstanceManager interface {
 
 type Placer interface {
 	// Parameters: key, size, dChunks, pChunks, chunkId, chunkSize, lambdaId, sliceSize
-	NewMeta(string, int64, int, int, int, int64, uint64, int) *Meta
+	NewMeta(string, string, int, int, int, int64, uint64, int) *Meta
 	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
 	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
@@ -48,7 +48,7 @@ func NewDefaultPlacer(store *MetaStore, cluster InstanceManager) *DefaultPlacer 
 	return placer
 }
 
-func (l *DefaultPlacer) NewMeta(key string, size int64, dChunks, pChunks, chunkId int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
+func (l *DefaultPlacer) NewMeta(key string, size string, dChunks, pChunks, chunkId int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
 	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
 	meta.Placement[chunkId] = lambdaId
 	meta.lastChunk = chunkId

@@ -13,20 +13,30 @@ var (
 	nlogger   func(nanolog.Handle, ...interface{}) error
 )
 
-type logEntry struct {
-	Cmd        string
-	ReqId      string
-	Begin      time.Time
-	ReqLatency time.Duration
-	RecLatency time.Duration
-	Duration   time.Duration
-	AllGood    bool
-	Corrupted  bool
-}
-
 func init() {
 	// cmd, reqId, begin, duration, get/set req latency, rec latency, decoding latency, all good, corrupted, size
 	logClient = nanolog.AddLogger("%s,%s,%i64,%i64,%i64,%i64,%i64,%b,%b,%i64")
+}
+
+type logEntry struct {
+	Cmd           string
+	ReqId         string
+	Start         time.Time
+	ReqLatency    time.Duration
+	RecLatency    time.Duration
+	CodingLatency time.Duration
+	Duration      time.Duration
+	AllGood       bool
+	Corrupted     bool
+}
+
+func (e *logEntry) Begin(reqId string) {
+	e.ReqId = reqId
+	e.Start = time.Now()
+}
+
+func (e *logEntry) Since() time.Duration {
+	return time.Since(e.Start)
 }
 
 // CreateLog Enabling evaluation log in client lib.

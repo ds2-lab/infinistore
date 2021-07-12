@@ -26,7 +26,7 @@ type Slice interface {
 
 type Meta struct {
 	Key       string
-	Size      int64
+	Size      string
 	DChunks   int
 	PChunks   int
 	NumChunks int
@@ -46,7 +46,7 @@ type Meta struct {
 func NewEmptyMeta() *Meta {
 	meta := metaPool.Get().(*Meta)
 	meta.Key = ""
-	meta.Size = 0
+	meta.Size = "0"
 	meta.DChunks = 0
 	meta.PChunks = 0
 	meta.NumChunks = 0
@@ -59,7 +59,7 @@ func NewEmptyMeta() *Meta {
 	return meta
 }
 
-func NewMeta(key string, size int64, d, p int, chunkSize int64) *Meta {
+func NewMeta(key string, size string, d, p int, chunkSize int64) *Meta {
 	meta := metaPool.Get().(*Meta)
 	meta.Key = key
 	meta.Size = size

@@ -1,6 +1,8 @@
 module github.com/mason-leap-lab/infinicache
 
-go 1.12
+go 1.15
+
+// replace github.com/mason-leap-lab/redeo => ../redeo
 
 require (
 	github.com/ScottMansfield/nanolog v0.2.0
@@ -20,7 +22,7 @@ require (
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/klauspost/reedsolomon v1.9.12
 	github.com/kr/pretty v0.2.1 // indirect
-	github.com/mason-leap-lab/redeo v1.1.8
+	github.com/mason-leap-lab/redeo v1.1.9
 	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
