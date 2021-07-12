@@ -42,7 +42,7 @@ playback-static: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-average: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95 -debug" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95 -debug" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-norecovery: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery -log=proxy.log" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &

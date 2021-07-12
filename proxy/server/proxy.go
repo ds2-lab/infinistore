@@ -8,9 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
+	"github.com/mason-leap-lab/infinicache/common/redeo/server"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
@@ -86,9 +88,10 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
 
 	// Get args
+	seq, _ := c.NextArg().Int()
 	key, _ := c.NextArg().String()
 	reqId, _ := c.NextArg().String()
-	size, _ := c.NextArg().Int()
+	size, _ := c.NextArg().String()
 	dChunkId, _ := c.NextArg().Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 	dataChunks, _ := c.NextArg().Int()
@@ -112,6 +115,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		key, size, int(dataChunks), int(parityChunks), int(dChunkId), int64(bodyStream.Len()), uint64(lambdaId), int(randBase))
 	chunkKey := prepared.ChunkKey(int(dChunkId))
 	req := &types.Request{
+		Seq:            seq,
 		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaId),
 		Cmd:            protocol.CMD_SET,
@@ -125,16 +129,14 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
 	if err != nil {
-		w.AppendError(err.Error())
-		w.Flush()
+		server.NewErrorResponse(w, seq, err.Error()).Flush()
 		return
 	} else if meta.Deleted {
 		// Object may be evicted in some cases:
 		// 1: Some chunks were set.
 		// 2: Placer evicted this object (unlikely).
 		// 3: We got evicted meta.
-		w.AppendErrorf("KEY %s not set to lambda store, may got evicted before all chunks are set.", chunkKey)
-		w.Flush()
+		server.NewErrorResponse(w, seq, "KEY %s not set to lambda store, may got evicted before all chunks are set.", chunkKey).Flush()
 		return
 	}
 
@@ -154,9 +156,11 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// }
 
 	client := redeo.GetClient(c.Context())
-	key := c.Arg(0).String()
-	reqId := c.Arg(1).String()
-	dChunkId, _ := c.Arg(2).Int()
+	var i util.Int
+	seq, _ := c.Arg(i.Int()).Int()
+	key := c.Arg(i.Add1()).String()
+	reqId := c.Arg(i.Add1()).String()
+	dChunkId, _ := c.Arg(i.Add1()).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
 	// Start couting time.
@@ -166,8 +170,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	meta, ok := p.placer.Get(key, int(dChunkId))
 	if !ok {
 		p.log.Warn("KEY %s@%s not found", chunkId, key)
-		w.AppendNil()
-		w.Flush()
+		server.NewNilResponse(w, seq).Flush()
 		return
 	}
 
@@ -175,6 +178,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := &types.Request{
+		Seq:            seq,
 		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
 		InsId:          uint64(lambdaDest),
 		Cmd:            protocol.CMD_GET,
@@ -254,12 +258,12 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			fallthrough
 		case protocol.CMD_GET:
 			rsp.Size = wrapper.Request.Info.(*metastore.Meta).Size
-			rsp.PrepareForGet(w)
+			rsp.PrepareForGet(w, wrapper.Request.Seq)
 		case protocol.CMD_SET:
-			rsp.PrepareForSet(w)
+			rsp.PrepareForSet(w, wrapper.Request.Seq)
 		default:
-			w.AppendErrorf("unable to respond unsupport command %s", wrapper.Request.Cmd)
-			if err := w.Flush(); err != nil {
+			rsp := server.NewErrorResponse(w, wrapper.Request.Seq, "unable to respond unsupport command %s", wrapper.Request.Cmd)
+			if err := rsp.Flush(); err != nil {
 				client.Conn().Close()
 			}
 			return
@@ -326,8 +330,8 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// Use more general way to deal error
 	default:
 		collector.CollectRequest(collector.LogRequestAbandon, wrapper.Request.CollectorEntry)
-		w.AppendErrorf("%v", rsp)
-		if err := w.Flush(); err != nil {
+		r := server.NewErrorResponse(w, wrapper.Request.Seq, "%v", rsp)
+		if err := r.Flush(); err != nil {
 			client.Conn().Close()
 			return
 		}

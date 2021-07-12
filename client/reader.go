@@ -2,6 +2,7 @@ package client
 
 import (
 	"io"
+	"reflect"
 	"sync"
 )
 
@@ -15,36 +16,45 @@ type ReadAllCloser interface {
 }
 
 // Joiner The utility function helps to concat an array of []bytes.
-type Joiner func(io.Writer, [][]byte, int) error
+type ByteJoiner func(io.Writer, [][]byte, int) error
 
 // JoinReader A ReadAllCloser implementation that can concat an array of []bytes
 type JoinReader struct {
-	io.ReadCloser
+	io.Reader
+	io.Closer
 	writer  io.Writer
-	data    [][]byte
+	data    interface{}
 	read    int
 	size    int
 	once    sync.Once
-	joiner  Joiner
+	joiner  interface{}
 	started bool
 }
 
-// NewJoinReader Create the join reader
-func NewJoinReader(data [][]byte, size int, joiner Joiner) *JoinReader {
+func NewJoinReader(data interface{}, size int) *JoinReader {
+	return &JoinReader{
+		data: data,
+		size: size,
+	}
+}
+
+// NewByteJoinReader Create the join reader for []byte array
+func NewByteJoinReader(data [][]byte, size int, joiner ByteJoiner) *JoinReader {
 	reader, writer := io.Pipe()
 	return &JoinReader{
-		ReadCloser: reader,
-		writer:     writer,
-		data:       data,
-		size:       size,
-		joiner:     joiner,
+		Reader: reader,
+		Closer: reader,
+		writer: writer,
+		data:   data,
+		size:   size,
+		joiner: joiner,
 	}
 }
 
 // Read io.Reader implementation
 func (r *JoinReader) Read(p []byte) (n int, err error) {
 	r.once.Do(r.join)
-	n, err = r.ReadCloser.Read(p)
+	n, err = r.Reader.Read(p)
 	r.read += n
 	return
 }
@@ -58,7 +68,7 @@ func (r *JoinReader) Len() int {
 func (r *JoinReader) ReadAll() (buf []byte, err error) {
 	buf = make([]byte, r.Len())
 	_, err = io.ReadFull(r, buf)
-	r.ReadCloser.Close()
+	r.Close()
 	return
 }
 
@@ -72,11 +82,23 @@ func (r *JoinReader) Close() error {
 			r.Read(buf)
 		}
 	}
-	r.ReadCloser.Close()
+	if r.Closer != nil {
+		r.Closer.Close()
+	}
 	return nil
 }
 
 func (r *JoinReader) join() {
 	r.started = true
-	go r.joiner(r.writer, r.data, r.size)
+	switch joiner := r.joiner.(type) {
+	case ByteJoiner:
+		go joiner(r.writer, r.data.([][]byte), r.size)
+	default:
+		val := reflect.ValueOf(r.data)
+		readers := make([]io.Reader, val.Len())
+		for i := 0; i <= len(readers); i++ {
+			readers[i] = val.Index(i).Interface().(io.Reader)
+		}
+		r.Reader = io.MultiReader(readers...)
+	}
 }

@@ -1,13 +1,13 @@
 package sync_test
 
 import (
-	"testing"
 	"runtime"
 	"sync"
+	"testing"
 
+	csync "github.com/mason-leap-lab/infinicache/common/sync"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	csync "github.com/mason-leap-lab/infinicache/common/sync"
 )
 
 func TestWaitGroup(t *testing.T) {
@@ -67,6 +67,21 @@ var _ = Describe("WaitGroup", func() {
 
 		wg.Done()
 		runtime.Gosched()
+		Expect(isBlock(&wg)).To(Equal(false))
+	})
+
+	It("can done only without error", func() {
+		var wg csync.WaitGroup
+
+		wg.Done()
+		Expect(isBlock(&wg)).To(Equal(false))
+	})
+
+	It("can add after done", func() {
+		var wg csync.WaitGroup
+
+		wg.Done()
+		wg.Add(1)
 		Expect(isBlock(&wg)).To(Equal(false))
 	})
 })

@@ -34,6 +34,7 @@ var (
 	ErrMissingRequest    = errors.New("missing request")
 )
 
+// TODO: use bsm/pool
 type Connection struct {
 	Id uint32
 	net.Conn

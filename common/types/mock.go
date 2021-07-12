@@ -32,7 +32,15 @@ func InitShortcut() *shortcut {
 	return Shortcut
 }
 
-func (s *shortcut) Prepare(addr string, id int, n int) *ShortcutConn {
+func (s *shortcut) Prepare(addr string, id int, nums ...int) *ShortcutConn {
+	n := 1
+	if len(nums) > 0 {
+		n = nums[0]
+	}
+	if n < 1 {
+		n = 1
+	}
+
 	// To keep consistent of hash ring, the address must be recoverable and keep consistent.
 	address := fmt.Sprintf(shortcutAddress, id, addr)
 	conn, existed := s.ports.Get(address) // For specified id, GetOrInsert is not necessary.
@@ -78,31 +86,46 @@ func (s *shortcut) Invalidate(conn *ShortcutConn) {
 
 type MockConn struct {
 	*mock.Conn
-	name string
+	parent *ShortcutConn
+	idx    int
 }
 
-func NewMockConn(addr string, idx int) *MockConn {
+func NewMockConn(scn *ShortcutConn, idx int) *MockConn {
 	return &MockConn{
-		Conn: mock.NewConn(),
-		name: fmt.Sprintf("%s[%d]", addr, idx),
+		Conn:   mock.NewConn(),
+		parent: scn,
+		idx:    idx,
 	}
 }
 
 func (c *MockConn) String() string {
-	return c.name
+	return fmt.Sprintf("%s[%d]", c.parent.Address, c.idx)
+}
+
+func (c *MockConn) Close() error {
+	return c.parent.close(c.idx, c)
+}
+
+func (c *MockConn) Invalid() {
+	c.parent.Conns[c.idx] = nil
 }
 
 type ShortcutConn struct {
-	Conns   []*MockConn
-	Client  interface{}
-	Address string
+	Conns      []*MockConn
+	Client     interface{}
+	Address    string
+	OnValidate func(*MockConn)
 }
 
 func NewShortcutConn(addr string, n int) *ShortcutConn {
-	conn := &ShortcutConn{Conns: make([]*MockConn, n), Address: addr}
-	for i := 0; i < n; i++ {
-		conn.Conns[i] = NewMockConn(conn.Address, i)
+	conn := &ShortcutConn{Address: addr}
+	conn.OnValidate = conn.defaultValidateHandler
+	if n == 1 {
+		conn.Conns = []*MockConn{nil}
+	} else {
+		conn.Conns = make([]*MockConn, n)
 	}
+
 	return conn
 }
 
@@ -118,9 +141,13 @@ func (cn *ShortcutConn) Close(idxes ...int) {
 	}
 }
 
-func (cn *ShortcutConn) close(i int, conn *MockConn) {
-	conn.Close()
-	cn.Conns[i] = nil
+func (cn *ShortcutConn) close(i int, conn *MockConn) error {
+	if conn != nil {
+		cn.Conns[i] = nil
+		return conn.Close()
+	}
+
+	return nil
 }
 
 func (cn *ShortcutConn) Validate(idxes ...int) *ShortcutConn {
@@ -138,6 +165,10 @@ func (cn *ShortcutConn) Validate(idxes ...int) *ShortcutConn {
 
 func (cn *ShortcutConn) validate(i int, conn *MockConn) {
 	if conn == nil {
-		cn.Conns[i] = NewMockConn(cn.Address, i)
+		cn.Conns[i] = NewMockConn(cn, i)
+		cn.OnValidate(cn.Conns[i])
 	}
+}
+
+func (cn *ShortcutConn) defaultValidateHandler(_ *MockConn) {
 }

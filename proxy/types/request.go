@@ -34,6 +34,7 @@ var (
 )
 
 type Request struct {
+	Seq            int64
 	Id             Id
 	InsId          uint64 // Instance the request targeted.
 	Cmd            string
