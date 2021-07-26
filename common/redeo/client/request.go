@@ -12,7 +12,8 @@ const (
 )
 
 var (
-	ErrResponded = errors.New("responded")
+	ErrResponded    = errors.New("responded")
+	ErrNotConnected = errors.New("not connected")
 
 	CtxKeyConn = requestCtxKey("conn")
 )
@@ -26,7 +27,11 @@ type Request interface {
 	// SetSeq sets the sequence of the request.
 	SetSeq(int64)
 
+	// Conn gets connection.
 	Conn() *Conn
+
+	// Flush writes data to the connection.
+	Flush() error
 
 	// SetResponse sets the response for the request.
 	SetResponse(interface{}) error
@@ -87,6 +92,15 @@ func (req *request) SetSeq(seq int64) {
 func (req *request) Conn() *Conn {
 	cn, _ := req.Context().Value(CtxKeyConn).(*Conn)
 	return cn
+}
+
+func (req *request) Flush() error {
+	cn := req.Conn()
+	if cn == nil {
+		return ErrNotConnected
+	}
+
+	return cn.Flush()
 }
 
 func (req *request) SetResponse(rsp interface{}) error {

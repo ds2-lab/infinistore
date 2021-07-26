@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/net"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -32,7 +33,7 @@ var (
 )
 
 func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapter {
-	protocol.InitShortcut()
+	net.InitShortcut()
 
 	addresses := config.ProxyList
 	localAddr := fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort)
@@ -120,7 +121,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
-	shortcut := protocol.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d+a.p)
+	shortcut := net.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d+a.p)
 	if shortcut.Client == nil {
 		var addresses []string
 		if len(a.addresses) == 0 {
@@ -134,14 +135,14 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
 		client.Dial(addresses)
 		shortcut.Client = client
-		shortcut.OnValidate = func(mock *protocol.MockConn) {
+		shortcut.OnValidate = func(mock *net.MockConn) {
 			go a.server.ServeForeignClient(mock.Server, false)
 		}
 		go func() {
 			redeoClient.WaitClose()
 			client.Close()
 			shortcut.Client = nil
-			protocol.Shortcut.Invalidate(shortcut)
+			net.Shortcut.Invalidate(shortcut)
 		}()
 	}
 	return shortcut.Client.(*infinicache.Client)

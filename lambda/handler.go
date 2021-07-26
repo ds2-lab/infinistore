@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/net"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/handlers"
@@ -133,7 +134,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	proxyAddr := input.ProxyAddr // So far, ProxyAddr is used for shortcut connection only.
 	var wopts *worker.WorkerOptions
 	if proxyAddr == nil {
-		proxyAddr = protocol.StrAddr(input.Proxy)
+		proxyAddr = net.StrAddr(input.Proxy)
 	} else {
 		wopts = &worker.WorkerOptions{DryRun: DRY_RUN}
 	}
@@ -606,11 +607,11 @@ func main() {
 			log.Verbose = true
 			storage.Concurrency = *concurrency
 			storage.Buckets = *buckets
-			var shortcutCtrl *protocol.ShortcutConn
+			var shortcutCtrl *net.ShortcutConn
 			if input.Proxy == "" {
-				protocol.InitShortcut()
-				shortcutCtrl = protocol.Shortcut.Prepare("ctrl", 0, 1)
-				input.ProxyAddr = protocol.NewQueueAddr(shortcutCtrl.Address)
+				net.InitShortcut()
+				shortcutCtrl = net.Shortcut.Prepare("ctrl", 0, 1)
+				input.ProxyAddr = net.NewQueueAddr(shortcutCtrl.Address)
 			}
 
 			ready := make(chan struct{})

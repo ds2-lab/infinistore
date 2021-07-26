@@ -1,4 +1,4 @@
-package types_test
+package net_test
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	mock "github.com/jordwest/mock-conn"
 	"github.com/mason-leap-lab/redeo/resp"
 
-	. "github.com/mason-leap-lab/infinicache/common/types"
+	. "github.com/mason-leap-lab/infinicache/common/net"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

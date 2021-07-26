@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -18,6 +19,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/redeo/client"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 const (
@@ -31,6 +33,7 @@ var (
 	ErrUnexpectedPreflightPong = errors.New("unexpected preflight pong")
 	ErrMaxPreflightsReached    = errors.New("max preflight attemps reached")
 	ErrAbandonRequest          = errors.New("abandon request")
+	ErrKeyNotFound             = errors.New("key not found")
 	RequestAttempts            = 3
 
 	OccupantReadAllCloser = &JoinReader{}
@@ -185,18 +188,30 @@ func (c *Client) ReadResponse(req client.Request) error {
 	}
 }
 
-// Obsoleted
-// func (c *Client) getHost(key string) (addr string, ok bool) {
-// 	// linear search through all filters and locate the one that holds the key
-// 	for addr, filter := range c.mappingTable {
-// 		found := filter.Lookup([]byte(key))
-// 		if found { // if found, return the address
-// 			return addr, true
-// 		}
-// 	}
-// 	// otherwise, return nil
-// 	return "", false
-// }
+func (c *Client) readErrorResponse(req *ClientRequest) (error, error) {
+	cn := req.Conn()
+	respType, err := cn.PeekType()
+	if err != nil {
+		return nil, err
+	}
+
+	switch respType {
+	case resp.TypeError:
+		strErr, err := cn.ReadError()
+		if err != nil {
+			return nil, err
+		}
+		return errors.New(strErr), nil
+	case resp.TypeNil:
+		err := cn.ReadNil()
+		if err != nil {
+			return nil, err
+		}
+		return ErrKeyNotFound, nil
+	}
+
+	return nil, nil
+}
 
 // random will generate random sequence within the lambda stores
 // index and get top n id
@@ -310,44 +325,43 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			return
 		}
 
-		cn.StartRequest(req)
+		err = cn.StartRequest(req, func(_ client.Request) error {
+			cn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
+			defer cn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
 
-		cn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
-		defer cn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
+			cn.WriteMultiBulkSize(11)
+			cn.WriteBulkString(req.Cmd)
+			cn.WriteBulkString(strconv.FormatInt(req.Seq(), 10))
+			cn.WriteBulkString(key)
+			cn.WriteBulkString(req.ReqId)
+			cn.WriteBulkString(size)
+			cn.WriteBulkString(strconv.Itoa(i))
+			cn.WriteBulkString(strconv.Itoa(c.DataShards))
+			cn.WriteBulkString(strconv.Itoa(c.ParityShards))
+			cn.WriteBulkString(strconv.Itoa(lambdaId))
+			cn.WriteBulkString(strconv.Itoa(MaxLambdaStores))
+			if err := cn.Flush(); err != nil {
+				log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+				return err
+			}
 
-		cn.WriteMultiBulkSize(11)
-		cn.WriteBulkString(req.Cmd)
-		cn.WriteBulkString(strconv.FormatInt(req.Seq(), 10))
-		cn.WriteBulkString(key)
-		cn.WriteBulkString(req.ReqId)
-		cn.WriteBulkString(size)
-		cn.WriteBulkString(strconv.Itoa(i))
-		cn.WriteBulkString(strconv.Itoa(c.DataShards))
-		cn.WriteBulkString(strconv.Itoa(c.ParityShards))
-		cn.WriteBulkString(strconv.Itoa(lambdaId))
-		cn.WriteBulkString(strconv.Itoa(MaxLambdaStores))
-		if err := cn.Flush(); err != nil {
-			log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
-			cn.Close()
+			// Flush pipeline
+			//if err := c.W[i].Flush(); err != nil {
+			cn.SetWriteDeadline(time.Now().Add(Timeout))
+			if err := cn.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
+				log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
+				return err
+			}
+			return nil
+		})
+		if err != nil {
 			continue
 		}
-
-		// Flush pipeline
-		//if err := c.W[i].Flush(); err != nil {
-		cn.SetWriteDeadline(time.Now().Add(Timeout))
-		if err := cn.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
-			log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
-			cn.Close()
-			continue
-		}
-		if err := cn.Flush(); err != nil {
-			log.Warn("Failed to finalize rest of setting %d@%s(%s): %v", i, key, addr, err)
-			cn.Close()
-			continue
-		}
-		cn.SetWriteDeadline(time.Time{})
 
 		log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
+		ctx, cancel := context.WithTimeout(req.Context(), Timeout)
+		req.Cancel = cancel
+		req.SetContext(ctx)
 		return
 	}
 
@@ -366,6 +380,15 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 
 	// Read header fields
 	cn.SetReadDeadline(time.Now().Add(HeaderTimeout))
+	appErr, err := c.readErrorResponse(req)
+	if err != nil {
+		req.SetResponse(err)
+		return err
+	} else if appErr != nil {
+		req.SetResponse(appErr)
+		return nil
+	}
+
 	respId, _ := cn.ReadBulkString()
 	chunkId, _ := cn.ReadBulkString()
 	storeId, err := cn.ReadBulkString()
@@ -536,20 +559,20 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		return
 	}
 
-	cn.StartRequest(req)
-
-	// cmd seq key reqId chunkId
-	cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
-
-	// Flush pipeline
-	if err := cn.Flush(); err != nil {
+	err = cn.StartRequest(req, func(_ client.Request) error {
+		// cmd seq key reqId chunkId
+		cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
+		return nil
+	})
+	if err != nil {
 		log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
-		req.SetResponse(err)
-		cn.Close()
 		return
 	}
+	ctx, cancel := context.WithTimeout(req.Context(), Timeout)
+	req.Cancel = cancel
+	req.SetContext(ctx)
 
-	log.Debug("Initiated getting %d@%s(%s)", i, key, addr)
+	log.Debug("Initiated getting %d@%s(%s) %d", i, key, addr, req.Seq())
 }
 
 func (c *Client) readGetResponse(req *ClientRequest) error {
@@ -558,6 +581,15 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 
 	// Read header fields
 	cn.SetReadDeadline(time.Now().Add(HeaderTimeout))
+	appErr, err := c.readErrorResponse(req)
+	if err != nil {
+		req.SetResponse(err)
+		return err
+	} else if appErr != nil {
+		req.SetResponse(appErr)
+		return nil
+	}
+
 	respId, _ := cn.ReadBulkString()
 	meta, _ := cn.ReadBulkString()
 	chunkId, err := cn.ReadBulkString()

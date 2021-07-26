@@ -1,6 +1,10 @@
 package client
 
-import "github.com/mason-leap-lab/infinicache/common/redeo/client"
+import (
+	"context"
+
+	"github.com/mason-leap-lab/infinicache/common/redeo/client"
+)
 
 type WaitGroup interface {
 	Add(int)
@@ -15,6 +19,7 @@ type ClientConnMeta struct {
 
 type ClientRequest struct {
 	client.Request
-	Cmd   string
-	ReqId string
+	Cmd    string
+	ReqId  string
+	Cancel context.CancelFunc
 }

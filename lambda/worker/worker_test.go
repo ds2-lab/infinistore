@@ -9,7 +9,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/net"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -72,7 +72,7 @@ func shouldCleanClosed(server *Worker) {
 }
 
 var _ = Describe("Worker", func() {
-	protocol.InitShortcut()
+	net.InitShortcut()
 	server := NewWorker(0)
 	server.SetHeartbeater(&TestHeartbeater{worker: server})
 
@@ -80,7 +80,7 @@ var _ = Describe("Worker", func() {
 		Expect(server.closed).Should(Equal(WorkerClosed))
 
 		// shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID, TestNumConnections)
-		start, err := server.StartOrResume(protocol.StrAddr(""), &WorkerOptions{DryRun: true})
+		start, err := server.StartOrResume(net.StrAddr(""), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
@@ -90,16 +90,16 @@ var _ = Describe("Worker", func() {
 	})
 
 	It("should return error if no proxy address specified", func() {
-		_, err := server.StartOrResume(protocol.StrAddr(""))
+		_, err := server.StartOrResume(net.StrAddr(""))
 		Expect(err).Should(Equal(ErrNoProxySpecified))
 		shouldCleanClosed(server)
 	})
 
 	It("should worker connect successfully", func() {
 		fmt.Println("should worker connect successfully...")
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
-		start, err := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, err := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
@@ -116,10 +116,10 @@ var _ = Describe("Worker", func() {
 
 	It("no ack should be return on disabled", func() {
 		fmt.Println("no ack should be return on disabled...")
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		server.SetManualAck(true)
-		start, err := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, err := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
@@ -143,13 +143,13 @@ var _ = Describe("Worker", func() {
 
 	It("response should be cached if connection has not been established", func() {
 		fmt.Println("response should be cached if connection has not been established...")
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
 		server.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) {
 			w.AppendBulkString(rsp.Cmd)
 		})
 		server.SetManualAck(true)
-		start, err := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, err := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
@@ -171,9 +171,9 @@ var _ = Describe("Worker", func() {
 
 	It("should reflect resuming of worker on calling StartOrResume", func() {
 		fmt.Println("should reflect resuming of worker on calling StartOrResume...")
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
-		start, _ := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, _ := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(server.closed).Should(Equal(WorkerRunning))
 		// Drain the pongs
@@ -182,7 +182,7 @@ var _ = Describe("Worker", func() {
 			client.Reader.ReadBulkString()
 		}
 
-		start, err := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, err := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeFalse())
 		Expect(err).Should(BeNil())
 		Expect(server.closed).Should(Equal(WorkerRunning))
@@ -193,9 +193,9 @@ var _ = Describe("Worker", func() {
 
 	It("should worker reconnect automatically", func() {
 		fmt.Println("should worker reconnect automatically...")
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
-		start, _ := server.StartOrResume(protocol.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
+		start, _ := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})
 		Expect(start).Should(BeTrue())
 		Expect(server.closed).Should(Equal(WorkerRunning))
 		// Drain the pongs
@@ -206,7 +206,7 @@ var _ = Describe("Worker", func() {
 
 		// Prepare new shortcut connection for redial.
 		old := shortcut.Conns[0]
-		shortcut.Conns[0] = protocol.NewMockConn(shortcut, 0)
+		shortcut.Conns[0] = net.NewMockConn(shortcut, 0)
 
 		// Server should redail now.
 		old.Close()
