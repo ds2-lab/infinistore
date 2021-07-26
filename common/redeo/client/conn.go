@@ -193,7 +193,6 @@ func (conn *Conn) writeStart(req *RequestMeta) {
 }
 
 func (conn *Conn) writeEnd() {
-	conn.SetWriteDeadline(time.Time{})
 	conn.wReq.Deadline = time.Now().Add(DefaultTimeout)
 	conn.wReq = nil
 	conn.wMu.Unlock()
