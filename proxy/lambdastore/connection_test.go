@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/net"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	// . "github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -20,11 +20,11 @@ func getTestID() int {
 }
 
 var _ = Describe("Connection", func() {
-	protocol.InitShortcut()
+	net.InitShortcut()
 
 	It("should cascade Close() block free.", func() {
 		var done sync.WaitGroup
-		shortcut := protocol.Shortcut.Prepare(TestAddress, getTestID(), 2)
+		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), 2)
 
 		instance := NewInstance("test", 1)
 		ctrlLink := NewConnection(shortcut.Conns[0].Server).BindInstance(instance)

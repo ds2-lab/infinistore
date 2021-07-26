@@ -1,4 +1,4 @@
-package types
+package net
 
 type StrAddr string
 

@@ -6,7 +6,7 @@ import (
 	"io"
 	"math"
 	"math/rand"
-	"net"
+	sysnet "net"
 	"runtime"
 	"strings"
 	"sync"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/net"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -100,7 +101,7 @@ func (wrk *Worker) SetHeartbeater(heartbeater Heartbeater) {
 	wrk.heartbeater = heartbeater
 }
 
-func (wrk *Worker) StartOrResume(proxyAddr net.Addr, args ...*WorkerOptions) (isStart bool, err error) {
+func (wrk *Worker) StartOrResume(proxyAddr sysnet.Addr, args ...*WorkerOptions) (isStart bool, err error) {
 	opts := &defaultOption
 	if len(args) > 0 && args[0] != nil {
 		opts = args[0]
@@ -276,7 +277,7 @@ For:
 	wrk.log.Warn("Insufficient data links, corrected %d, borrowed: %d, spare links: %d.", diff, borrowed, atomic.LoadInt32(&wrk.spareDLs))
 }
 
-func (wrk *Worker) ensureConnection(link *Link, proxyAddr net.Addr, opts *WorkerOptions, started *sync.WaitGroup) error {
+func (wrk *Worker) ensureConnection(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions, started *sync.WaitGroup) error {
 	if !link.Initialize() {
 		// Initilized.
 		return nil
@@ -289,7 +290,7 @@ func (wrk *Worker) ensureConnection(link *Link, proxyAddr net.Addr, opts *Worker
 	return nil
 }
 
-func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
+func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
 	var once sync.Once
 	defer once.Do(started.Done)
 
@@ -301,11 +302,11 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 	}
 	for {
 		// Connect to proxy.
-		var conn net.Conn
+		var conn sysnet.Conn
 		var remoteAddr string
 		wrk.log.Debug("Ready to connect %v", link.addr)
 		if opts.DryRun {
-			shortcuts, ok := protocol.Shortcut.Dial(link.addr)
+			shortcuts, ok := net.Shortcut.Dial(link.addr)
 			if !ok {
 				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", delay)
 				delay = wrk.waitDelay(delay)
@@ -314,7 +315,7 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 			conn = shortcuts[0].Client
 			remoteAddr = shortcuts[0].String()
 		} else {
-			cn, err := net.Dial("tcp", link.addr)
+			cn, err := sysnet.Dial("tcp", link.addr)
 			if err != nil {
 				wrk.log.Error("Failed to connect proxy %s, retry after %v: %v", proxyAddr, delay, err)
 				delay = wrk.waitDelay(delay)
@@ -384,7 +385,7 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 	}
 }
 
-func (wrk *Worker) reserveConnection(links *list.List, proxyAddr net.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
+func (wrk *Worker) reserveConnection(links *list.List, proxyAddr sysnet.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
 	wrk.availableTokens = make(chan *struct{}, opts.MinDataLinks)
 	// Fill tokens
 	for i := 0; i < opts.MinDataLinks; i++ {
@@ -406,15 +407,15 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr net.Addr, opts 
 	}
 }
 
-func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions) error {
+func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions) error {
 	// Connect to proxy.
-	var conn net.Conn
+	var conn sysnet.Conn
 	var remoteAddr string
 	if opts.DryRun {
-		proxyAddr.(*protocol.QueueAddr).Pop()
+		proxyAddr.(*net.QueueAddr).Pop()
 		wrk.log.Debug("Ready to connect %v", proxyAddr)
 		link.addr = proxyAddr.String()
-		shortcuts, ok := protocol.Shortcut.Dial(proxyAddr.String())
+		shortcuts, ok := net.Shortcut.Dial(proxyAddr.String())
 		if !ok {
 			wrk.log.Error("Oops, no shortcut connection available for dry running")
 			return ErrInvalidShortcut
@@ -424,7 +425,7 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	} else {
 		wrk.log.Debug("Ready to connect %v", proxyAddr)
 		link.addr = proxyAddr.String()
-		cn, err := net.Dial("tcp", proxyAddr.String())
+		cn, err := sysnet.Dial("tcp", proxyAddr.String())
 		if err != nil {
 			wrk.log.Error("Failed to connect proxy %s: %v", proxyAddr, err)
 			return err
@@ -651,12 +652,12 @@ func (wrk *Worker) updateSpareDLs(change int32, reports ...time.Time) int32 {
 }
 
 type TestClient struct {
-	Conn   net.Conn
+	Conn   sysnet.Conn
 	Writer *resp.RequestWriter
 	Reader resp.ResponseReader
 }
 
-func NewTestClient(cn net.Conn) *TestClient {
+func NewTestClient(cn sysnet.Conn) *TestClient {
 	return &TestClient{
 		Conn:   cn,
 		Writer: resp.NewRequestWriter(cn),

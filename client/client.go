@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 	"errors"
-	"net"
+	sysnet "net"
 
 	"github.com/buraksezer/consistent"
 	"github.com/klauspost/reedsolomon"
@@ -11,9 +11,9 @@ import (
 	// cuckoo "github.com/seiflotfy/cuckoofilter"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/net"
 	"github.com/mason-leap-lab/infinicache/common/redeo/client"
 	"github.com/mason-leap-lab/infinicache/common/sync"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 var (
@@ -102,73 +102,64 @@ func (c *Client) Close() {
 }
 
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
-func (c *Client) initDial(address string) (addr string, err error) {
+func (c *Client) initDial(address string) (string, error) {
 	// initialize parallel connections under address
 	connect := c.connect
 	c.shortcut = false
-	_, ok := protocol.Shortcut.Validate(address)
+	_, ok := net.Shortcut.Validate(address)
 	if ok {
 		c.shortcut = true
 		connect = c.connectShortcut
 	}
 	// Connect use original address
-	c.conns[addr], err = connect(address, c.Shards)
-	// if err == nil {
-	// 	// initialize the cuckoo filter under address
-	// 	c.mappingTable[addr] = cuckoo.NewFilter(1000000)
-	// }
-	return
+	err := connect(address, c.Shards)
+	return address, err
 }
 
-func (c *Client) connect(address string, n int) ([]*client.Conn, error) {
-	conns := make([]*client.Conn, n)
+func (c *Client) connect(addr string, n int) error {
+	c.conns[addr] = make([]*client.Conn, n)
 	for i := 0; i < n; i++ {
-		cn, err := net.Dial("tcp", address)
+		_, err := c.validate(addr, i)
 		if err != nil {
-			return conns, err
+			return err
 		}
-		conns[i] = client.NewConn(cn, func(cn *client.Conn) {
-			cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
-			cn.Handler = c
-		})
 	}
-	return conns, nil
+	return nil
 }
 
-func (c *Client) connectShortcut(address string, n int) ([]*client.Conn, error) {
-	shortcuts, ok := protocol.Shortcut.Dial(address)
+func (c *Client) connectShortcut(addr string, n int) error {
+	shortcuts, ok := net.Shortcut.Dial(addr)
 	if !ok {
-		return nil, ErrDialShortcut
+		return ErrDialShortcut
 	}
-	conns := make([]*client.Conn, n)
+	c.conns[addr] = make([]*client.Conn, n)
 	for i := 0; i < n && i < len(shortcuts); i++ {
-		conns[i] = client.NewShortcut(shortcuts[i], func(cn *client.Conn) {
-			cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
-			cn.Handler = c
-		})
+		c.validate(addr, i)
 	}
-	return conns, nil
+	return nil
 }
 
 func (c *Client) validate(address string, i int) (cn *client.Conn, err error) {
 	// Because shortcut can not be closed, we don't consider it here.
 	if c.conns[address][i] == nil || c.conns[address][i].IsClosed() {
-		var conn net.Conn
+		var conn sysnet.Conn
 		if !c.shortcut {
-			conn, err = net.Dial("tcp", address)
+			conn, err = sysnet.Dial("tcp", address)
 			if err == nil {
 				c.conns[address][i] = client.NewConn(conn, func(cn *client.Conn) {
 					cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
+					cn.SetWindowSize(2) // use 2 to form pipeline
 					cn.Handler = c
 				})
 			}
 		} else {
-			shortcut, ok := protocol.Shortcut.GetConn(address)
+			shortcut, ok := net.Shortcut.GetConn(address)
 			if !ok {
 				err = ErrDialShortcut
 			} else {
 				c.conns[address][i] = client.NewShortcut(shortcut.Validate(i).Conns[i], func(cn *client.Conn) {
 					cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
+					cn.SetWindowSize(2) // use 2 to form pipeline
 					cn.Handler = c
 				})
 			}
@@ -217,14 +208,16 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			r.Done()
 			return nil
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-		ctx = context.WithValue(ctx, CtxKeyECRet, r)
-		r.reqs[i] = &ClientRequest{Request: client.NewRequestWithContext(ctx)}
-		r.reqs[i].OnRespond(func(_ interface{}, err error) {
-			cancel()
+		ctx := context.WithValue(context.Background(), CtxKeyECRet, r)
+		req := &ClientRequest{Request: client.NewRequestWithContext(ctx)}
+		req.OnRespond(func(_ interface{}, err error) {
+			if req.Cancel != nil {
+				req.Cancel()
+			}
 			r.Done()
 			r.Err = err
 		})
+		r.reqs[i] = req
 	}
 	return r.reqs[i]
 }

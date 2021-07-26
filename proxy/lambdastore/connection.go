@@ -304,7 +304,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			// close connection to discard late response.
 			conn.Close()
 		} else if resErr != types.ErrResponded {
-			conn.log.Warn("Request timeout: %v, error: %d", req, resErr)
+			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
 		}
 		// If req is responded, err has been reported somewhere.
 	}()

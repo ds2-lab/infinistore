@@ -9,13 +9,13 @@ type Response interface {
 }
 
 func NewNilResponse(w resp.ResponseWriter, seq int64) Response {
-	w.AppendNil()
 	w.AppendInt(seq)
+	w.AppendNil()
 	return w
 }
 
 func NewErrorResponse(w resp.ResponseWriter, seq int64, msg string, args ...interface{}) Response {
-	w.AppendErrorf(msg, args...)
 	w.AppendInt(seq)
+	w.AppendErrorf(msg, args...)
 	return w
 }
