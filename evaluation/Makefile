@@ -21,7 +21,7 @@ microbench:
 	./slap.sh 1>./log 2>&1 &
 
 build-simulator: prepare
-	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
+	GO111MODULE=off go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
 dryrun: build build-simulator
 	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
