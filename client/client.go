@@ -214,8 +214,10 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			if req.Cancel != nil {
 				req.Cancel()
 			}
+			if err != nil {
+				r.Err = err
+			}
 			r.Done()
-			r.Err = err
 		})
 		r.reqs[i] = req
 	}

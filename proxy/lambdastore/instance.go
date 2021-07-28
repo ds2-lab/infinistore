@@ -182,6 +182,7 @@ type Instance struct {
 	backingId        int // Identifier for backup, ranging from [0, # of backups)
 	backingTotal     int // Total # of backups ready for backing instance.
 	rerouteThreshold uint64
+	// TODO Lineage changed
 }
 
 func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {

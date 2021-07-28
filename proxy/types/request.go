@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -180,16 +181,26 @@ func (req *Request) Flush() error {
 		req.streamingStarted = true
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(req.BodyStream.Len()))
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
-			// On error, we need to unhold the stream, and allow Close to perform.
-			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
-				holdable.Unhold()
-			}
+			// On error, close the request.
+			req.Close()
 			return err
 		}
 	}
 
 	conn.SetWriteDeadline(protocol.GetHeaderDeadline())
 	return conn.Writer().Flush()
+}
+
+// Close cleans up resources of the request: drain unread data in the request frame.
+func (req *Request) Close() {
+	// Unhold the stream if bodyStream was set. So the bodyStream.Close can be unblocked.
+	bodyStream := req.BodyStream
+	// Lock free pointer swap.
+	if bodyStream != nil && atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&req.BodyStream)), *(*unsafe.Pointer)(unsafe.Pointer(&bodyStream)), unsafe.Pointer(nil)) {
+		if holdable, ok := bodyStream.(resp.Holdable); ok {
+			holdable.Unhold()
+		}
+	}
 }
 
 func (req *Request) IsReturnd() bool {
@@ -215,6 +226,8 @@ func (req *Request) SetResponse(rsp interface{}) error {
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}
+	req.Close()
+
 	if req.responded != nil {
 		req.responded.Resolve(rsp)
 		req.responded = nil

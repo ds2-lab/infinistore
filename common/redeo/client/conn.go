@@ -88,6 +88,10 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	conn.writeStart(meta)
 	defer conn.writeEnd()
 
+	if conn.IsClosed() {
+		return ErrConnectionClosed
+	}
+
 	// Both calback writer and request writer (Flush) are supported.
 	for _, write := range writes {
 		err := write(req)
@@ -190,9 +194,11 @@ func (conn *Conn) SetWindowSize(size int) {
 func (conn *Conn) writeStart(req *RequestMeta) {
 	conn.wMu.Lock()
 	conn.wReq = req
+	conn.routings.Add(1) // Avoid connection being release during writing.
 }
 
 func (conn *Conn) writeEnd() {
+	conn.routings.Done()
 	conn.wReq.Deadline = time.Now().Add(DefaultTimeout)
 	conn.wReq = nil
 	conn.wMu.Unlock()
