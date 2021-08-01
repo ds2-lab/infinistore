@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"strconv"
 
 	// "strings"
@@ -220,7 +219,7 @@ func (s *PersistentStorage) StartTracker() {
 	s.log.Debug("Tracking operations...")
 
 	// This is essential to minimize download memory consumption.
-	bufferProvider := s3manager.NewBufferedReadSeekerWriteToPool(1 * 1024 * 1024)
+	bufferProvider := mys3.NewBufferedReadSeekerWriteToPool(0)
 	// Initialize s3 uploader
 	smallUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 		u.Concurrency = 1
@@ -243,12 +242,11 @@ func (s *PersistentStorage) StartTracker() {
 	for {
 		select {
 		case op := <-s.chanOps:
-			if op == nil {
-				// closed
-				s.chanOps = nil
-				s.log.Trace("It took %v to track and persist chunks.", trackDuration)
-				return
-			}
+			// if op == nil {
+			// 	// closed
+			// 	s.chanOps = nil
+			// 	return
+			// }
 
 			// Count duration
 			if persisted == len(persistedOps) {
@@ -360,11 +358,13 @@ func (s *PersistentStorage) StartTracker() {
 				// Wait for being persisted and signalTracker get refilled.
 				delayedSignal = signal
 			} else {
-				// All operations persisted.
-				persistedOps = persistedOps[:0]
-				persisted = 0
-				delayedSignal = nil
+				// All operations persisted. Clean up and stop.
+				bufferProvider.Close()
+				bufferProvider = nil
+				s.chanOps = nil
 				s.persistHelper.onTrackerStopped(signal)
+				s.log.Trace("It took %v to track and persist chunks.", trackDuration)
+				return
 			}
 		}
 	}
@@ -385,10 +385,12 @@ func (s *PersistentStorage) StopTracker(signal interface{}) {
 		<-s.trackerStopped
 
 		// Clean up
-		close(s.chanOps)
-		runtime.Gosched() // Take time to finalize.
 		s.signalTracker = nil
 		s.trackerStopped = nil
+		if s.s3Downloader != nil {
+			s.s3Downloader.Close()
+			s.s3Downloader = nil
+		}
 		s.log.Debug("Operation tracking stopped.")
 	}
 }
