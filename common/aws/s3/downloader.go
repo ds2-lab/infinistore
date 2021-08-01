@@ -14,15 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 )
 
-var (
-	pool = &sync.Pool{
-		New: func() interface{} {
-			return &BatchDownloadObject{
-				Object: &s3.GetObjectInput{},
-			}
-		},
-	}
-)
+var ()
 
 // S3 Downloader Optimization
 // Because the minimum concurrent download unit for aws download api is 5M,
@@ -30,6 +22,7 @@ var (
 type Downloader struct {
 	backends []*s3manager.Downloader
 	queue    chan *BatchDownloadObject
+	pool     *sync.Pool
 
 	Concurrency    int
 	BufferProvider s3manager.WriterReadFromProvider
@@ -67,10 +60,17 @@ func NewDownloader(sess *session.Session, options ...func(*Downloader)) *Downloa
 	}
 	downloader.backends = make([]*s3manager.Downloader, downloader.Concurrency)
 	downloader.queue = make(chan *BatchDownloadObject, downloader.Concurrency)
+	downloader.pool = &sync.Pool{
+		New: func() interface{} {
+			return &BatchDownloadObject{
+				Object: &s3.GetObjectInput{},
+			}
+		},
+	}
 
 	// This is essential to minimize download memory consumption.
 	if downloader.BufferProvider == nil {
-		downloader.BufferProvider = s3manager.NewPooledBufferedWriterReadFromProvider(1 * 1024 * 1024)
+		downloader.BufferProvider = NewPooledBufferedWriterReadFromProvider(0)
 	}
 
 	// Initialize backend downloaders
@@ -82,6 +82,17 @@ func NewDownloader(sess *session.Session, options ...func(*Downloader)) *Downloa
 		})
 	}
 	return downloader
+}
+
+func (d *Downloader) Close() {
+	for i := 0; i < len(d.backends); i++ {
+		d.backends[i] = nil
+	}
+	d.BufferProvider.(*PooledBufferedReadFromProvider).Close()
+	d.BufferProvider = nil
+	d.pool = nil
+	d.queue = nil
+	d.backends = nil
 }
 
 func (d *Downloader) GetDownloadPartSize() uint64 {
@@ -102,11 +113,11 @@ func (d *Downloader) Schedule(iter chan *BatchDownloadObject, builder func(*Batc
 }
 
 func (d *Downloader) Done(input *BatchDownloadObject) {
-	pool.Put(input)
+	d.pool.Put(input)
 }
 
 func (d *Downloader) build(builder func(*BatchDownloadObject)) (*BatchDownloadObject, error) {
-	input := pool.Get().(*BatchDownloadObject)
+	input := d.pool.Get().(*BatchDownloadObject)
 	input.Object.Bucket = nil
 	input.Object.Key = nil
 	input.Object.Range = nil
@@ -138,7 +149,7 @@ func (d *Downloader) schedule(iter chan *BatchDownloadObject, input *BatchDownlo
 		partSize := uint64(math.Ceil(float64(input.Size) / parts))
 		for offset < input.Size {
 			end := offset + Uint64Min(partSize, input.Size-offset)
-			part := pool.Get().(*BatchDownloadObject)
+			part := d.pool.Get().(*BatchDownloadObject)
 			*part.Object = *input.Object
 			part.Object.Range = aws.String(fmt.Sprintf("bytes=%d-%d", offset, end-1))
 			part.Size = end - offset
@@ -151,7 +162,7 @@ func (d *Downloader) schedule(iter chan *BatchDownloadObject, input *BatchDownlo
 			offset = end
 		}
 
-		pool.Put(input)
+		d.pool.Put(input)
 		return int(parts), nil
 	}
 }
