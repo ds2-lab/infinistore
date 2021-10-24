@@ -44,9 +44,10 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 			break
 		}
 	}
+	// Add place holder only if there are other proxies
 	if included < 0 && len(addresses) > 0 {
 		included = len(addresses)
-		addresses = append(addresses, "address template")
+		addresses = append(addresses, "place holder")
 	}
 
 	adapter := &RedisAdapter{
