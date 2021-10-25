@@ -33,6 +33,7 @@ var (
 	ErrClient       = errors.New("client internal error")
 	ErrDialShortcut = errors.New("failed to dial shortcut, check the RedisAdapter")
 	ErrNoRequest    = errors.New("request not present")
+	ErrClientClosed = errors.New("client closed")
 
 	CtxKeyECRet = reqCtxKey("ecret")
 )
@@ -51,6 +52,7 @@ type Client struct {
 	// mappingTable map[string]*cuckoo.Filter
 	logEntry logEntry
 	shortcut bool
+	closed   bool
 }
 
 // NewClient Create a client instance.
@@ -91,6 +93,7 @@ func (c *Client) Dial(addrArr []string) bool {
 
 // Close Close the client
 func (c *Client) Close() {
+	c.closed = true
 	// log.Debug("Cleaning up...")
 	for addr, conns := range c.conns {
 		for i, cn := range conns {

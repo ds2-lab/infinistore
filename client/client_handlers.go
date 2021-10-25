@@ -354,7 +354,10 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			}
 			return nil
 		})
-		if err != nil {
+		if err != nil && c.closed {
+			req.SetResponse(ErrClientClosed)
+			return
+		} else if err != nil {
 			continue
 		}
 
