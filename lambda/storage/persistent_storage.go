@@ -33,7 +33,7 @@ var (
 
 type PersistHelper interface {
 	onPersisted(*types.OpWrapper)
-	onTrackerStopped(interface{})
+	onStopTracker(interface{}) bool
 }
 
 // PersistentStorage Storage with S3 as persistent layer
@@ -353,18 +353,22 @@ func (s *PersistentStorage) StartTracker() {
 		case signal := <-s.signalTracker:
 			if len(s.chanOps) > 0 {
 				// We wait for chanOps get drained.
+				s.log.Debug("Found more ops to be persisted, pass and wait for resignal.")
 				s.signalTracker <- signal
 			} else if persisted < len(persistedOps) {
 				// Wait for being persisted and signalTracker get refilled.
+				s.log.Debug("Found more ops to be persisted and persisting, pass and wait for resignal.")
 				delayedSignal = signal
 			} else {
 				// All operations persisted. Clean up and stop.
-				bufferProvider.Close()
-				bufferProvider = nil
-				s.chanOps = nil
-				s.persistHelper.onTrackerStopped(signal)
-				s.log.Trace("It took %v to track and persist chunks.", trackDuration)
-				return
+				s.log.Debug("All persisted, notify who may interest.")
+				if s.persistHelper.onStopTracker(signal) {
+					bufferProvider.Close()
+					bufferProvider = nil
+					s.chanOps = nil
+					s.log.Trace("It took %v to track and persist chunks.", trackDuration)
+					return
+				}
 			}
 		}
 	}
@@ -374,13 +378,15 @@ func (s *PersistentStorage) onPersisted(persisted *types.OpWrapper) {
 	// Default by doing nothing
 }
 
-func (s *PersistentStorage) onTrackerStopped(signal interface{}) {
+func (s *PersistentStorage) onStopTracker(signal interface{}) bool {
 	s.trackerStopped <- signal
+	return true
 }
 
 func (s *PersistentStorage) StopTracker(signal interface{}) {
 	if s.signalTracker != nil {
 		// Signal tracker to stop and wait
+		s.log.Debug("Signal tracker to stop")
 		s.signalTracker <- signal
 		<-s.trackerStopped
 

@@ -334,7 +334,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			log.Debug("Migration initiated.")
 		} else {
 			// Finalize, this is quick usually.
-			if Persist != nil {
+			if Lineage == nil && Persist != nil {
 				Persist.StopTracker(commitOpt)
 			}
 			if Lineage != nil {
