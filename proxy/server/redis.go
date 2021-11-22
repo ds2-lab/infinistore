@@ -134,11 +134,13 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 		}
 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
-		client.Dial(addresses)
 		shortcut.Client = client
 		shortcut.OnValidate = func(mock *net.MockConn) {
 			go a.server.ServeForeignClient(mock.Server, false)
 		}
+		// Dial after shortcut set up
+		client.Dial(addresses)
+
 		go func() {
 			redeoClient.WaitClose()
 			client.Close()

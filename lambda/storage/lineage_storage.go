@@ -226,8 +226,8 @@ func (s *LineageStorage) onPersisted(persisted *types.OpWrapper) {
 	} // else: Skip
 }
 
-func (s *LineageStorage) onTrackerStopped(signal interface{}) {
-	s.doCommit(signal.(*types.CommitOption))
+func (s *LineageStorage) onStopTracker(signal interface{}) bool {
+	return s.doCommit(signal.(*types.CommitOption))
 }
 
 func (s *LineageStorage) Commit() (*types.CommitOption, error) {
@@ -253,6 +253,7 @@ func (s *LineageStorage) Commit() (*types.CommitOption, error) {
 	option.Full = s.recovered == nil && s.lineage.Term-snapshotTerm >= SnapshotInterval-1
 
 	// Signal and wait for committed.
+	s.log.Debug("Signal tracker to commit")
 	s.signalTracker <- option
 	option = (<-s.trackerStopped).(*types.CommitOption)
 
@@ -380,7 +381,7 @@ func (s *LineageStorage) ClearBackup() {
 	s.backupMeta = nil
 }
 
-func (s *LineageStorage) doCommit(opt *types.CommitOption) {
+func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 	if len(s.lineage.Ops) > 0 {
 		var termBytes, ssBytes int
 		uploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
@@ -418,6 +419,7 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) {
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
 		opt.BytesUploaded += uint64(termBytes + ssBytes)
 		s.signalTracker <- opt
+		return false
 	} else {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
 		// DO NOT close "committed", since there will be a double check on stoping the tracker.
@@ -427,6 +429,7 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) {
 			s.log.Debug("Checked: no more term to commit, signal committed.")
 		}
 		s.trackerStopped <- opt
+		return true
 	}
 }
 
