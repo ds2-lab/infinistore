@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/zhangjyr/hashmap"
 
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -21,7 +23,8 @@ const (
 )
 
 var (
-	ErrNotActiveBucket = errors.New("scale out failed, not in active bucket")
+	ErrNotActiveBucket         = errors.New("scale out failed, not in active bucket")
+	BucketFlushInactiveTimeout = time.Second
 )
 
 // A bucket is a view of a group
@@ -34,6 +37,9 @@ type Bucket struct {
 	start       DefaultGroupIndex // Start logic index of backend group
 	end         DefaultGroupIndex // End logic index of backend group
 	activeStart GroupIndex        // Instances end at activeStart - 1 are full.
+	disabled    *hashmap.HashMap  // Buffer fulled instance
+	flushLimit  int               // The max number stored in buffer.
+	flushedAt   time.Time         // The last time the "disabled" fulled instance was cleared.
 
 	//state
 	state int
@@ -54,11 +60,14 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		return nil, ErrInsufficientDeployments
 	}
 
+	flushLimit := global.Options.GetNumFunctions()
 	bucket = &Bucket{
-		id:        id,
-		group:     group,
-		log:       global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
-		instances: make([]*lambdastore.Instance, 0, num),
+		id:         id,
+		group:      group,
+		log:        global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
+		instances:  make([]*lambdastore.Instance, 0, num),
+		disabled:   hashmap.New(uintptr(flushLimit)),
+		flushLimit: flushLimit,
 	}
 
 	// expand
@@ -86,18 +95,23 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, er
 		return bucket, 0, err
 	}
 
+	// Clean up inactives
+	b.flushInactiveLocked()
 	// Compose new bucket consists of instances with spare capacity.
 	bucket = &Bucket{
 		id:          nextID,
 		group:       b.group,
 		log:         global.GetLogger(fmt.Sprintf("Bucket %d:", nextID)),
 		instances:   make([]*lambdastore.Instance, b.end.Idx()-b.activeStart.Idx()),
+		disabled:    b.disabled,
+		flushLimit:  b.flushLimit,
 		start:       DefaultGroupIndex(b.activeStart.Idx()),
 		activeStart: b.activeStart,
 		end:         b.end,
 		state:       BUCKET_ACTIVE,
 	}
 	copy(bucket.instances, b.instances[b.activeStart.Idx()-b.start.Idx():])
+	b.disabled = nil
 
 	// Adjust current bucket
 	b.end = bucket.start
@@ -192,11 +206,44 @@ func (b *Bucket) flagInactive(gins *GroupInstance) {
 		return
 	}
 
-	b.mu.Lock()
-	if b.activeStart.Idx() <= gins.Idx() {
-		b.activeStart = gins.idx.(*BucketIndex).Next()
+	gins.disabled = true
+	b.disabled.Set(gins.Idx(), gins)
+	if b.disabled.Len() < b.flushLimit && time.Since(b.flushedAt) < BucketFlushInactiveTimeout {
+		return
 	}
+
+	b.mu.Lock()
+	b.flushInactiveLocked()
+	// if b.activeStart.Idx() <= gins.Idx() {
+	// 	b.activeStart = gins.idx.(*BucketIndex).Next()
+	// }
 	b.mu.Unlock()
+}
+
+func (b *Bucket) flushInactiveLocked() {
+	if b.disabled.Len() == 0 {
+		return
+	}
+
+	ginsAll := b.group.SubGroup(b.activeStart, b.end)
+	checked := 0
+	flushed := 0
+	for b.disabled.Len() > 0 {
+		for i := checked; i < len(ginsAll); i++ {
+			if !ginsAll[i].disabled {
+				continue
+			}
+			b.disabled.Del(ginsAll[i].Idx())
+			b.activeStart = ginsAll[i].idx.(*BucketIndex).Next()
+			if flushed != i {
+				b.swapLock(ginsAll[flushed], ginsAll[i])
+				flushed++
+			}
+			checked = i + 1
+			break
+		}
+	}
+	b.flushedAt = time.Now()
 }
 
 func (b *Bucket) getInstances() []*lambdastore.Instance {
@@ -217,6 +264,13 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 
 func (b *Bucket) len() int {
 	return b.end.Idx() - b.start.Idx()
+}
+
+func (b *Bucket) swapLock(gins1 *GroupInstance, gins2 *GroupInstance) {
+	b.group.Swap(gins1, gins2)
+	// Swapped, update local copy
+	b.instances[gins2.Idx()-b.start.Idx()] = gins1.Instance()
+	b.instances[gins1.Idx()-b.start.Idx()] = gins2.Instance()
 }
 
 // types.ClusterStatus implementation

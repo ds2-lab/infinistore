@@ -26,8 +26,9 @@ type Group struct {
 
 type GroupInstance struct {
 	types.LambdaDeployment
-	group *Group
-	idx   GroupIndex
+	group    *Group
+	idx      GroupIndex
+	disabled bool
 }
 
 func (gins *GroupInstance) Idx() int {
@@ -134,7 +135,7 @@ func (g *Group) SubGroup(start GroupIndex, end GroupIndex) []*GroupInstance {
 }
 
 func (g *Group) Reserve(idx GroupIndex, d types.LambdaDeployment) *GroupInstance {
-	return &GroupInstance{d, g, idx}
+	return &GroupInstance{LambdaDeployment: d, group: g, idx: idx}
 }
 
 func (g *Group) Set(ins *GroupInstance) {
@@ -148,6 +149,13 @@ func (g *Group) Instance(idx GroupIndex) *lambdastore.Instance {
 	ret := g.all[idx.Idx()-g.idxBase]
 	g.mu.RUnlock()
 	return ret.LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (g *Group) Swap(gins1 *GroupInstance, gins2 *GroupInstance) {
+	g.mu.Lock()
+	g.all[gins1.Idx()-g.idxBase], g.all[gins2.Idx()-g.idxBase] = gins2, gins1
+	gins1.idx, gins2.idx = gins2.idx, gins1.idx
+	g.mu.Unlock()
 }
 
 func (g *Group) checkCapacity(buff []*GroupInstance, num int, preserve bool) []*GroupInstance {
