@@ -51,20 +51,29 @@ type Meta struct {
 	// Capacity of the instance.
 	Capacity uint64
 
-	size uint64 // Size of the instance.
+	effective uint64
+	size      uint64 // Size of the instance.
 	// chunks map[string]*ChuckMeta
 	// head ChuckMeta
 	// anchor *ChuckMeta
 	numChunks int32
 }
 
-func (m *Meta) ResetCapacity(capacity uint64, used uint64) {
+func (m *Meta) ResetCapacity(capacity uint64, effective uint64) {
 	m.Capacity = capacity
-	atomic.StoreUint64(&m.size, used+m.ReservedCapacity())
+	if effective == uint64(0) {
+		m.effective = capacity - m.ReservedCapacity()
+	} else {
+		m.effective = effective
+	}
 }
 
 func (m *Meta) EffectiveCapacity() uint64 {
-	return m.Capacity - m.ReservedCapacity()
+	return m.effective
+}
+
+func (m *Meta) IsFull(adjustment uint64) bool {
+	return m.Size()+adjustment > m.EffectiveCapacity()
 }
 
 func (m *Meta) ReservedCapacity() uint64 {

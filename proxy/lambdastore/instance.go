@@ -960,35 +960,46 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	// Handle output
 	if !event.IsRecoveryEnabled() {
 		// Ignore output
-	} else if len(output.Payload) > 0 {
-		var outputStatus protocol.Status
-		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
-			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
-		} else if len(outputStatus.Metas) > 0 {
-			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
-			if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
-				// Reclaimed
-				ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
-				return err
-			} else if uptodate {
-				// If the node was invoked by other than the proxy, it could be stale.
-				if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
-					uptodate = false
-				} else {
-					ins.Meta.Stale = false
-				}
-			}
-
-			// Show log
-			if uptodate {
-				ins.log.Debug("Got updated instance lineage: %v", &outputStatus)
-			} else {
-				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
-			}
-		}
-	} else {
+		return nil
+	} else if len(output.Payload) == 0 {
 		// Recovery enabled but no output
 		ins.log.Error("No instance lineage returned, output: %v", output)
+		return nil
+	}
+
+	// Parse output
+	var outputStatus protocol.Status
+	if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
+		ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
+		return nil
+	}
+
+	// Handle output
+	if outputStatus.Capacity > 0 && outputStatus.Mem > 0 {
+		ins.Meta.ResetCapacity(outputStatus.Capacity, outputStatus.Mem)
+		ins.log.Debug("Capacity synchronized: cap %d, effective %d, stored %d", ins.Meta.Capacity, ins.Meta.EffectiveCapacity(), ins.Meta.Size())
+	}
+	if len(outputStatus.Metas) > 0 {
+		uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
+		if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
+			// Reclaimed
+			ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
+			return err
+		} else if uptodate {
+			// If the node was invoked by other than the proxy, it could be stale.
+			if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
+				uptodate = false
+			} else {
+				ins.Meta.Stale = false
+			}
+		}
+
+		// Show log
+		if uptodate {
+			ins.log.Debug("Got updated instance lineage: %v", &outputStatus)
+		} else {
+			ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
+		}
 	}
 	return nil
 }
