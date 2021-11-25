@@ -31,8 +31,35 @@ var (
 	ErrIncomplete   = errors.New("key incomplete")
 )
 
+const ()
+
 type Loggable interface {
 	ConfigLogger(int, bool)
+}
+
+type CalibratePriority int
+
+type StorageMeta interface {
+	// Capacity is physical memory allowed.
+	Capacity() uint64
+
+	// System is real memory used.
+	System() uint64
+
+	// Waterline is max memory used.
+	Waterline() uint64
+
+	// Effectetive is dynamic capacity calculated.
+	Effective() uint64
+
+	// Reserved is reserved capacity configured.
+	Reserved() uint64
+
+	// Size is the size stored.
+	Size() uint64
+
+	// Calibrate adjusts capacity after each invocation.
+	Calibrate()
 }
 
 type Storage interface {
@@ -44,6 +71,7 @@ type Storage interface {
 	Del(string, string) *OpRet
 	Len() int
 	Keys() <-chan string
+	Meta() StorageMeta
 }
 
 type PersistentStorage interface {

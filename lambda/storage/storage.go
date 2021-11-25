@@ -15,6 +15,10 @@ import (
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
+const (
+	StorageOverhead = 100000000 // 100 MB
+)
+
 var (
 	FunctionPrefix        string
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
@@ -39,9 +43,10 @@ type Storage struct {
 	repo   *hashmap.HashMap
 	log    logger.ILogger
 	helper StorageHelper
+	meta   StorageMeta
 }
 
-func NewStorage(id uint64) *Storage {
+func NewStorage(id uint64, cap uint64) *Storage {
 	if FunctionPrefix == "" {
 		FunctionPrefix = string(FunctionPrefixMatcher.ReplaceAll([]byte(lambdacontext.FunctionName), []byte("")))
 	}
@@ -49,6 +54,7 @@ func NewStorage(id uint64) *Storage {
 		id:   id,
 		repo: hashmap.New(10000),
 		log:  &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Storage:"},
+		meta: StorageMeta{Cap: cap, Overhead: StorageOverhead},
 	}
 	store.helper = store
 	return store
@@ -106,7 +112,13 @@ func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, *types.OpRe
 }
 
 func (s *Storage) set(key string, chunk *types.Chunk) {
+	ck, ok := s.repo.Get(key)
 	s.repo.Set(key, chunk)
+	if ok {
+		s.meta.IncreaseSize(chunk.Size - ck.(*types.Chunk).Size)
+	} else {
+		s.meta.IncreaseSize(chunk.Size)
+	}
 }
 
 func (s *Storage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
@@ -142,6 +154,7 @@ func (s *Storage) Del(key string, chunkId string) *types.OpRet {
 
 	chunk.Access()
 	chunk.Delete()
+	s.meta.DecreaseSize(chunk.Size)
 
 	return types.OpSuccess()
 }
@@ -170,4 +183,8 @@ func (s *Storage) Keys() <-chan string {
 	}()
 
 	return ch
+}
+
+func (s *Storage) Meta() types.StorageMeta {
+	return &s.meta
 }

@@ -165,6 +165,10 @@ func (a *StorageAdapter) Keys() <-chan string {
 	return a.store.Keys()
 }
 
+func (a *StorageAdapter) Meta() types.StorageMeta {
+	return a.store.Meta()
+}
+
 func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
 	var ret *types.OpRet
 	cmd.chunk, cmd.bodyStream, ret = a.store.GetStream(cmd.key)
@@ -301,7 +305,7 @@ func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storag
 		var strErr string
 		strErr, err = reader.ReadError()
 		if err == nil {
-			err = errors.New(fmt.Sprintf("Error in migration response: %s", strErr))
+			err = fmt.Errorf("error in migration response: %s", strErr)
 		}
 		return err
 	}
@@ -328,7 +332,7 @@ func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storag
 	}
 
 	if strings.ToLower(cmdName) == "get" {
-		cmd.bodyStream, err = reader.StreamBulk()
+		cmd.bodyStream, _ = reader.StreamBulk()
 	}
 	return nil
 }

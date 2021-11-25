@@ -34,6 +34,9 @@ const (
 
 	RECOVERING_MAIN   uint32 = 0x01
 	RECOVERING_BACKUP uint32 = 0x02
+
+	LineageStorageOverhead    = 150000000
+	BackupStoreageReservation = 0.1 // 1/N * 2, N = 20, backups per lambda.
 )
 
 var (
@@ -70,11 +73,16 @@ type LineageStorage struct {
 	backupMeta              *types.LineageMeta // Only one backup is effective at a time.
 	backupLocator           protocol.BackupLocator
 	backupRecoveryCanceller context.CancelFunc
+
+	// padding objects
+	size        int64
+	backupSize  int64
+	paddingPool []*types.Chunk
 }
 
-func NewLineageStorage(id uint64) *LineageStorage {
+func NewLineageStorage(id uint64, cap uint64) *LineageStorage {
 	storage := &LineageStorage{
-		PersistentStorage: NewPersistentStorage(id),
+		PersistentStorage: NewPersistentStorage(id, cap),
 		lineage: &types.LineageTerm{
 			Term: 1,                             // Term start with 1 to avoid uninitialized term ambigulous.
 			Ops:  make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
@@ -82,6 +90,8 @@ func NewLineageStorage(id uint64) *LineageStorage {
 		backup:   hashmap.New(1000), // Initilize early to buy time for fast backup recovery.
 		diffrank: NewSimpleDifferenceRank(Backups),
 	}
+	storage.meta.Overhead = LineageStorageOverhead
+	storage.meta.Rsrved = uint64(float64(storage.meta.Cap) * BackupStoreageReservation)
 	storage.helper = storage
 	storage.persistHelper = storage
 	return storage

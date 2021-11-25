@@ -38,8 +38,7 @@ var (
 	ExpectedGOMAXPROCS = 2
 	DefaultStatus      = protocol.Status{}
 
-	log     = Log
-	memStat runtime.MemStats
+	log = Log
 )
 
 func init() {
@@ -76,20 +75,21 @@ func getAwsReqId(ctx context.Context) string {
 func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Status, error) {
 	// Just once, persistent feature can not be changed anymore.
 	storage.Backups = input.Backups
+	memoryLimit := uint64(lambdaLife.MemoryLimitInMB) * 1000000
 	if Store == nil || Store.Id() != input.Id {
 		Persist = nil
 		Lineage = nil
 		if input.IsRecoveryEnabled() {
-			store := storage.NewLineageStorage(input.Id)
+			store := storage.NewLineageStorage(input.Id, memoryLimit)
 			Store = store
 			Persist = store
 			Lineage = store
 		} else if input.IsPersistencyEnabled() {
-			store := storage.NewPersistentStorage(input.Id)
+			store := storage.NewPersistentStorage(input.Id, memoryLimit)
 			Store = store
 			Persist = store
 		} else {
-			Store = storage.NewStorage(input.Id)
+			Store = storage.NewStorage(input.Id, memoryLimit)
 		}
 	}
 	if Persist != nil {
@@ -252,19 +252,22 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Adaptive timeout control
 	log.Debug("Waiting for timeout...")
 	meta := wait(session, Lifetime).ProtocolStatus()
-	meta.Capacity = uint64(lambdaLife.MemoryLimitInMB * 1000000)
+
 	Server.Pause()
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
 	gcStart := time.Now()
-	runtime.GC()
-	runtime.ReadMemStats(&memStat)
-	meta.Mem = memStat.Sys - memStat.HeapSys - memStat.GCSys + memStat.HeapInuse
+	// Optimize memory usage and return statistics
+	storeMeta := Store.Meta()
+	storeMeta.Calibrate()
+	meta.Capacity = storeMeta.Capacity()
+	meta.Mem = storeMeta.Effective()
 	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
-	log.Info("served: %d, interrupted: %d, mem: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(), float64(meta.Mem)/1000000)
+	log.Info("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),
+		float64(storeMeta.Effective())/1000000, float64(storeMeta.System())/1000000, float64(storeMeta.Waterline())/1000000)
 	return meta, nil
 }
 
@@ -549,6 +552,7 @@ func main() {
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
+		flag.IntVar(&lambdaLife.MemoryLimitInMB, "mem", 3096, "Memory limit in MB")
 		numToInsert := flag.Int("insert", 0, "Number of random chunks to be inserted on launch")
 		sizeToInsert := flag.Int("cksize", 100000, "Size of random chunks to be inserted on launch")
 		concurrency := flag.Int("c", 5, "Concurrency of recovery")

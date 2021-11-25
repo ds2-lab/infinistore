@@ -52,9 +52,9 @@ type PersistentStorage struct {
 	s3Downloader    *mys3.Downloader
 }
 
-func NewPersistentStorage(id uint64) *PersistentStorage {
+func NewPersistentStorage(id uint64, cap uint64) *PersistentStorage {
 	storage := &PersistentStorage{
-		Storage: NewStorage(id),
+		Storage: NewStorage(id, cap),
 	}
 	storage.helper = storage
 	storage.persistHelper = storage

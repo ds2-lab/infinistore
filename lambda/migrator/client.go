@@ -4,16 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
-	"io"
-	"net"
-	"strconv"
-	"sync"
-	"time"
 
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
@@ -23,15 +23,13 @@ var (
 		Level: logger.LOG_LEVEL_INFO,
 	}
 	MigrationTimeout     = 30 * time.Second
-	ErrClosedPrematurely = errors.New("Client closed before ready.")
-	ErrClosed            = errors.New("Client closed.")
+	ErrClosedPrematurely = errors.New("client closed before ready")
+	ErrClosed            = errors.New("client closed")
 )
 
 type Client struct {
-	addr  string
 	cn    net.Conn
 	ready chan error
-	mu    sync.Mutex
 	w     *resp.RequestWriter
 	r     resp.ResponseReader
 }
@@ -85,7 +83,7 @@ func (cli *Client) TriggerDestination(dest string, args interface{}) (err error)
 
 	res, err := client.Invoke(input)
 	if err == nil && *res.StatusCode >= 300 {
-		err = errors.New(fmt.Sprintf("Unexpected http code on triggering destination of migration: %d", *res.StatusCode))
+		err = fmt.Errorf("unexpected http code on triggering destination of migration: %d", *res.StatusCode)
 	}
 	if err != nil {
 		cli.ready <- err
