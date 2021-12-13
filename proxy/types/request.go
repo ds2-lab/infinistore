@@ -211,8 +211,8 @@ func (req *Request) IsResponded() bool {
 	return atomic.LoadUint32(&req.status) >= REQUEST_RESPONDED
 }
 
-func (req *Request) MarkReturned() {
-	atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RETURNED)
+func (req *Request) MarkReturned() bool {
+	return atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RETURNED)
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {

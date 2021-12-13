@@ -18,6 +18,7 @@ import (
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/google/uuid"
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
@@ -121,7 +122,8 @@ var (
 type InstanceManager interface {
 	Instance(uint64) *Instance
 	Recycle(types.LambdaDeployment) error
-	GetCandidateQueue() <-chan *Instance
+	GetBackupCandidates() mapreduce.Iterator
+	GetDelegates() []*Instance
 }
 
 type Relocator interface {
@@ -183,6 +185,9 @@ type Instance struct {
 	backingTotal     int // Total # of backups ready for backing instance.
 	rerouteThreshold uint64
 	// TODO Lineage changed
+
+	// Delegate fields
+	delegates *Backups
 }
 
 func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
@@ -289,6 +294,7 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 
 func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
+		ins.tryRerouteDelegateRequest(cmd.GetRequest())
 		return ErrInstanceClosed
 	}
 
@@ -311,6 +317,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
+		ins.tryRerouteDelegateRequest(cmd.GetRequest())
 		ins.cleanCmdChannel(ins.chanCmd)
 	}
 
@@ -390,7 +397,7 @@ func (ins *Instance) HandleRequests() {
 	}
 }
 
-// Start parallel recovery mode.
+// StartRecovery starts parallel recovery mode.
 // Return # of ready backups
 func (ins *Instance) StartRecovery() int {
 	recovering := atomic.LoadUint32(&ins.recovering)
@@ -412,7 +419,7 @@ func (ins *Instance) startRecoveryLocked() int {
 	}
 
 	// Reserve available backups
-	changes := ins.backups.Reserve(CM.GetCandidateQueue())
+	changes := ins.backups.Reserve(CM.GetBackupCandidates())
 
 	// Start backup and build logs
 	var msg strings.Builder
@@ -435,6 +442,57 @@ func (ins *Instance) startRecoveryLocked() int {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
 		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%v, changes: %d", available, msg.String(), changes)
+	}
+
+	return available
+}
+
+// StartDelegation delegates the instance to parallel buffer instances.
+// Return # of delegates
+func (ins *Instance) StartDelegation() int {
+	if ins.delegates != nil {
+		return ins.delegates.Len()
+	}
+
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	return ins.startDelegationLocked()
+}
+
+func (ins *Instance) startDelegationLocked() int {
+	if ins.delegates != nil {
+		return ins.delegates.Len()
+	}
+
+	candidates := CM.GetDelegates()
+	// TODO: do some filtering
+	delegates := make([]Backer, len(candidates))
+	for i, cand := range candidates {
+		delegates[i] = &Delegate{
+			Instance: cand,
+		}
+	}
+	ins.delegates = NewBackups(ins, delegates)
+
+	// Start backup and build logs
+	var msg strings.Builder
+	for i := 0; i < ins.delegates.Len(); i++ {
+		msg.WriteString(" ")
+		delegate, ok := ins.delegates.StartByIndex(i, ins)
+		if ok {
+			msg.WriteString(strconv.FormatUint(delegate.Id(), 10))
+		} else {
+			msg.WriteString("N/A")
+		}
+	}
+
+	// Start backups.
+	available := ins.delegates.Availables()
+	if available == 0 {
+		ins.log.Warn("No delegates available.")
+	} else {
+		ins.log.Info("Delegate to %d instances:%v", available, msg.String())
 	}
 
 	return available
@@ -505,7 +563,7 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	ins.mu.Unlock()
 
 	// Manually trigger ping with payload to initiate parallel recovery
-	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total, ins.getRerouteThreshold())
+	payload, err := ins.backingIns.Meta.ToBackupPayload(ins.backingIns.Id(), bakId, total, ins.getRerouteThreshold())
 	if err != nil {
 		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
 	} else {
@@ -814,6 +872,9 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 			ins.log.Info("Reclaimed")
 
+			// Initiate delegation.
+			ins.StartDelegation()
+
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
 				// Close() will handle status and validation and we can safely exit.
@@ -1111,9 +1172,12 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		if flags&protocol.PONG_RECLAIMED > 0 {
 			// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
+			// Initiate delegation.
+			ins.startDelegationLocked()
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
 				ins.log.Info("Reclaimed")
+				// Close current instance.
 				ins.closeLocked()
 				return conn, nil
 			} else {
@@ -1272,7 +1336,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	}
 
 	// No reroute for chunk larger than threshold()
-	if req.Size() > int64(ins.getRerouteThreshold()) {
+	if req.Size() > int64(backup.getRerouteThreshold()) {
 		return false
 	}
 
@@ -1302,6 +1366,32 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 
 	ins.log.Debug("Instance reclaimed, relocated %v to %d", req.Key, target.Id())
 	return true
+}
+
+func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) {
+	if req == nil || req.Cmd != protocol.CMD_GET {
+		return
+	}
+
+	if ins.delegates == nil {
+		ins.log.Warn("Has not delegated yet, stop reroute %v", req)
+		return
+	}
+
+	loc, total, _ := ins.delegates.Locator().Locate(req.Key)
+	delegate, _ := ins.delegates.GetByLocation(loc, total)
+
+	// No reroute for chunk larger than threshold()
+	if req.Size() > int64(delegate.getRerouteThreshold()) {
+		return
+	}
+
+	err := delegate.Dispatch(req)
+	if err != nil {
+		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
+	} else {
+		ins.log.Debug("Delegate %s to node %d as %d of %d.", req.Key, delegate.Id(), loc, total)
+	}
 }
 
 func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {

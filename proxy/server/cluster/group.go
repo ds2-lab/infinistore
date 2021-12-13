@@ -24,40 +24,6 @@ type Group struct {
 	log logger.ILogger
 }
 
-type GroupInstance struct {
-	types.LambdaDeployment
-	group    *Group
-	idx      GroupIndex
-	disabled bool
-}
-
-func (gins *GroupInstance) Idx() int {
-	return gins.idx.Idx()
-}
-
-func (gins *GroupInstance) Instance() *lambdastore.Instance {
-	ins, _ := gins.LambdaDeployment.(*lambdastore.Instance)
-	return ins
-}
-
-type GroupIndex interface {
-	Idx() int
-}
-
-type DefaultGroupIndex int
-
-func (i DefaultGroupIndex) Idx() int {
-	return int(i)
-}
-
-func (i *DefaultGroupIndex) Next() DefaultGroupIndex {
-	return *i + 1
-}
-
-func (i *DefaultGroupIndex) NextN(n int) DefaultGroupIndex {
-	return *i + DefaultGroupIndex(n)
-}
-
 func NewGroup(num int) *Group {
 	return &Group{
 		all:  make([]*GroupInstance, num, config.LambdaMaxDeployments),
@@ -115,12 +81,10 @@ func (g *Group) Expire(n int) error {
 	return nil
 }
 
-func (g *Group) All() []*lambdastore.Instance {
+func (g *Group) All() []*GroupInstance {
 	g.mu.RLock()
-	all := make([]*lambdastore.Instance, len(g.all))
-	for i := 0; i < len(all); i++ {
-		all[i] = g.all[i].Instance()
-	}
+	all := make([]*GroupInstance, len(g.all))
+	copy(all, g.all)
 	g.mu.RUnlock()
 
 	return all

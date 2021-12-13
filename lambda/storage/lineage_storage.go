@@ -511,10 +511,11 @@ func (s *LineageStorage) doSnapshot(lineage *types.LineageTerm, uploader *s3mana
 		chunk := keyChunk.Value.(*types.Chunk)
 		if !chunk.Backup && chunk.Term <= lineage.Term {
 			allOps = append(allOps, types.LineageOp{
-				Op:   chunk.Op(),
-				Key:  chunk.Key,
-				Id:   chunk.Id,
-				Size: chunk.Size,
+				Op:       chunk.Op(),
+				Key:      chunk.Key,
+				Id:       chunk.Id,
+				Size:     chunk.Size,
+				Accessed: chunk.Accessed,
 			})
 		}
 	}

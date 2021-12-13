@@ -140,10 +140,21 @@ func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
 	}
 }
 
-func (m *Meta) ToCmdPayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
+func (m *Meta) ToBackupPayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
 	meta := m.ToProtocolMeta(id)
 	tips := &url.Values{}
 	tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(key))
+	tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(total))
+	tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(maxChunkSize, 10))
+	meta.Tip = tips.Encode()
+
+	return binary.Marshal(meta)
+}
+
+func (m *Meta) ToDelegatePayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
+	meta := m.ToProtocolMeta(id)
+	tips := &url.Values{}
+	tips.Set(protocol.TIP_DELEGATE_KEY, strconv.Itoa(key))
 	tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(total))
 	tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(maxChunkSize, 10))
 	meta.Tip = tips.Encode()

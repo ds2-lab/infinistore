@@ -9,7 +9,7 @@ import (
 
 type ClusterManager interface {
 	// GetActiveInstances Request available instances with minimum number required.
-	GetActiveInstances(int) []*lambdastore.Instance
+	GetActiveInstances(int) lambdastore.InstanceEnumerator
 
 	// GetSlice Get slice implementation if support
 	GetSlice(int) Slice
@@ -90,12 +90,12 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
 	for {
 		// Not test is 0 based.
-		if test >= len(instances) {
+		if test >= instances.Len() {
 			// Rotation safe: because rotation will not affect the number of active instances.
 			instances = l.cluster.GetActiveInstances((test/len(meta.Placement) + 1) * len(meta.Placement)) // Force scale to ceil(test/meta.chunks)
 
 			// If failed to get required number of instances, reset "test" and wish luck.
-			if test >= len(instances) {
+			if test >= instances.Len() {
 				test = chunkId
 			}
 
@@ -103,7 +103,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			continue
 		}
 
-		ins := instances[test]
+		ins := instances.Instance(test)
 		cmd.GetRequest().InsId = ins.Id()
 		if l.testChunk(ins.NumChunks()+1, ins.Size()+uint64(meta.ChunkSize)) || ins.IsBusy() {
 			// Try next group

@@ -11,6 +11,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
 
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -40,7 +41,8 @@ type MovingWindow struct {
 	startTime time.Time
 
 	scaler         chan *types.ScaleEvent
-	candidateQueue *lambdastore.CandidateQueue
+	backupQueue    *lambdastore.CandidateQueue
+	backupIterator mapreduce.Iterator
 	// scaleCounter int32
 
 	mu   sync.RWMutex
@@ -79,7 +81,8 @@ func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
 	if cluster.numBufferFuncs < 0 {
 		cluster.numBufferFuncs = 0
 	}
-	cluster.candidateQueue = lambdastore.NewCandidateQueue(config.BackupsPerInstance, cluster)
+	cluster.backupQueue = lambdastore.NewCandidateQueue(config.BackupsPerInstance, cluster)
+	cluster.backupIterator, _ = mapreduce.NewIterator(cluster.backupQueue.Candidates())
 	return cluster
 }
 
@@ -96,8 +99,8 @@ func (mw *MovingWindow) Start() error {
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end))
-	if mw.candidateQueue != nil {
-		mw.candidateQueue.Start()
+	if mw.backupQueue != nil {
+		mw.backupQueue.Start()
 	}
 
 	// Set cursor to latest bucket.
@@ -142,9 +145,9 @@ func (mw *MovingWindow) Close() {
 	}
 
 	close(mw.done)
-	if mw.candidateQueue != nil {
-		mw.candidateQueue.Close()
-		mw.candidateQueue = nil
+	if mw.backupQueue != nil {
+		mw.backupQueue.Close()
+		mw.backupQueue = nil
 	}
 	for i, gins := range mw.group.all {
 		gins.Instance().Close()
@@ -192,8 +195,14 @@ func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
 	return nil
 }
 
-func (mw *MovingWindow) GetCandidateQueue() <-chan *lambdastore.Instance {
-	return mw.candidateQueue.Candidates()
+func (mw *MovingWindow) GetBackupCandidates() mapreduce.Iterator {
+	return mw.backupIterator
+}
+
+func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
+	all := mw.GetCurrentBucket().redundantInstances()
+	_, delegates := mw.getBackupsForNode(all, -1, config.BackupsPerInstance)
+	return delegates
 }
 
 // lambdastore.Relocator implementation
@@ -225,7 +234,7 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int, cmd types.Com
 }
 
 // lambdastore.CandidateProvider implementation
-func (mw *MovingWindow) GetBackupCandidates(buf []*lambdastore.Instance) int {
+func (mw *MovingWindow) LoadCandidates(queue *lambdastore.CandidateQueue, buf []*lambdastore.Instance) int {
 	bucketRange := config.NumActiveBuckets
 	if bucketRange > len(mw.buckets) {
 		bucketRange = len(mw.buckets)
@@ -233,16 +242,17 @@ func (mw *MovingWindow) GetBackupCandidates(buf []*lambdastore.Instance) int {
 	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
 
 	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
+
 	num, candidates := mw.getBackupsForNode(all, 0, len(buf))
 	copy(buf[:num], candidates)
 	return num
 }
 
 // metastore.InstanceManger implementation
-func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
+func (mw *MovingWindow) GetActiveInstances(num int) lambdastore.InstanceEnumerator {
 	instances := mw.GetCurrentBucket().activeInstances(num)
 	if len(instances) >= num {
-		return instances
+		return NewGroupInstanceEnumerator(instances)
 	} else {
 		prm := promise.NewPromise()
 		mw.Trigger(
@@ -255,7 +265,7 @@ func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
 			})
 		if err := prm.Error(); err != nil {
 			mw.log.Warn("Failed to get at least %d active instances: %v", num, err)
-			return instances
+			return NewGroupInstanceEnumerator(instances)
 		} else {
 			// Retry
 			return mw.GetActiveInstances(num)
@@ -387,7 +397,7 @@ func (mw *MovingWindow) Rotate() (old *Bucket, inherited int, err error) {
 func (mw *MovingWindow) degrade(bucket *Bucket) int {
 	instances := bucket.getInstances()
 	for _, ins := range instances {
-		ins.Degrade()
+		ins.Instance().Degrade()
 	}
 	mw.numActives -= len(instances)
 	bucket.state = BUCKET_COLD
@@ -408,7 +418,7 @@ func (mw *MovingWindow) expire(bucket *Bucket) int {
 	// Expire instances
 	instances := bucket.getInstances()
 	for _, ins := range instances {
-		ins.Expire()
+		ins.Instance().Expire()
 	}
 	return len(instances)
 }

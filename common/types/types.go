@@ -124,6 +124,8 @@ const (
 
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"
+	// TIP_DELEGATE_KEY Delegate ID.
+	TIP_DELEGATE_KEY = "dele"
 	// TIP_BACKUP_TOTAL Total backups available.
 	TIP_BACKUP_TOTAL = "baks"
 	// TIP_SERVING_KEY Key should be recovered as the first one.

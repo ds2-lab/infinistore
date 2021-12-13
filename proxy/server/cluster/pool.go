@@ -52,22 +52,22 @@ func (s *Pool) NumActives() int {
 // There is no border check for the index, which means the group should solely responsible
 // for the validity of the index, and the index can be a virtual one.
 // This operation will be blocked if no more deployment available
-func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *lambdastore.Instance {
+func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *GroupInstance {
 	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
 	s.actives.Set(ins.Id(), ins)
 	g.Set(ins)
-	return ins.LambdaDeployment.(*lambdastore.Instance)
+	return ins
 }
 
 // Reserve a deployment at ith position in the group.
 // The group may choose to instancize it later or not.
 // This operation will return err if no more deployment available
-func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment, error) {
+func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (*GroupInstance, error) {
 	select {
 	case item := <-s.backend:
 		ins := g.Reserve(idx, item)
 		s.actives.Set(ins.Id(), ins)
-		return ins.LambdaDeployment, nil
+		return ins, nil
 	default:
 		return nil, types.ErrNoSpareDeployment
 	}
@@ -75,7 +75,7 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment
 
 // Reserve a deployment to replace specified instance.
 // Can be a different deployment other than the instance's for different mode.
-func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) {
+func (s *Pool) ReserveForInstance(insId uint64) (*GroupInstance, error) {
 	got, exists := s.getActive(insId)
 	if !exists {
 		return nil, fmt.Errorf("instance %d not found", insId)
@@ -83,7 +83,7 @@ func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) 
 
 	ins := got.(*GroupInstance)
 	if IN_DEPLOYMENT_MIGRATION {
-		return ins.LambdaDeployment, nil
+		return ins, nil
 	} else {
 		return s.ReserveForGroup(ins.group, ins.idx)
 	}
@@ -172,7 +172,12 @@ func (s *Pool) StartMigrator(lambdaId uint64) (string, error) {
 }
 
 func (s *Pool) GetDestination(lambdaId uint64) (types.LambdaDeployment, error) {
-	return pool.ReserveForInstance(lambdaId)
+	gins, err := pool.ReserveForInstance(lambdaId)
+	if err == nil {
+		return gins.LambdaDeployment, err
+	} else {
+		return nil, err
+	}
 }
 
 func initPool(size int) {

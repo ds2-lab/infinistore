@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -35,12 +36,16 @@ func (im *TestInstanceManager) Recycle(dp types.LambdaDeployment) error {
 	return nil
 }
 
-func (im *TestInstanceManager) GetCandidateQueue() <-chan *lambdastore.Instance {
+func (im *TestInstanceManager) GetBackupCandidates() mapreduce.Iterator {
 	return nil
 }
 
-func (im *TestInstanceManager) GetActiveInstances(int) []*lambdastore.Instance {
-	return im.all
+func (im *TestInstanceManager) GetDelegates() []*lambdastore.Instance {
+	return nil
+}
+
+func (im *TestInstanceManager) GetActiveInstances(int) lambdastore.InstanceEnumerator {
+	return lambdastore.NewInstanceEnumerator(im.all)
 }
 
 func (im *TestInstanceManager) GetSlice(int) Slice {

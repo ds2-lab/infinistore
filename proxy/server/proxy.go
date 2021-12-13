@@ -202,7 +202,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
 			p.log.Warn("Failed to replace %v: %v", req.Id, err)
-			status := counter.AddReturned(int(dChunkId))
+			status, _ := counter.AddReturned(int(dChunkId))
 			req.SetResponse(err)
 			counter.ReleaseIfAllReturned(status)
 			return
@@ -217,7 +217,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	if counter.IsFulfilled() {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
-		status := counter.AddReturned(int(dChunkId))
+		status, _ := counter.AddReturned(int(dChunkId))
 		req.Abandon()
 		counter.ReleaseIfAllReturned(status)
 		return
@@ -237,7 +237,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 	if err != nil {
 		p.log.Warn("Failed to request %v: %v", req.Id, err)
-		status := counter.AddReturned(int(dChunkId))
+		status, _ := counter.AddReturned(int(dChunkId))
 		req.SetResponse(err)
 		counter.ReleaseIfAllReturned(status)
 	}
