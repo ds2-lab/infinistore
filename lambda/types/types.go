@@ -22,6 +22,8 @@ const (
 	CHUNK_AVAILABLE  = 0
 	CHUNK_DELETED    = 1
 	CHUNK_RECOVERING = 2
+
+	CHUNK_TOBEBUFFERED = -1
 )
 
 var (
@@ -68,7 +70,7 @@ type Storage interface {
 	GetStream(string) (string, resp.AllReadCloser, *OpRet)
 	Set(string, string, []byte) *OpRet
 	SetStream(string, string, resp.AllReadCloser) *OpRet
-	Del(string, string) *OpRet
+	Del(string) *OpRet
 	Len() int
 	Keys() <-chan string
 	Meta() StorageMeta
@@ -98,6 +100,7 @@ type Chunk struct {
 	Accessed  time.Time
 	Bucket    string
 	Backup    bool
+	BuffIdx   int // Index in buffer queue
 }
 
 func NewChunk(key string, id string, body []byte) *Chunk {
@@ -134,6 +137,10 @@ func (c *Chunk) IsDeleted() bool {
 
 func (c *Chunk) IsRecovering() bool {
 	return atomic.LoadUint32(&c.Status) == CHUNK_RECOVERING || atomic.LoadUint64(&c.Available) < c.Size
+}
+
+func (c *Chunk) IsBuffered(includeTBD bool) bool {
+	return c.BuffIdx > 0 || (includeTBD && c.BuffIdx == CHUNK_TOBEBUFFERED)
 }
 
 func (c *Chunk) Delete() {

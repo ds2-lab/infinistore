@@ -39,6 +39,7 @@ type Conn interface {
 type Command interface {
 	Name() string
 	String() string
+	GetInfo() interface{}
 	GetRequest() *Request
 	// MarkError Mark an failure attempt to send request, return attempts left.
 	MarkError(error) int

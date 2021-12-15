@@ -151,13 +151,15 @@ func (m *Meta) ToBackupPayload(id uint64, key int, total int, maxChunkSize uint6
 	return binary.Marshal(meta)
 }
 
-func (m *Meta) ToDelegatePayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
+func (m *Meta) ToDelegatePayload(id uint64, key int, total int, maxChunkSize uint64) (*protocol.Meta, []byte, error) {
 	meta := m.ToProtocolMeta(id)
 	tips := &url.Values{}
 	tips.Set(protocol.TIP_DELEGATE_KEY, strconv.Itoa(key))
-	tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(total))
+	tips.Set(protocol.TIP_DELEGATE_TOTAL, strconv.Itoa(total))
 	tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(maxChunkSize, 10))
 	meta.Tip = tips.Encode()
 
-	return binary.Marshal(meta)
+	payload, err := binary.Marshal(meta)
+
+	return meta, payload, err
 }

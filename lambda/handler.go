@@ -264,6 +264,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	storeMeta.Calibrate()
 	meta.Capacity = storeMeta.Capacity()
 	meta.Mem = storeMeta.Effective()
+	meta.Modified = storeMeta.Size()
 	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
 	log.Info("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),

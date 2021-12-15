@@ -36,6 +36,7 @@ func (i *InputEvent) IsBackingOnly() bool {
 type Status struct {
 	Capacity uint64 `json:"cap"`
 	Mem      uint64 `json:"mem"`
+	Modified uint64 `json:"modified"`
 	Metas    []Meta `json:"metas"`
 }
 
@@ -124,10 +125,12 @@ const (
 
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"
-	// TIP_DELEGATE_KEY Delegate ID.
-	TIP_DELEGATE_KEY = "dele"
 	// TIP_BACKUP_TOTAL Total backups available.
 	TIP_BACKUP_TOTAL = "baks"
+	// TIP_DELEGATE_KEY Delegate ID.
+	TIP_DELEGATE_KEY = "dele"
+	// TIP_DELEGATE_TOTAL Total delegates available.
+	TIP_DELEGATE_TOTAL = "deles"
 	// TIP_SERVING_KEY Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
 	// TIP_MAX_CHUNK Max chunk size can be backed up.

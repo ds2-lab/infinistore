@@ -936,32 +936,39 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	}
 
 	tips := &url.Values{}
+	reqInsId := uint64(0) // Initialize reqInsId as -1
+	reqInsId--
 	if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET {
 		tips.Set(protocol.TIP_SERVING_KEY, opt.Command.GetRequest().Key)
+		reqInsId = opt.Command.GetRequest().InsId
 	}
 
 	var status protocol.Status
-	if !ins.IsBacking(false) {
-		// Main store only
-		status = protocol.Status{Metas: []protocol.Meta{*ins.Meta.ToProtocolMeta(ins.Id())}}
-		status.Metas[0].Tip = tips.Encode()
-	} else {
-		// Main store + backing store
-		status = protocol.Status{Metas: []protocol.Meta{
-			*ins.Meta.ToProtocolMeta(ins.Id()),
-			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
-		}}
-		if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
-			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
-			status.Metas[0].Tip = tips.Encode()
+	status.Metas = make([]protocol.Meta, 0, 3) // Main, backing, delegating
+	// Main store only
+	status.Metas = append(status.Metas, *ins.Meta.ToProtocolMeta(ins.Id()))
+	if reqInsId == ins.Id() {
+		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
+	}
+	// Backing store
+	if ins.IsBacking(false) {
+		status.Metas = append(status.Metas, *ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()))
+		if reqInsId == ins.Id() {
+			// Reset tips
 			tips = &url.Values{}
 		}
-		// Add backing infos to tips
 		tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(ins.backingId))
 		tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(ins.backingTotal))
 		tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(ins.getRerouteThreshold(), 10))
-		status.Metas[1].Tip = tips.Encode()
+		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
 	}
+	// Check extra one time store status (eg. delegate store)
+	if opt.Command != nil {
+		if meta, ok := opt.Command.GetInfo().(*protocol.Meta); ok {
+			status.Metas = append(status.Metas, *meta)
+		}
+	}
+
 	var localFlags uint64
 	if atomic.LoadUint32(&ins.phase) != PHASE_ACTIVE {
 		localFlags |= protocol.FLAG_BACKING_ONLY

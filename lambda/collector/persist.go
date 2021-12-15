@@ -10,7 +10,7 @@ import (
 type PersistEntry struct {
 	Time         time.Time
 	Op           int
-	Backup       bool
+	Type         int
 	Id           uint64
 	BackupId     int
 	DLineage     time.Duration // Duration for lambda to handle request.
@@ -22,19 +22,19 @@ type PersistEntry struct {
 	Session      string
 }
 
-func AddRecovery(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
-	if addPersist(ts, op, backup, id, backKey, d1, d2, d, b1, b2, o) {
+func AddRecovery(ts time.Time, op int, t int, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) {
+	if addPersist(ts, op, t, id, backKey, d1, d2, d, b1, b2, o) {
 		SaveWithOption(true) // Wait to be saved.
 	}
 }
 
-func AddCommit(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
-	addPersist(ts, op, backup, id, backKey, d1, d2, d, b1, b2, 0)
+func AddCommit(ts time.Time, op int, t int, id uint64, backKey int, d1, d2, d time.Duration, b1, b2 int) {
+	addPersist(ts, op, t, id, backKey, d1, d2, d, b1, b2, 0)
 }
 
-func addPersist(ts time.Time, op int, backup bool, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) bool {
+func addPersist(ts time.Time, op int, t int, id uint64, backKey int, d1, d2, d time.Duration, b1, b2, o int) bool {
 	if Enables&COLLECT_PERSIST > 0 {
-		Send(&PersistEntry{ts, op, backup, id, backKey, d1, d2, d, b1, b2, o, Session.Id})
+		Send(&PersistEntry{ts, op, t, id, backKey, d1, d2, d, b1, b2, o, Session.Id})
 		return true
 	} else {
 		return false
@@ -46,11 +46,7 @@ func (e *PersistEntry) WriteTo(buf *bytes.Buffer) {
 	buf.WriteRune(',')
 	buf.WriteString(strconv.Itoa(e.Op))
 	buf.WriteRune(',')
-	if e.Backup {
-		buf.WriteString("1")
-	} else {
-		buf.WriteString("0")
-	}
+	buf.WriteString(strconv.Itoa(e.Type))
 	buf.WriteRune(',')
 	buf.WriteString(strconv.FormatUint(e.Id, 10))
 	buf.WriteRune(',')

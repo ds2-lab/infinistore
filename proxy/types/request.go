@@ -68,6 +68,10 @@ func (req *Request) Name() string {
 	return strings.ToLower(req.Cmd)
 }
 
+func (req *Request) GetInfo() interface{} {
+	return req.Info
+}
+
 func (req *Request) GetRequest() *Request {
 	return req
 }
