@@ -51,8 +51,10 @@ type Meta struct {
 	// Capacity of the instance.
 	Capacity uint64
 
-	effective uint64
-	size      uint64 // Size of the instance.
+	effective    uint64
+	size         uint64 // Size of the instance.
+	mem          uint64 // Lambda memory waterline
+	sizeModified uint64 // Size of object stored including buffered.
 	// chunks map[string]*ChuckMeta
 	// head ChuckMeta
 	// anchor *ChuckMeta
@@ -72,8 +74,8 @@ func (m *Meta) EffectiveCapacity() uint64 {
 	return m.effective
 }
 
-func (m *Meta) IsFull(adjustment uint64) bool {
-	return m.Size()+adjustment > m.EffectiveCapacity()
+func (m *Meta) ModifiedOccupancy(adjustment uint64) float64 {
+	return float64(m.Size()+adjustment) / float64(m.EffectiveCapacity())
 }
 
 func (m *Meta) ReservedCapacity() uint64 {

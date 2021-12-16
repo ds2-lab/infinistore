@@ -34,10 +34,11 @@ func (i *InputEvent) IsBackingOnly() bool {
 }
 
 type Status struct {
-	Capacity uint64 `json:"cap"`
-	Mem      uint64 `json:"mem"`
-	Modified uint64 `json:"modified"`
-	Metas    []Meta `json:"metas"`
+	Capacity  uint64 `json:"cap"`
+	Mem       uint64 `json:"mem"`
+	Effective uint64 `json:"effe"`
+	Modified  uint64 `json:"modi"`
+	Metas     []Meta `json:"metas"`
 }
 
 type Meta struct {

@@ -137,22 +137,25 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	defer s.lineageMu.Unlock()
 	// s.log.Debug("in mutex of setting key %v", key)
 
-	size := s.meta.IncreaseSize(chunk.Size) // Oversize test.
-	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
-		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
-		s.bufferMeta.DecreaseSize(evicted.Size)
-		s.PersistentStorage.delWithOption(evicted, nil)
-		size = s.meta.Size()
-	}
-	if size >= s.meta.Effective() {
-		s.meta.DecreaseSize(chunk.Size)
-		return types.OpError(ErrOOStorage)
+	// Backup space is reserved and not counted.
+	if !chunk.Backup {
+		size := s.meta.IncreaseSize(chunk.Size) // Oversize test.
+		for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
+			evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
+			s.bufferMeta.DecreaseSize(evicted.Size)
+			s.PersistentStorage.delWithOption(evicted, nil)
+			size = s.meta.Size()
+		}
+		if size >= s.meta.Effective() {
+			s.meta.DecreaseSize(chunk.Size)
+			return types.OpError(ErrOOStorage)
+		}
 	}
 
 	if opt == nil {
 		opt = &types.OpWrapper{}
 	}
-	opt.Sized = true
+	opt.Sized = true // Size update has been dealed for both backups and nonbackups.
 	return s.PersistentStorage.setWithOption(key, chunk, opt)
 }
 
@@ -396,6 +399,7 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 }
 
 func (s *LineageStorage) ClearBackup() {
+	// Batch cleanup, no size need to be updated.
 	for keyValue := range s.backup.Iter() {
 		chunk := keyValue.Value.(*types.Chunk)
 		chunk.Body = nil

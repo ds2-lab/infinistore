@@ -14,7 +14,8 @@ import (
 )
 
 var (
-	DefaultRune rune = '▣'
+	DefaultRune   rune = '▣'
+	ProgressRunes      = []rune{'䷁', '䷗', '䷒', '䷊', '䷡', '䷪', '䷀'}
 )
 
 type ClusterView struct {
@@ -23,16 +24,18 @@ type ClusterView struct {
 	Cols    int
 	Compact bool
 
+	dash       DashControl
 	origin     image.Point
 	mapper     image.Point
 	mapbase    int
 	invalidate bool
 }
 
-func NewClusterView(title string) *ClusterView {
+func NewClusterView(dash DashControl, title string) *ClusterView {
 	view := &ClusterView{
 		Canvas:  ui.NewCanvas(),
 		Compact: false,
+		dash:    dash,
 		origin:  image.Pt(0, 0),
 		mapper:  image.Pt(2, 4),
 	}
@@ -40,10 +43,11 @@ func NewClusterView(title string) *ClusterView {
 	return view
 }
 
-func NewClusterComponent() *ClusterView {
+func NewClusterComponent(dash DashControl) *ClusterView {
 	view := &ClusterView{
 		Compact: true,
 		Canvas:  ui.NewCanvas(),
+		dash:    dash,
 		origin:  image.Pt(0, 0),
 		mapper:  image.Pt(2, 4),
 	}
@@ -106,8 +110,8 @@ func (v *ClusterView) updateMapper(len int) {
 
 	// log.Printf("reset mapper for len:%d", len)
 	v.mapper.X = (v.Inner.Max.X - v.Inner.Min.X + 1) * 2 / (v.Cols + 1)
-	if v.mapper.X < 2 {
-		v.mapper.X = 2 // minimum recognizable interval
+	if v.mapper.X < 4 {
+		v.mapper.X = 4 // minimum recognizable interval: 1 character + 1 space
 	}
 	v.origin.X = v.Inner.Min.X + v.Inner.Max.X + 1 - v.mapper.X*v.Cols/2 // + v.mapper.X
 
@@ -140,9 +144,19 @@ func (v *ClusterView) getCellByInstance(ins types.InstanceStats) *drawille.Cell 
 
 	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_SHADOW {
 		return &drawille.Cell{Rune: '▢', Color: drawille.Color(ui.ColorWhite)}
-	} else {
-		return &drawille.Cell{Color: drawille.Color(v.getColorByStatus(status))}
 	}
+
+	ret := &drawille.Cell{Color: drawille.Color(v.getColorByStatus(status))}
+	if v.dash.GetOccupancyMode() == types.InstanceOccupancyDisabled {
+		ret.Rune = DefaultRune
+	} else {
+		progress := int(math.Round(ins.Occupancy(v.dash.GetOccupancyMode()) * float64(len(ProgressRunes)-1)))
+		if progress >= len(ProgressRunes) {
+			progress = len(ProgressRunes) - 1
+		}
+		ret.Rune = ProgressRunes[progress]
+	}
+	return ret
 }
 
 func (v *ClusterView) getColorByStatus(status uint64) ui.Color {

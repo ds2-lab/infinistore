@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -105,7 +106,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 		ins := instances.Instance(test)
 		cmd.GetRequest().InsId = ins.Id()
-		if l.testChunk(ins.NumChunks()+1, ins.Size()+uint64(meta.ChunkSize)) || ins.IsBusy() {
+		if l.testChunk(ins, uint64(meta.ChunkSize)) || ins.IsBusy() {
 			// Try next group
 			test += len(meta.Placement)
 		} else if err := ins.DispatchWithOptions(cmd, lambdastore.BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
@@ -122,8 +123,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 			// Check if scaling is reqired.
 			// NOTE: It is the responsibility of the cluster to handle duplicated events.
-			if numChunks >= global.Options.GetInstanceChunkThreshold() ||
-				size >= global.Options.GetInstanceThreshold() {
+			if l.testChunk(ins, 0) {
 				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.Capacity)
 				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
 			}
@@ -133,6 +133,10 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	}
 }
 
-func (l *DefaultPlacer) testChunk(num int, size uint64) bool {
-	return num > global.Options.GetInstanceChunkThreshold() || size > global.Options.GetInstanceThreshold()
+func (l *DefaultPlacer) testChunk(ins *lambdastore.Instance, inc uint64) bool {
+	numChunk := 0
+	if inc > 0 {
+		numChunk = 1
+	}
+	return ins.NumChunks()+numChunk > global.Options.GetInstanceChunkThreshold() || ins.Meta.ModifiedOccupancy(inc) > config.Threshold
 }

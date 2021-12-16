@@ -235,6 +235,7 @@ func (ins *Instance) String() string {
 	return ins.Description()
 }
 
+// InstantStats implementation
 func (ins *Instance) Status() uint64 {
 	// 0x000F  status
 	// 0x00F0  connection
@@ -256,6 +257,19 @@ func (ins *Instance) Status() uint64 {
 		(backing << 8) +
 		(uint64(atomic.LoadUint32(&ins.phase)) << 12) +
 		(failure << 28)
+}
+
+func (ins *Instance) Occupancy(mode types.InstanceOccupancyMode) float64 {
+	switch mode {
+	case types.InstanceOccupancyMain:
+		return ins.Meta.ModifiedOccupancy(0)
+	case types.InstanceOccupancyModified:
+		return float64(ins.Meta.sizeModified) / float64(ins.Meta.EffectiveCapacity())
+	case types.InstanceOccupancyMax:
+		return float64(ins.Meta.mem) / float64(ins.Meta.Capacity)
+	default:
+		return 0.0
+	}
 }
 
 func (ins *Instance) Description() string {
@@ -1044,7 +1058,9 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 
 	// Handle output
 	if outputStatus.Capacity > 0 && outputStatus.Mem > 0 {
-		ins.Meta.ResetCapacity(outputStatus.Capacity, outputStatus.Mem)
+		ins.Meta.ResetCapacity(outputStatus.Capacity, outputStatus.Effective)
+		ins.Meta.mem = outputStatus.Mem
+		ins.Meta.sizeModified = outputStatus.Modified
 		ins.log.Debug("Capacity synchronized: cap %d, effective %d, stored %d", ins.Meta.Capacity, ins.Meta.EffectiveCapacity(), ins.Meta.Size())
 	}
 	if len(outputStatus.Metas) > 0 {

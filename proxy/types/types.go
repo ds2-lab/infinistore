@@ -12,6 +12,29 @@ import (
 
 var ErrNoSpareDeployment = errors.New("no spare deployment")
 
+type InstanceOccupancyMode int
+
+const (
+	InstanceOccupancyMain InstanceOccupancyMode = iota
+	InstanceOccupancyModified
+	InstanceOccupancyMax
+	InstanceOccupancyDisabled
+	InstanceOccupancyMod
+)
+
+func (iom InstanceOccupancyMode) String() string {
+	switch iom {
+	case InstanceOccupancyMain:
+		return "main"
+	case InstanceOccupancyModified:
+		return "modified"
+	case InstanceOccupancyMax:
+		return "max"
+	default:
+		return "disabled"
+	}
+}
+
 type Id struct {
 	ReqId    string
 	ChunkId  string
@@ -76,6 +99,7 @@ type GroupedClusterStats interface {
 
 type InstanceStats interface {
 	Status() uint64
+	Occupancy(InstanceOccupancyMode) float64
 }
 
 type ScaleEvent struct {
