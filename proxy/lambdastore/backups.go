@@ -59,19 +59,33 @@ type Backups struct {
 func NewBackups(ins *Instance, backups []Backer) *Backups {
 	baks := &Backups{
 		instance:   ins,
-		backups:    backups,
+		backups:    make([]Backer, len(backups)),
 		required:   len(backups),
 		availables: len(backups),
 		log:        ins.log,
 	}
-	for i, bak := range backups {
-		baks.backups[i] = bak
+	copy(baks.backups, backups)
+	baks.locator.Reset(len(baks.backups))
+	return baks
+}
+
+func NewBackupsFromInstances(ins *Instance, backups []*Instance, adapter BackerGetter) *Backups {
+	baks := &Backups{
+		instance:   ins,
+		backups:    make([]Backer, len(backups)),
+		required:   len(backups),
+		availables: len(backups),
+		adapter:    adapter,
+		log:        ins.log,
+	}
+	for i, ins := range backups {
+		baks.backups[i] = baks.getBacker(ins)
 	}
 	baks.locator.Reset(len(baks.backups))
 	return baks
 }
 
-func (b *Backups) Reset(required int, candidates []*Instance) {
+func (b *Backups) ResetCandidates(required int, candidates []*Instance) {
 	if cap(b.backups) < required {
 		backups := make([]Backer, required)
 		if len(b.backups) > 0 {

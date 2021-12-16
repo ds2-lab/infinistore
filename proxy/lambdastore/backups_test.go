@@ -17,6 +17,10 @@ var (
 
 type testBacker int
 
+func (b *testBacker) Id() uint64 {
+	return uint64(*b)
+}
+
 func (b *testBacker) ReserveBacking() error {
 	if *b == testBacker(readinessReady) {
 		*b = testBacker(readinessReserved)
@@ -59,7 +63,7 @@ func newBackups(bak, cand int) *testBackups {
 	for i := 0; i < cand; i++ {
 		candidates[i] = NewInstance("Test", uint64(i))
 	}
-	backups.Reset(bak, candidates)
+	backups.ResetCandidates(bak, candidates)
 	return ret
 }
 

@@ -183,6 +183,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				return Lineage.Status().ProtocolStatus(), err
 			} else if !consistent {
 				if input.IsBackingOnly() && i == 0 {
+					// if i == 0 {
 					// In backing only mode, we will not try to recover main repository.
 					// And any data loss will be regarded as signs of reclaimation.
 					flags |= protocol.PONG_RECLAIMED
@@ -548,7 +549,7 @@ func main() {
 
 		var input protocol.InputEvent
 		input.Sid = "dummysid"
-		input.Status = protocol.Status{Metas: make([]protocol.Meta, 1, 2)}
+		input.Status = protocol.Status{Metas: make([]protocol.Meta, 1, 3)}
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
 		// })
@@ -567,6 +568,9 @@ func main() {
 		flag.Uint64Var(&input.Status.Metas[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
 		flag.Uint64Var(&input.Status.Metas[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
 		flag.StringVar(&input.Status.Metas[len(input.Status.Metas)-1].Tip, "tip", "", "Tips in http query format: bak=1&baks=10")
+
+		// More meta
+		strMetas := flag.String("metas", "", "Extra metas")
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
@@ -609,6 +613,12 @@ func main() {
 		tips, err := url.ParseQuery(input.Status.Metas[len(input.Status.Metas)-1].Tip)
 		if err != nil {
 			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status.Metas[len(input.Status.Metas)-1].Tip, err)
+		}
+
+		var metas []protocol.Meta
+		json.Unmarshal([]byte(*strMetas), &metas)
+		if len(metas) > 0 {
+			input.Status.Metas = append(input.Status.Metas, metas...)
 		}
 
 		var payload *protocol.Meta
