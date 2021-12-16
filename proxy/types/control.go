@@ -17,6 +17,7 @@ type Control struct {
 	Addr       string
 	Deployment string
 	Id         uint64
+	Info       interface{}
 	Payload    []byte
 	*Request
 	conn     Conn
@@ -30,6 +31,10 @@ func (req *Control) String() string {
 
 func (req *Control) Name() string {
 	return strings.ToLower(req.Cmd)
+}
+
+func (req *Control) GetInfo() interface{} {
+	return req.Info
 }
 
 func (req *Control) GetRequest() *Request {

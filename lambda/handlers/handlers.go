@@ -380,7 +380,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId := c.Arg(1).String()
 	key := c.Arg(2).String()
 
-	ret = Store.Del(key, chunkId)
+	ret = Store.Del(key)
 	if ret.Error() == nil {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{

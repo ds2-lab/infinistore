@@ -142,12 +142,12 @@ func (a *StorageAdapter) Migrate(key string) (string, *types.OpRet) {
 	return cmd.chunk, ret
 }
 
-func (a *StorageAdapter) Del(key string, chunk string) *types.OpRet {
+func (a *StorageAdapter) Del(key string) *types.OpRet {
 	cmd := cmds.Get().(*storageAdapterCommand)
 	defer cmds.Put(cmd)
 
 	cmd.key = key
-	cmd.chunk = chunk
+	cmd.chunk = ""
 	cmd.handler = a.delHandler
 	a.serializer <- cmd
 
@@ -155,7 +155,7 @@ func (a *StorageAdapter) Del(key string, chunk string) *types.OpRet {
 }
 
 func (a *StorageAdapter) LocalDel(key string) {
-	a.store.Del(key, "")
+	a.store.Del(key)
 }
 func (a *StorageAdapter) Len() int {
 	return a.store.Len()
@@ -163,6 +163,10 @@ func (a *StorageAdapter) Len() int {
 
 func (a *StorageAdapter) Keys() <-chan string {
 	return a.store.Keys()
+}
+
+func (a *StorageAdapter) Meta() types.StorageMeta {
+	return a.store.Meta()
 }
 
 func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
@@ -286,7 +290,7 @@ func (a *StorageAdapter) delHandler(cmd *storageAdapterCommand) {
 	}
 
 	log.Debug("Forwarding Del cmd on key %s(chunk %s): success", cmd.key, cmd.chunk)
-	cmd.ret <- a.store.Del(cmd.key, cmd.chunk)
+	cmd.ret <- a.store.Del(cmd.key)
 }
 
 func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storageAdapterCommand) (err error) {
@@ -301,7 +305,7 @@ func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storag
 		var strErr string
 		strErr, err = reader.ReadError()
 		if err == nil {
-			err = errors.New(fmt.Sprintf("Error in migration response: %s", strErr))
+			err = fmt.Errorf("error in migration response: %s", strErr)
 		}
 		return err
 	}
@@ -328,7 +332,7 @@ func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storag
 	}
 
 	if strings.ToLower(cmdName) == "get" {
-		cmd.bodyStream, err = reader.StreamBulk()
+		cmd.bodyStream, _ = reader.StreamBulk()
 	}
 	return nil
 }

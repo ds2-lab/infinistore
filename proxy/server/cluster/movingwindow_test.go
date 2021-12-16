@@ -18,14 +18,14 @@ var _ = Describe("MovingWindow", func() {
 	It("should success to scale on demand if more active instances are requested", func() {
 		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
-		cluster.candidateQueue = nil // disable candidateQueue
+		cluster.backupQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 2))
 
 		instances := cluster.GetActiveInstances(NumFunctions * 3)
-		Expect(len(instances)).To(Equal(NumFunctions * 3))
+		Expect(instances.Len()).To(Equal(NumFunctions * 3))
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 3))
 
@@ -35,7 +35,7 @@ var _ = Describe("MovingWindow", func() {
 	It("should success to scale on demand after rotated", func() {
 		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
-		cluster.candidateQueue = nil // disable candidateQueue
+		cluster.backupQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
 
@@ -47,7 +47,7 @@ var _ = Describe("MovingWindow", func() {
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 2))
 
 		instances := cluster.GetActiveInstances(NumFunctions * 3)
-		Expect(len(instances)).To(Equal(NumFunctions * 3))
+		Expect(instances.Len()).To(Equal(NumFunctions * 3))
 
 		Expect(cluster.GetCurrentBucket().len()).To(Equal(NumFunctions * 3))
 
@@ -57,7 +57,7 @@ var _ = Describe("MovingWindow", func() {
 	It("should concurrent scaling ok", func() {
 		MaxBackingNodes = 10
 		cluster := NewMovingWindowWithOptions(NumFunctions)
-		cluster.candidateQueue = nil // disable candidateQueue
+		cluster.backupQueue = nil // disable candidateQueue
 		lambdastore.CM = cluster
 		cluster.Start()
 		concurrency := 1000

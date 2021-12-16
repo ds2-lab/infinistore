@@ -37,7 +37,7 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	if v.maxMemory < mem {
 		v.maxMemory = mem
 	}
-	v.Text = fmt.Sprintf("Mem: %s, Max: %s", humanize.Bytes(mem), humanize.Bytes(v.maxMemory))
+	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s", v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory))
 
 	// Draw overwrite
 	v.Block.Draw(buf)

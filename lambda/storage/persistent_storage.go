@@ -52,9 +52,9 @@ type PersistentStorage struct {
 	s3Downloader    *mys3.Downloader
 }
 
-func NewPersistentStorage(id uint64) *PersistentStorage {
+func NewPersistentStorage(id uint64, cap uint64) *PersistentStorage {
 	storage := &PersistentStorage{
-		Storage: NewStorage(id),
+		Storage: NewStorage(id, cap),
 	}
 	storage.helper = storage
 	storage.persistHelper = storage
@@ -62,60 +62,57 @@ func NewPersistentStorage(id uint64) *PersistentStorage {
 }
 
 // Storage Implementation
-func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (string, []byte, *types.OpRet) {
+func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (*types.Chunk, *types.OpRet) {
 	chunk, ok := s.helper.get(key)
 	if !ok {
 		// No entry
-		return "", nil, types.OpError(types.ErrNotFound)
+		return nil, types.OpError(types.ErrNotFound)
 	}
 
-	val := chunk.Access()
+	// For objects in buffer, we will not touch object on accessing.
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
 	if chunk.IsDeleted() {
-		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpError(types.ErrDeleted)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
-		return chunk.Id, val, types.OpSuccess()
+		return chunk, types.OpSuccess()
 	}
 
 	// Recovering, wait to be notified.
 	chunk.WaitRecovered()
 
 	// Check again
-	val = chunk.Access()
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
 	if chunk.IsDeleted() {
-		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpError(types.ErrDeleted)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
-		return chunk.Id, val, types.OpSuccess()
+		return chunk, types.OpSuccess()
 	} else {
-		return chunk.Id, nil, types.OpError(types.ErrIncomplete)
+		return nil, types.OpError(types.ErrIncomplete)
 	}
 }
 
-func (s *PersistentStorage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
-	chunk, ok := s.helper.get(key)
-	if !ok {
-		chunk = s.helper.newChunk(key, chunkId, uint64(len(val)), val)
-	} else {
-		// No version control at store level, val can be changed.
-		chunk.Body = val
-		chunk.Size = uint64(len(val))
-		chunk.Available = chunk.Size
-	}
-
-	s.set(key, chunk)
+func (s *PersistentStorage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+	s.Storage.setWithOption(key, chunk, opt)
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
 			LineageOp: types.LineageOp{
 				Op:       types.OP_SET,
 				Key:      key,
-				Id:       chunkId,
+				Id:       chunk.Id,
 				Size:     chunk.Size,
 				Accessed: chunk.Accessed,
-				Bucket:   chunk.Bucket,
 			},
 			OpRet: types.OpDelayedSuccess(),
-			Body:  val,
+			Body:  chunk.Body,
+		}
+		if chunk.BuffIdx > 0 {
+			op.LineageOp.BIdx = chunk.BuffIdx
 		}
 		// Copy options. Field "Persisted" only so far.
 		if opt != nil {
@@ -138,7 +135,7 @@ func (s *PersistentStorage) newChunk(key string, chunkId string, size uint64, va
 }
 
 func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64) *types.OpRet {
-	_, _, err := s.helper.getWithOption(key, nil)
+	_, err := s.helper.getWithOption(key, nil)
 	if err.Error() == nil {
 		return err
 	}
@@ -181,9 +178,32 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 
 	// This is to reuse persistent implementation.
 	// Chunk inserted previously will be loaded, and no new chunk will be created.
-	ret := s.helper.setWithOption(key, chunkId, chunk.Body, &types.OpWrapper{Persisted: true})
+	ret := s.helper.setWithOption(key, chunk, &types.OpWrapper{Persisted: true})
 	chunk.NotifyRecovered()
 	return ret
+}
+
+func (s *PersistentStorage) delWithOption(chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+	s.Storage.delWithOption(chunk, opt)
+
+	if s.chanOps != nil {
+		op := &types.OpWrapper{
+			LineageOp: types.LineageOp{
+				Op:       types.OP_DEL,
+				Key:      chunk.Key,
+				Id:       chunk.Id,
+				Size:     chunk.Size,
+				Accessed: chunk.Accessed,
+				// Ret: make(chan error, 1),
+				Bucket: chunk.Bucket,
+			},
+			OpRet: types.OpDelayedSuccess(),
+		}
+		s.chanOps <- op
+		return op.OpRet
+	} else {
+		return types.OpSuccess()
+	}
 }
 
 func (s *PersistentStorage) getBucket(key string) string {

@@ -708,7 +708,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
-		conn.log.Warn("Request not found: %s", reqId)
+		conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
 		// Set response and exhaust value
 		conn.SetResponse(rsp, false)
 		if err := stream.Close(); err != nil {
@@ -718,10 +718,9 @@ func (conn *Connection) getHandler(start time.Time) {
 		return
 	}
 
-	status := counter.AddSucceeded(chunk, recovered == 1)
-	// Check if chunks are enough? Shortcut response if YES.
-	if counter.IsLate(status) {
-		conn.log.Debug("GOT %v, abandon.", rsp.Id)
+	status, returned := counter.AddSucceeded(chunk, recovered == 1)
+	if returned || counter.IsLate(status) {
+		conn.log.Debug("GOT %v, abandon (duplicated: %v)", rsp.Id, returned)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		// Connection will not be flagged available until SkipBulk() is executed.
 		req, _ := conn.SetResponse(rsp, false)

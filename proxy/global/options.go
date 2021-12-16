@@ -66,14 +66,6 @@ func (o *CommandlineOptions) GetInstanceCapacity() uint64 {
 	return o.funcCapacity
 }
 
-func (o *CommandlineOptions) GetInstanceThreshold() uint64 {
-	if o.funcThreshold == 0 {
-		o.funcThreshold = uint64(float64(o.GetInstanceCapacity()) * config.Threshold)
-	}
-
-	return o.funcThreshold
-}
-
 func (o *CommandlineOptions) GetInstanceChunkThreshold() int {
 	if o.funcChunkThreshold == 0 {
 		o.funcChunkThreshold = int(o.GetInstanceCapacity() / config.ChunkThreshold)

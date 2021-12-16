@@ -42,7 +42,7 @@ const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
 const InstanceOverhead = 300 * 1000000 // 200MB
 
 // Threshold Scaling out avg instance size threshold
-const Threshold = 0.9 // Don't set beyond 0.8
+const Threshold = 0.9 // Don't set beyond 0.9
 
 // Maximum chunk per instance
 const ChunkThreshold = 8192 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold

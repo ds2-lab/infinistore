@@ -5,7 +5,7 @@ import "sync"
 type CandidateProvider func() *Instance
 
 type CandidatesProvider interface {
-	GetBackupCandidates([]*Instance) int
+	LoadCandidates(*CandidateQueue, []*Instance) int
 }
 
 type CandidateQueue struct {
@@ -23,12 +23,21 @@ func NewCandidateQueue(bufsize int, provider CandidatesProvider) *CandidateQueue
 		buf:       make([]*Instance, bufsize),
 		pos:       bufsize,
 		allocator: make(chan *Instance, bufsize),
-		done:      make(chan struct{}),
 	}
 }
 
-func (q *CandidateQueue) Start() {
-	go q.start()
+// Start the autoload service
+func (q *CandidateQueue) Start() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.done == nil {
+		q.done = make(chan struct{})
+		go q.start()
+		return true
+	}
+
+	return false
 }
 
 func (q *CandidateQueue) Candidates() <-chan *Instance {
@@ -37,21 +46,24 @@ func (q *CandidateQueue) Candidates() <-chan *Instance {
 
 func (q *CandidateQueue) Close() {
 	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.done == nil {
+		return
+	}
 
 	select {
 	case <-q.done:
 	default:
 		close(q.done)
 	}
-
-	q.mu.Unlock()
 }
 
 func (q *CandidateQueue) start() {
 	for {
 		if q.pos == len(q.buf) {
 			q.buf = q.buf[:cap(q.buf)] // reset len
-			n := q.provider.GetBackupCandidates(q.buf)
+			n := q.provider.LoadCandidates(q, q.buf)
 			if n == 0 {
 				close(q.allocator)
 				return

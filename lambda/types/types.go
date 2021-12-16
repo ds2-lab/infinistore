@@ -22,6 +22,8 @@ const (
 	CHUNK_AVAILABLE  = 0
 	CHUNK_DELETED    = 1
 	CHUNK_RECOVERING = 2
+
+	CHUNK_TOBEBUFFERED = -1
 )
 
 var (
@@ -31,8 +33,35 @@ var (
 	ErrIncomplete   = errors.New("key incomplete")
 )
 
+const ()
+
 type Loggable interface {
 	ConfigLogger(int, bool)
+}
+
+type CalibratePriority int
+
+type StorageMeta interface {
+	// Capacity is physical memory allowed.
+	Capacity() uint64
+
+	// System is real memory used.
+	System() uint64
+
+	// Waterline is max memory used.
+	Waterline() uint64
+
+	// Effectetive is dynamic capacity calculated.
+	Effective() uint64
+
+	// Reserved is reserved capacity configured.
+	Reserved() uint64
+
+	// Size is the size stored.
+	Size() uint64
+
+	// Calibrate adjusts capacity after each invocation.
+	Calibrate()
 }
 
 type Storage interface {
@@ -41,9 +70,10 @@ type Storage interface {
 	GetStream(string) (string, resp.AllReadCloser, *OpRet)
 	Set(string, string, []byte) *OpRet
 	SetStream(string, string, resp.AllReadCloser) *OpRet
-	Del(string, string) *OpRet
+	Del(string) *OpRet
 	Len() int
 	Keys() <-chan string
+	Meta() StorageMeta
 }
 
 type PersistentStorage interface {
@@ -70,6 +100,7 @@ type Chunk struct {
 	Accessed  time.Time
 	Bucket    string
 	Backup    bool
+	BuffIdx   int // Index in buffer queue
 }
 
 func NewChunk(key string, id string, body []byte) *Chunk {
@@ -106,6 +137,10 @@ func (c *Chunk) IsDeleted() bool {
 
 func (c *Chunk) IsRecovering() bool {
 	return atomic.LoadUint32(&c.Status) == CHUNK_RECOVERING || atomic.LoadUint64(&c.Available) < c.Size
+}
+
+func (c *Chunk) IsBuffered(includeTBD bool) bool {
+	return c.BuffIdx > 0 || (includeTBD && c.BuffIdx == CHUNK_TOBEBUFFERED)
 }
 
 func (c *Chunk) Delete() {
