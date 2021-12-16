@@ -170,6 +170,7 @@ type Instance struct {
 	coolReset       chan struct{}
 	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
 	numInsFailure   int    // # of continues instance failure.
+	client          invoker.FunctionInvoker
 	lambdaCanceller context.CancelFunc
 
 	// Connection management
@@ -949,12 +950,11 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
-	var client invoker.FunctionInvoker
 	switch global.Options.GetInvoker() {
 	case global.InvokerLocal:
-		client = &invoker.LocalInvoker{}
+		ins.client = &invoker.LocalInvoker{}
 	default:
-		client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+		ins.client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
 	}
 
 	tips := &url.Values{}
@@ -1028,7 +1028,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	ins.mu.Lock()
 	ins.lambdaCanceller = cancel
 	ins.mu.Unlock()
-	output, err := client.InvokeWithContext(ctx, input)
+	output, err := ins.client.InvokeWithContext(ctx, input)
+	ins.client = nil
 	ins.mu.Lock()
 	ins.lambdaCanceller = nil
 	ins.mu.Unlock()

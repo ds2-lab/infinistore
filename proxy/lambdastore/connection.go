@@ -13,6 +13,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -819,6 +820,15 @@ func (conn *Connection) initMigrateHandler() {
 func (conn *Connection) bye() {
 	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
+		client := conn.instance.client
+		if client != nil {
+			if local, ok := client.(*invoker.LocalInvoker); ok {
+				sid, _ := conn.r.ReadBulkString()
+				payload, _ := conn.r.ReadBulk(nil)
+				conn.log.Info("Got sid %s and payload %v", sid, payload)
+				local.SetOutputPayload(sid, payload)
+			}
+		}
 		conn.instance.bye(conn)
 	}
 }

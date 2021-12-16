@@ -38,7 +38,7 @@ func NewPooledBufferedWriterReadFromProvider(size int) *PooledBufferedReadFromPr
 func (p *PooledBufferedReadFromProvider) GetReadFrom(writer io.Writer) (r s3manager.WriterReadFrom, cleanup func()) {
 	buffer, _ := p.pool.Get().(*bufferedReadFrom)
 	if buffer == nil {
-		buffer = &bufferedReadFrom{bufferedWriter: bufio.NewWriterSize(nil, p.size)}
+		buffer = &bufferedReadFrom{bufferedWriter: bufio.NewWriterSize(writer, p.size)}
 	} else {
 		buffer.Reset(writer)
 	}

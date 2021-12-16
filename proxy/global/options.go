@@ -31,7 +31,6 @@ type CommandlineOptions struct {
 
 	lambdaPrefix       string
 	funcCapacity       uint64
-	funcThreshold      uint64
 	funcChunkThreshold int
 	disableRecovery    bool
 	cluster            string

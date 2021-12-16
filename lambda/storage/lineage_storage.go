@@ -108,18 +108,25 @@ func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (*types
 		s.getSafe.Wait()
 	}
 
-	// Now we're safe to proceed.
-	if chunk.IsBuffered(false) {
-		// Ask to not update chunk.Accessed.
-		if opt == nil {
-			opt = &types.OpWrapper{}
-		}
-		opt.Accessed = true
+	// Ask to not update chunk.Accessed.
+	if opt == nil {
+		opt = &types.OpWrapper{}
+	}
+	opt.Accessed = true
+
+	chunk, ret := s.PersistentStorage.getWithOption(key, opt)
+	if ret.Error() != nil {
+		return chunk, ret
+	} else if chunk.IsBuffered(false) {
 		// Increase the priority to be evicted, since the key will be migrated to hot node.
 		chunk.Accessed = time.Time{}
 		s.bufferFix(chunk)
+	} else {
+		// Make up for other objects.
+		chunk.Access()
 	}
-	return s.PersistentStorage.getWithOption(key, opt)
+
+	return chunk, ret
 }
 
 func (s *LineageStorage) set(key string, chunk *types.Chunk) {

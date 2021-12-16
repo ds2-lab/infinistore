@@ -153,11 +153,11 @@ func (c *RequestCounter) AddSucceeded(chunk int, recovered bool) (uint64, bool) 
 	}
 
 	if !marked {
-		return c.Status(), marked
+		return c.Status(), !marked
 	} else if recovered {
-		return atomic.AddUint64(&c.status, REQCNT_STATUS_RECOVERED|REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), marked
+		return atomic.AddUint64(&c.status, REQCNT_STATUS_RECOVERED|REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), !marked
 	} else {
-		return atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), marked
+		return atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), !marked
 	}
 }
 
@@ -168,9 +168,9 @@ func (c *RequestCounter) AddReturned(chunk int) (uint64, bool) {
 	}
 
 	if !marked {
-		return c.Status(), marked
+		return c.Status(), !marked
 	} else {
-		return atomic.AddUint64(&c.status, REQCNT_STATUS_RETURNED), marked
+		return atomic.AddUint64(&c.status, REQCNT_STATUS_RETURNED), !marked
 	}
 }
 
