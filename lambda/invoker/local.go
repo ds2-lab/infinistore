@@ -29,7 +29,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	var input protocol.InputEvent
 	json.Unmarshal(invokeInput.Payload, &input)
 
-	log.Println("invoking lambda...")
+	log.Printf("invoking lambda %d...\n", input.Id)
 
 	args := make([]string, 0, 10)
 	args = append(args, "-dryrun")
@@ -49,6 +49,11 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 		args = append(args, fmt.Sprintf("-snapshotsize=%d", input.Status.Metas[0].SnapshotSize))
 		args = append(args, fmt.Sprintf("-tip=%s", input.Status.Metas[0].Tip))
 	}
+	if len(input.Status.Metas) > 1 {
+		strMetas, _ := json.Marshal(input.Status.Metas[1:])
+		args = append(args, fmt.Sprintf("-metas=%s", string(strMetas)))
+	}
+	// log.Printf("args: %v\n", args)
 
 	cmd := exec.CommandContext(ctx, "lambda", args...)
 	cmd.Stdout = os.Stdout

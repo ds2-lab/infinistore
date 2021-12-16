@@ -345,7 +345,7 @@ func (p *Proxy) CollectData() {
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
 	instance := arg.(*lambdastore.Instance)
-	ctrl.Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = instance.Id()
+	ctrl.GetRequest().Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = instance.Id()
 	p.log.Debug("async updated instance %v", int(instance.Id()))
 }
 

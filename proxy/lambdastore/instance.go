@@ -308,7 +308,7 @@ func (ins *Instance) StatusDescription() string {
 }
 
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
-	ins.backups.Reset(numBak, candidates)
+	ins.backups.ResetCandidates(numBak, candidates)
 }
 
 func (ins *Instance) Dispatch(cmd types.Command) error {
@@ -488,15 +488,9 @@ func (ins *Instance) startDelegationLocked() int {
 		return ins.delegates.Len()
 	}
 
-	candidates := CM.GetDelegates()
+	delegates := CM.GetDelegates()
 	// TODO: do some filtering
-	delegates := make([]Backer, len(candidates))
-	for i, cand := range candidates {
-		delegates[i] = &Delegate{
-			Instance: cand,
-		}
-	}
-	ins.delegates = NewBackups(ins, delegates)
+	ins.delegates = NewBackupsFromInstances(ins, delegates, &DelegateBackerAdapter{})
 
 	// Start backup and build logs
 	var msg strings.Builder
@@ -985,8 +979,11 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
 	}
 	// Check extra one time store status (eg. delegate store)
+	// ins.log.Info("invoke with command: %v", opt.Command)
 	if opt.Command != nil {
+		// ins.log.Info("command with info: %v", opt.Command.GetInfo())
 		if meta, ok := opt.Command.GetInfo().(*protocol.Meta); ok {
+			// ins.log.Info("meta added: %v", meta)
 			status.Metas = append(status.Metas, *meta)
 		}
 	}
@@ -1304,7 +1301,13 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// Two options available to handle reclaiming event:
 		// 1. Recover to prevail node and reroute to the node. (current implementation)
 		// 2. Report not found
-		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() && ins.relocateGetRequest(cmd.GetRequest()) {
+		reclaimPass := false
+		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
+			reclaimPass = reclaimPass || ins.tryRerouteDelegateRequest(cmd.GetRequest())
+			reclaimPass = reclaimPass || ins.relocateGetRequest(cmd.GetRequest())
+		}
+
+		if reclaimPass {
 			return
 		} else if err != nil {
 			// Handle errors
@@ -1400,14 +1403,14 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 	return true
 }
 
-func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) {
+func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) bool {
 	if req == nil || req.Cmd != protocol.CMD_GET {
-		return
+		return false
 	}
 
 	if ins.delegates == nil {
 		ins.log.Warn("Has not delegated yet, stop reroute %v", req)
-		return
+		return false
 	}
 
 	loc, total, _ := ins.delegates.Locator().Locate(req.Key)
@@ -1415,14 +1418,16 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) {
 
 	// No reroute for chunk larger than threshold()
 	if req.Size() > int64(delegate.getRerouteThreshold()) {
-		return
+		return false
 	}
 
 	err := delegate.Dispatch(req)
 	if err != nil {
 		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
+		return false
 	} else {
 		ins.log.Debug("Delegate %s to node %d as %d of %d.", req.Key, delegate.Id(), loc, total)
+		return true
 	}
 }
 

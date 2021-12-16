@@ -825,7 +825,6 @@ func (conn *Connection) bye() {
 			if local, ok := client.(*invoker.LocalInvoker); ok {
 				sid, _ := conn.r.ReadBulkString()
 				payload, _ := conn.r.ReadBulk(nil)
-				conn.log.Info("Got sid %s and payload %v", sid, payload)
 				local.SetOutputPayload(sid, payload)
 			}
 		}

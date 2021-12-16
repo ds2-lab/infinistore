@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"errors"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -201,6 +202,7 @@ func (mw *MovingWindow) GetBackupCandidates() mapreduce.Iterator {
 
 func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
 	all := mw.GetCurrentBucket().redundantInstances()
+	log.Printf("Candidates of delegates: %d", len(all))
 	_, delegates := mw.getBackupsForNode(all, -1, config.BackupsPerInstance)
 	return delegates
 }
@@ -560,12 +562,10 @@ func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int, numBaks 
 		numBaks = util.Ifelse(numBaks >= available, available-1, numBaks).(int) // Use all
 	}
 	candidates := make([]*lambdastore.Instance, numBaks)
-	for j := 0; j < numBaks; j++ {
-		candidates[j] = gall[(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
-	}
 	// Because only first numBaks backups will be used initially, shuffle to avoid the same backup set.
-	rand.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
+	perm := rand.Perm(len(gall))
+	for j := 0; j < numBaks; j++ {
+		candidates[j] = gall[perm[(i+j*distance+rand.Int()%distance+1)%available]].Instance() // Random to avoid the same backup set.
+	}
 	return numBaks, candidates
 }

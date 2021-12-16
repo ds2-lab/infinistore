@@ -26,3 +26,14 @@ func (ins *Delegate) StartBacking(deleIns *Instance, bakId int, total int) bool 
 	}
 	return true
 }
+
+type DelegateBackerAdapter struct {
+}
+
+func (b *DelegateBackerAdapter) toBacker(ins *Instance) Backer {
+	return &Delegate{Instance: ins}
+}
+
+func (b *DelegateBackerAdapter) toInstance(backer Backer, i int) *Instance {
+	return backer.(*Delegate).Instance
+}
