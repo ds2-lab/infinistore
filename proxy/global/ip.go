@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	ErrPrivateIPNotFound = errors.New("Can not identify private ip.")
+	ErrPrivateIPNotFound = errors.New("can not identify private ip")
 )
 
 func GetIP() (string, error) {

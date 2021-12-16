@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/handlers"
+	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
@@ -251,26 +253,18 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// Adaptive timeout control
 	log.Debug("Waiting for timeout...")
-	meta := wait(session, Lifetime).ProtocolStatus()
+	status := wait(session, Lifetime)
 
 	Server.Pause()
+	meta := finalize(status)
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
-	gcStart := time.Now()
-	// Optimize memory usage and return statistics
-	storeMeta := Store.Meta()
-	storeMeta.Calibrate()
-	meta.Capacity = storeMeta.Capacity()
-	meta.Mem = storeMeta.Waterline()
-	meta.Effective = storeMeta.Effective()
-	meta.Modified = storeMeta.Size()
-	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
-	log.Info("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),
-		float64(storeMeta.Effective())/1000000, float64(storeMeta.System())/1000000, float64(storeMeta.Waterline())/1000000)
-	return meta, nil
+	log.Debug("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),
+		float64(Store.Meta().Effective())/1000000, float64(Store.Meta().System())/1000000, float64(Store.Meta().Waterline())/1000000)
+	return *meta, nil
 }
 
 func waitForRecovery(chs ...<-chan error) {
@@ -345,7 +339,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			if Lineage != nil {
 				status = Lineage.Status()
 			}
-			byeHandler()
+			byeHandler(session, status)
 			session.Done()
 			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
 			return
@@ -501,15 +495,37 @@ func initMigrateHandler() error {
 	return rsp.Flush()
 }
 
-func byeHandler() error {
+func byeHandler(session *lifetime.Session, status types.LineageStatus) error {
 	// init backup cmd
-	// rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-	// 	w.AppendBulkString(rsp.Cmd)
-	// })
-	// return rsp.Flush()
+	if DRY_RUN && status != nil {
+		meta := finalize(status)
+		rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+			w.AppendBulkString(rsp.Cmd)
+			w.AppendBulkString(session.Sid)
+			out, _ := json.Marshal(meta)
+			w.AppendBulk(out)
+		})
+		return rsp.Flush()
+	}
 
 	// Disable
 	return nil
+}
+
+func finalize(status types.LineageStatus) *protocol.Status {
+	meta := status.ProtocolStatus()
+
+	gcStart := time.Now()
+	// Optimize memory usage and return statistics
+	storeMeta := Store.Meta()
+	storeMeta.Calibrate()
+	log.Debug("GC takes %v", time.Since(gcStart))
+	meta.Capacity = storeMeta.Capacity()
+	meta.Mem = storeMeta.Waterline()
+	meta.Effective = storeMeta.Effective()
+	meta.Modified = storeMeta.Size()
+
+	return &meta
 }
 
 func main() {
@@ -1060,7 +1076,7 @@ func main() {
 
 					start := time.Now()
 					lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
-					log.Info("Start dummy node: %s", lambdacontext.FunctionName)
+					log.Info("Start dummy node: %s, sid: %s", lambdacontext.FunctionName, input.Sid)
 					output, err := HandleRequest(ctx, *input)
 					if err != nil {
 						log.Error("Error: %v", err)

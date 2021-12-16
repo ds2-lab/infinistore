@@ -14,12 +14,15 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
+type LocalOutputPayloadSetter func(string, []byte)
+
 // LocalInvoker Invoke local lambda function simulation
 // Use throttle to simulate Lambda network: https://github.com/sitespeedio/throttle
 // throttle --up 800000 --down 800000 --rtt 1 (800MB/s, 1ms)
 // throttle stop
 // Use container to simulate Lambda resouce limit
 type LocalInvoker struct {
+	SetOutputPayload LocalOutputPayloadSetter
 }
 
 func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lambda.InvokeInput, opts ...request.Option) (*lambda.InvokeOutput, error) {
@@ -50,6 +53,15 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	cmd := exec.CommandContext(ctx, "lambda", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	ret := make(chan []byte, 1)
+	ivk.SetOutputPayload = func(sid string, payload []byte) {
+		if input.Sid == sid {
+			ret <- payload
+		}
+		close(ret)
+	}
+
 	var wg sync.WaitGroup
 	var err error
 	wg.Add(1)
@@ -57,8 +69,8 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 		defer wg.Done()
 		err = cmd.Run()
 	}()
-
 	wg.Wait()
+
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +78,8 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	statuscode := int64(200)
 	output := &lambda.InvokeOutput{
 		StatusCode: &statuscode,
+		Payload:    <-ret,
 	}
+	ivk.SetOutputPayload = nil
 	return output, nil
 }
