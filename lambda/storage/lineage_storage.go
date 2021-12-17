@@ -263,7 +263,7 @@ func (s *LineageStorage) onSignalTracker(signal interface{}) bool {
 	case *types.CommitOption:
 		return s.doCommit(option)
 	default:
-		return s.persistHelper.onSignalTracker(signal)
+		return s.PersistentStorage.onSignalTracker(signal)
 	}
 }
 
