@@ -245,7 +245,7 @@ func (mw *MovingWindow) LoadCandidates(queue *lambdastore.CandidateQueue, buf []
 
 	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
 
-	num, candidates := mw.getBackupsForNode(all, 0, len(buf))
+	num, candidates := mw.getBackupsForNode(all, -1, len(buf))
 	copy(buf[:num], candidates)
 	return num
 }
@@ -555,17 +555,32 @@ func (mw *MovingWindow) testScaledLocked(gins *GroupInstance, bucket *Bucket, re
 
 func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int, numBaks int) (int, []*lambdastore.Instance) {
 	available := len(gall)
-	distance := available / (numBaks + 1) // main + double backup candidates
+	exclude := 1
+	if i < 0 {
+		exclude = 0
+	}
+	distance := available / (numBaks + exclude) // main + backup candidates, exclude main if i < 0
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= available, available-1, numBaks).(int) // Use all
+		numBaks = util.Ifelse(numBaks >= available, available-exclude, numBaks).(int) // Use all
 	}
 	candidates := make([]*lambdastore.Instance, numBaks)
 	// Because only first numBaks backups will be used initially, shuffle to avoid the same backup set.
 	perm := rand.Perm(len(gall))
+	// i is the instance we find backups for, locate i in the permutation.
+	permI := -1
+	if exclude > 0 {
+		for j := 0; j < len(perm); j++ {
+			if perm[j] == i {
+				permI = j
+				break
+			}
+		}
+	}
+	// Iterate backups start from permI
 	for j := 0; j < numBaks; j++ {
-		candidates[j] = gall[perm[(i+j*distance+rand.Int()%distance+1)%available]].Instance() // Random to avoid the same backup set.
+		candidates[j] = gall[perm[(permI+j*distance+1)%available]].Instance() // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }
