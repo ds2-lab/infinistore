@@ -337,7 +337,7 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 	}
 
 	// Accessing of delegated objects are optional and no safety guranteee.
-	s.log.Debug("Start recovery of node %d(type:%v).", meta.Meta.Id, meta.Type)
+	s.log.Info("Start recovery of node %d(type:%v).", meta.Meta.Id, meta.Type)
 	chanErr := make(chan error, 1)
 	recoverFlag := s.getRecoverFlag(meta)
 	// Flag get as unsafe
@@ -367,7 +367,7 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 		s.lineage.Term = meta.Term
 		s.lineage.Updates = meta.Updates
 		s.lineage.Hash = meta.Hash
-		s.log.Debug("During recovery, write operations enabled at term %d", s.lineage.Term+1)
+		s.log.Info("During recovery, write operations enabled at term %d", s.lineage.Term+1)
 	} else if meta.Type == types.LineageMetaTypeBackup {
 		if s.backupMeta != nil &&
 			s.backupMeta.Meta.Id == meta.Meta.Id &&
@@ -379,7 +379,7 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 			// New backup lambda
 			old = types.LineageTermFromMeta(nil)
 			if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
-				s.log.Debug("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
+				s.log.Info("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
 				// Clean obsolete backups
 				if s.backupRecoveryCanceller != nil {
 					s.backupRecoveryCanceller()
@@ -446,7 +446,7 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 
 		// Can be other operations during persisting, signal tracker again.
 		// This time, ignore argument "full" if snapshotted.
-		s.log.Debug("Term %d commited, resignal to check possible new term during committing.", term)
+		s.log.Info("Term %d commited, resignal to check possible new term during committing.", term)
 		s.log.Trace("action,lineage,snapshot,elapsed,bytes")
 		s.log.Trace("commit,%d,%d,%d,%d", stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes+ssBytes)
 		collector.AddCommit(
@@ -459,9 +459,9 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
 		// DO NOT close "committed", since there will be a double check on stoping the tracker.
 		if opt.Checked {
-			s.log.Debug("Double checked: no more term to commit, signal committed.")
+			s.log.Info("Double checked: no more term to commit, signal committed.")
 		} else {
-			s.log.Debug("Checked: no more term to commit, signal committed.")
+			s.log.Info("Checked: no more term to commit, signal committed.")
 		}
 		s.trackerStopped <- opt
 		return true
@@ -654,7 +654,7 @@ func (s *LineageStorage) doRecover(ctx context.Context, lineage *types.LineageTe
 	}
 
 	end := time.Since(start)
-	s.log.Debug("End recovery of node %d.", meta.Meta.Id)
+	s.log.Info("End recovery of node %d.", meta.Meta.Id)
 	s.log.Trace("action,lineage,objects,elapsed,bytes")
 	s.log.Trace("recover,%d,%d,%d,%d", stop1, stop2, end, objectBytes)
 	collector.AddRecovery(
