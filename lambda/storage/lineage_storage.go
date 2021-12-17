@@ -456,11 +456,16 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 			start, types.OP_COMMIT, 0, s.id, int(term),
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
 		opt.BytesUploaded += uint64(termBytes + ssBytes)
+		opt.Checked = true
 		s.signalTracker <- opt
 	} else {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
 		// DO NOT close "committed", since there will be a double check on stoping the tracker.
-		s.log.Info("Double checked: no more term to commit, signal committed.")
+		if opt.Checked {
+			s.log.Info("Double checked: no more term to commit, signal committed.")
+		} else {
+			s.log.Info("Checked: no term to commit, signal committed.")
+		}
 		s.commited <- opt
 	}
 	return false
