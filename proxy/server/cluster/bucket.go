@@ -119,7 +119,7 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, er
 	// Adjust current bucket
 	b.end = bucket.start
 	for i := b.end.Idx() - b.start.Idx(); i < len(b.instances); i++ {
-		b.instances[i].LambdaDeployment = b.instances[i].Instance().GetShadowInstance()
+		b.instances[i] = &GroupInstance{LambdaDeployment: b.instances[i].Instance().GetShadowInstance()}
 	}
 
 	// Update bucketIndex
@@ -237,8 +237,9 @@ func (b *Bucket) flushInactiveLocked() {
 				continue
 			}
 			b.disabled.Del(ginsAll[i].Idx())
-			b.activeStart = ginsAll[i].idx.(*BucketIndex).Next()
+			b.activeStart = ginsAll[flushed].idx.(*BucketIndex).Next()
 			b.activeChanged = true
+			// Pack disabled instance
 			if flushed != i {
 				b.swapLock(ginsAll[flushed], ginsAll[i])
 				flushed++
