@@ -80,7 +80,7 @@ func NewWorker(lifeId int64) *Worker {
 	worker := &Worker{
 		id:       rand.Int31(),
 		Server:   redeo.NewServer(nil),
-		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_ALL, Color: false, Prefix: "Worker:"},
+		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Worker:"},
 		ctrlLink: NewLink(true),
 		// dataLink:    NewLink(false),
 		heartbeater: new(DefaultHeartbeater),

@@ -137,7 +137,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Debug("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
+		log.Info("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
 		collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	} else {
 		var respError *ResponseError
@@ -242,7 +242,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	d2 := time.Since(t2)
 
 	dt := time.Since(t)
-	log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+	log.Info("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
 	finalize(ret, d1, d2, dt)
 }
 
