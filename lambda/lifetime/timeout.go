@@ -90,8 +90,8 @@ type Timeout struct {
 	reset         chan time.Duration
 	resetReason   string
 	log           logger.ILogger
-	active        int32
-	disabled      int32
+	active        int32 // Number of busy routings.
+	disabled      int32 // Timeout can be disabled temporarily.
 	c             chan time.Time
 	timeout       bool
 	due           time.Duration
@@ -217,12 +217,13 @@ func (t *Timeout) DoneBusy(reason string) {
 }
 
 func (t *Timeout) DoneBusyWithReset(ext time.Duration, reason string) {
-	// log.Printf("done busy with reset %v\n", ext)
-	t.DoneBusy(reason)
+	// Extend timeout first to prevent timeout between donebusy and extention.
 	// Unacknowledged ping will be preserved.
 	if t.lastReason != protocol.CMD_PING {
 		t.ResetWithExtension(ext, reason)
 	}
+	// log.Printf("done busy with reset %v\n", ext)
+	t.DoneBusy(reason)
 }
 
 func (t *Timeout) IsBusy() bool {
