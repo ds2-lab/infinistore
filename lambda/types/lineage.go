@@ -124,7 +124,6 @@ type CommitOption struct {
 	Full          bool
 	Snapshotted   bool
 	BytesUploaded uint64
-	Checked       bool
 }
 
 type LineageStatus []*protocol.Meta

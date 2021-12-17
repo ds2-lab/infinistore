@@ -290,11 +290,11 @@ func waitForRecovery(chs ...<-chan error) {
 func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status types.LineageStatus) {
 	defer session.CleanUp.Wait()
 
-	var commitOpt *types.CommitOption
 	if Lineage != nil {
 		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
 			// Commit and wait, error will be logged.
-			commitOpt, _ = Lineage.Commit()
+			// Confirming will not block further operations. Don't stop tracking.
+			Lineage.Commit()
 			return true
 		}
 	}
@@ -312,38 +312,40 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		// There's no turning back.
 		session.Timeout.Halt()
 
-		if Lifetime.IsTimeUp() && Store.Len() > 0 {
-			// Time to migrate
-			// Check of number of keys in store is necessary. As soon as there is any value
-			// in the store and time up, we should start migration.
+		// Migration should be reviewed
+		// if Lifetime.IsTimeUp() && Store.Len() > 0 {
+		// 	// Time to migrate
+		// 	// Check of number of keys in store is necessary. As soon as there is any value
+		// 	// in the store and time up, we should start migration.
 
-			// Initiate migration
-			session.Migrator = migrator.NewClient()
-			log.Info("Initiate migration.")
-			initiator := func() error { return initMigrateHandler() }
-			for err := session.Migrator.Initiate(initiator); err != nil; {
-				log.Warn("Fail to initiaiate migration: %v", err)
-				if err == types.ErrProxyClosing {
-					return
-				}
+		// 	// Initiate migration
+		// 	session.Migrator = migrator.NewClient()
+		// 	log.Info("Initiate migration.")
+		// 	initiator := func() error { return initMigrateHandler() }
+		// 	for err := session.Migrator.Initiate(initiator); err != nil; {
+		// 		log.Warn("Fail to initiaiate migration: %v", err)
+		// 		if err == types.ErrProxyClosing {
+		// 			return
+		// 		}
 
-				log.Warn("Retry migration")
-				err = session.Migrator.Initiate(initiator)
-			}
-			log.Debug("Migration initiated.")
-		} else {
-			// Finalize, this is quick usually.
-			if Lineage == nil && Persist != nil {
-				Persist.StopTracker(commitOpt)
-			}
-			if Lineage != nil {
-				status = Lineage.Status()
-			}
-			byeHandler(session, status)
-			session.Done()
-			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
-			return
+		// 		log.Warn("Retry migration")
+		// 		err = session.Migrator.Initiate(initiator)
+		// 	}
+		// 	log.Debug("Migration initiated.")
+		// } else {
+
+		// Finalize. Stop tracker after timeout is triggered and irreversable.
+		// This is quick usually.
+		if Persist != nil {
+			Persist.StopTracker()
 		}
+		if Lineage != nil {
+			status = Lineage.Status()
+		}
+		byeHandler(session, status)
+		session.Done()
+		log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
+		// }
 	}
 
 	return
@@ -487,13 +489,13 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	return true
 }
 
-func initMigrateHandler() error {
-	// init backup cmd
-	rsp, _ := Server.AddResponsesWithPreparer("initMigrate", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-		w.AppendBulkString(rsp.Cmd)
-	})
-	return rsp.Flush()
-}
+// func initMigrateHandler() error {
+// 	// init backup cmd
+// 	rsp, _ := Server.AddResponsesWithPreparer("initMigrate", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+// 		w.AppendBulkString(rsp.Cmd)
+// 	})
+// 	return rsp.Flush()
+// }
 
 func byeHandler(session *lambdaLife.Session, status types.LineageStatus) error {
 	// init backup cmd

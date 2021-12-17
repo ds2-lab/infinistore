@@ -33,7 +33,10 @@ var (
 
 type PersistHelper interface {
 	onPersisted(*types.OpWrapper)
-	onStopTracker(interface{}) bool
+
+	// onSignalTracker can be overwritten to execution signal action.
+	// Returns true to stop the tracker
+	onSignalTracker(interface{}) bool
 }
 
 // PersistentStorage Storage with S3 as persistent layer
@@ -380,9 +383,10 @@ func (s *PersistentStorage) StartTracker() {
 				s.log.Debug("Found more ops to be persisted and persisting, pass and wait for resignal.")
 				delayedSignal = signal
 			} else {
-				// All operations persisted. Clean up and stop.
+				// All operations persisted. Execute signal action
 				s.log.Debug("All persisted, notify who may interest.")
-				if s.persistHelper.onStopTracker(signal) {
+				if s.persistHelper.onSignalTracker(signal) {
+					// Clean up and stop.
 					bufferProvider.Close()
 					bufferProvider = nil
 					s.chanOps = nil
@@ -398,16 +402,16 @@ func (s *PersistentStorage) onPersisted(persisted *types.OpWrapper) {
 	// Default by doing nothing
 }
 
-func (s *PersistentStorage) onStopTracker(signal interface{}) bool {
+func (s *PersistentStorage) onSignalTracker(signal interface{}) bool {
 	s.trackerStopped <- signal
 	return true
 }
 
-func (s *PersistentStorage) StopTracker(signal interface{}) {
+func (s *PersistentStorage) StopTracker() {
 	if s.signalTracker != nil {
 		// Signal tracker to stop and wait
 		s.log.Debug("Signal tracker to stop")
-		s.signalTracker <- signal
+		s.signalTracker <- nil
 		<-s.trackerStopped
 
 		// Clean up
