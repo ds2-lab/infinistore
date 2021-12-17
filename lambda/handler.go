@@ -27,7 +27,6 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	"github.com/mason-leap-lab/infinicache/lambda/handlers"
-	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
@@ -496,7 +495,7 @@ func initMigrateHandler() error {
 	return rsp.Flush()
 }
 
-func byeHandler(session *lifetime.Session, status types.LineageStatus) error {
+func byeHandler(session *lambdaLife.Session, status types.LineageStatus) error {
 	// init backup cmd
 	if DRY_RUN && status != nil {
 		meta := finalize(status)
