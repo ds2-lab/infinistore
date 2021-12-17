@@ -106,7 +106,15 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 		ins := instances.Instance(test)
 		cmd.GetRequest().InsId = ins.Id()
-		if l.testChunk(ins, uint64(meta.ChunkSize)) || ins.IsBusy() {
+		if l.testChunk(ins, uint64(meta.ChunkSize)) {
+			// Recheck capacity. Capacity can be calibrated and miss post-check.
+			if l.testChunk(ins, 0) {
+				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), ins.Meta.Size(), ins.Meta.EffectiveCapacity())
+				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
+			}
+			// Try next group
+			test += len(meta.Placement)
+		} else if ins.IsBusy() {
 			// Try next group
 			test += len(meta.Placement)
 		} else if err := ins.DispatchWithOptions(cmd, lambdastore.BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
@@ -119,12 +127,12 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			key := meta.ChunkKey(chunkId)
 			numChunks, size := ins.AddChunk(key, meta.ChunkSize)
 			l.log.Debug("Lambda %d size updated: %d of %d (key:%s, Δ:%d, chunks:%d).",
-				ins.Id(), size, ins.Meta.Capacity, key, meta.ChunkSize, numChunks)
+				ins.Id(), size, ins.Meta.EffectiveCapacity(), key, meta.ChunkSize, numChunks)
 
 			// Check if scaling is reqired.
 			// NOTE: It is the responsibility of the cluster to handle duplicated events.
 			if l.testChunk(ins, 0) {
-				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.Capacity)
+				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.EffectiveCapacity())
 				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
 			}
 
