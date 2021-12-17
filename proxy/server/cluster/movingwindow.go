@@ -260,7 +260,7 @@ func (mw *MovingWindow) GetActiveInstances(num int) lambdastore.InstanceEnumerat
 		mw.Trigger(
 			metastore.EventInsufficientStorage,
 			&types.ScaleEvent{
-				BaseInstance: instances[len(instances)-1],
+				BaseInstance: instances[len(instances)-1].Instance(),
 				ScaleTarget:  num - len(instances),
 				Scaled:       prm,
 				Reason:       "on demand",

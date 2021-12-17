@@ -370,6 +370,7 @@ func (s *PersistentStorage) StartTracker() {
 				// Signal tracker if commit initiated.
 				if delayedSignal != nil {
 					s.signalTracker <- delayedSignal
+					delayedSignal = nil
 				}
 			}
 		// The tracker will only be signaled after tracked all existing operations.
