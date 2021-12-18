@@ -499,7 +499,7 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 
 func byeHandler(session *lambdaLife.Session, status types.LineageStatus) error {
 	// init backup cmd
-	if DRY_RUN && status != nil {
+	if DRY_RUN {
 		meta := finalize(status)
 		rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
 			w.AppendBulkString(rsp.Cmd)

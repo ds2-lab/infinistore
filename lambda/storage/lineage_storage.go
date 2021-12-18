@@ -930,7 +930,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 			}
 
 			// Chunks to be added can't be a deleted chunk (delete before added), just in case something wrong.
-			if op.Op != types.OP_DEL {
+			if op.Op == types.OP_DEL {
 				continue
 			}
 
