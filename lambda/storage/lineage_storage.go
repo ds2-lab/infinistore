@@ -53,6 +53,7 @@ var (
 	ErrRecovering          = errors.New("already recovering")
 	ErrRecovered           = errors.New("already recovered")
 	ErrRecoveryInterrupted = errors.New("recovery interrupted")
+	ErrBackupSetForbidden  = errors.New("forbidden to set backup objects")
 )
 
 // Storage with lineage
@@ -72,7 +73,7 @@ type LineageStorage struct {
 
 	// backup
 	backup                  *hashmap.HashMap   // Just a index, all will be available to repo
-	backupMeta              *types.LineageMeta // Only one backup is effective at a time.
+	backupLineage           *types.LineageMeta // Only one backup is effective at a time.
 	backupLocator           protocol.BackupLocator
 	backupRecoveryCanceller context.CancelFunc
 
@@ -130,14 +131,11 @@ func (s *LineageStorage) getWithOption(key string, opt *types.OpWrapper) (*types
 	return chunk, ret
 }
 
-func (s *LineageStorage) set(key string, chunk *types.Chunk) {
-	s.PersistentStorage.set(key, chunk)
-	if chunk.Backup {
-		s.backup.Set(key, chunk)
-	}
-}
-
 func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+	if chunk.Backup {
+		return types.OpError(ErrBackupSetForbidden)
+	}
+
 	s.setSafe.Wait()
 	// s.log.Debug("ready to set key %v", key)
 	// Lock lineage, ensure operation get processed in the term.
@@ -145,19 +143,17 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	defer s.lineageMu.Unlock()
 	// s.log.Debug("in mutex of setting key %v", key)
 
-	// Backup space is reserved and not counted.
-	if !chunk.Backup {
-		size := s.meta.IncreaseSize(chunk.Size) // Oversize test.
-		for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
-			evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
-			s.bufferMeta.DecreaseSize(evicted.Size)
-			s.PersistentStorage.delWithOption(evicted, nil)
-			size = s.meta.Size()
-		}
-		if size >= s.meta.Effective() {
-			s.meta.DecreaseSize(chunk.Size)
-			return types.OpError(ErrOOStorage)
-		}
+	// Oversize check.
+	size := s.meta.IncreaseSize(chunk.Size)
+	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
+		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
+		s.bufferMeta.DecreaseSize(evicted.Size)
+		s.PersistentStorage.delWithOption(evicted, nil)
+		size = s.meta.Size()
+	}
+	if size >= s.meta.Effective() {
+		s.meta.DecreaseSize(chunk.Size)
+		return types.OpError(ErrOOStorage)
 	}
 
 	if opt == nil {
@@ -217,11 +213,11 @@ func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	switch meta.Type {
 	case types.LineageMetaTypeBackup:
-		if s.backupMeta == nil || s.backupMeta.Id != meta.Id || s.backupMeta.BackupId != meta.BackupId || s.backupMeta.BackupTotal != meta.BackupTotal {
+		if s.backupLineage == nil || s.backupLineage.Id != meta.Id || s.backupLineage.BackupId != meta.BackupId || s.backupLineage.BackupTotal != meta.BackupTotal {
 			meta.Consistent = false
 			return meta.Consistent, nil
 		}
-		lineage = types.LineageTermFromMeta(s.backupMeta)
+		lineage = types.LineageTermFromMeta(s.backupLineage)
 	case types.LineageMetaTypeDelegate:
 		meta.Consistent = false
 		return meta.Consistent, nil
@@ -323,8 +319,8 @@ func (s *LineageStorage) Status() types.LineageStatus {
 		meta.SnapshotUpdates = s.snapshot.Updates
 		meta.SnapshotSize = s.snapshot.Size
 	}
-	if s.backupMeta != nil {
-		return types.LineageStatus{meta, s.backupMeta.Meta}
+	if s.backupLineage != nil {
+		return types.LineageStatus{meta, s.backupLineage.Meta}
 	} else {
 		return types.LineageStatus{meta}
 	}
@@ -372,17 +368,17 @@ func (s *LineageStorage) Recover(meta *types.LineageMeta) (bool, <-chan error) {
 		s.lineage.Hash = meta.Hash
 		s.log.Info("During recovery, write operations enabled at term %d", s.lineage.Term+1)
 	} else if meta.Type == types.LineageMetaTypeBackup {
-		if s.backupMeta != nil &&
-			s.backupMeta.Meta.Id == meta.Meta.Id &&
-			s.backupMeta.BackupId == meta.BackupId &&
-			s.backupMeta.BackupTotal == meta.BackupTotal {
+		if s.backupLineage != nil &&
+			s.backupLineage.Meta.Id == meta.Meta.Id &&
+			s.backupLineage.BackupId == meta.BackupId &&
+			s.backupLineage.BackupTotal == meta.BackupTotal {
 			// Compare metas of backups for the same lambda
-			old = types.LineageTermFromMeta(s.backupMeta)
+			old = types.LineageTermFromMeta(s.backupLineage)
 		} else {
 			// New backup lambda
 			old = types.LineageTermFromMeta(nil)
-			if s.backupMeta != nil && s.backupMeta.Meta.Id != meta.Meta.Id {
-				s.log.Info("Backup data of node %d cleared to serve %d.", s.backupMeta.Meta.Id, meta.Meta.Id)
+			if s.backupLineage != nil && s.backupLineage.Meta.Id != meta.Meta.Id {
+				s.log.Info("Backup data of node %d cleared to serve %d.", s.backupLineage.Meta.Id, meta.Meta.Id)
 				// Clean obsolete backups
 				if s.backupRecoveryCanceller != nil {
 					s.backupRecoveryCanceller()
@@ -416,7 +412,8 @@ func (s *LineageStorage) ClearBackup() {
 		s.repo.Del(keyValue.Key)
 		s.backup.Del(keyValue.Key)
 	}
-	s.backupMeta = nil
+	s.backupLineage = nil
+	s.meta.bakSize = 0
 }
 
 func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
@@ -834,15 +831,16 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	servingKey := meta.ServingKey()
 	if servingKey != "" {
 		// If serving_key exists, we are done. Deteled serving_key is unlikely and will be verified later.
-		chunk, existed := s.get(servingKey)
+		chunk, existed := s.Storage.get(servingKey)
 		if !existed {
 			chunk = &types.Chunk{
 				Key:    servingKey,
 				Body:   nil,
+				Size:   0, // To be filled later.
 				Backup: meta.Type == types.LineageMetaTypeBackup,
 			}
 			// Occupy the repository, details will be filled later.
-			s.helper.set(servingKey, chunk)
+			s.Storage.set(servingKey, chunk) // No size update (don't know how) by calling "repo.Set". Just a placeholder.
 		}
 
 		// Add to head so it will be load first, no duplication is possible because it has been inserted to the repository.
@@ -869,78 +867,94 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 				s.diffrank.AddOp(op)
 			}
 
-			chunk, existed := s.get(op.Key)
+			chunk, existed := s.Storage.get(op.Key)
 			if existed {
-				if chunk.Term > s.lineage.Term {
-					// Skip new incoming write operations during recovery.
+				// Exclude out of date operations, possibilities are:
+				// 1. New incoming write operations during recovery: chunk.Term > s.lineage.Term >= term.Term
+				// 2. Overlap operations (included in the snapshot): chunk.Term >= op.Term
+				if term.Term <= chunk.Term {
+					// Skip
 					continue
+				}
+
+				// Update operations (del or overwritten set). Delete what-so-ever. Special cases will be handler below.
+				if chunk.Backup {
+					s.Storage.del(chunk)         // logic deletion.
+					s.meta.bakSize -= chunk.Size // placeholder servingKey has Size 0
+				} else {
+					s.Storage.delWithOption(chunk, nil) // Decreasing size in storage only by calling "Storage.delWithOption" (placeholder servingKey has Size 0).
+					if chunk.IsBuffered(false) {
+						s.bufferRemove(chunk) // "bufferRemove" will remove chunk from buffer and update buffer size.
+					}
 				}
 
 				if op.Op == types.OP_DEL {
 					// Deletion after set will be dealed on recovering objects.
-					s.helper.del(chunk)
-					if chunk.IsBuffered(false) {
-						s.bufferRemove(chunk)
-					}
+					continue
 				} else if op.Key == servingKey {
 					// Updaet data of servingKey, overwrite is OK.
 					chunk.Id = op.Id
 					chunk.Size = op.Size
 					chunk.Term = term.Term
 					chunk.Accessed = op.Accessed
-					chunk.Bucket = op.Bucket
+					chunk.Status = types.CHUNK_AVAILABLE
 					chunk.Available = 0
+					chunk.Bucket = op.Bucket
 					// Unlikely, the servingKey can be RESET (see comments below)
-					// For servingKey, the chunk is always added as the first one in the download list and it can't be moved, we simple set Body to nil to free space.
-					// The bottom line, setting Body to nil doesn't hurt if servingKey is new.
-					chunk.Body = nil
-					if meta.Type == types.LineageMetaTypeMain {
-						chunk.BuffIdx = op.BIdx
-						if chunk.IsBuffered(false) {
-							chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
-							s.bufferAdd(chunk)
-						}
-					}
 				} else {
-					// Reset
-					// Although unlikely, dealing reset by deleting it first and add it later.
-					s.helper.del(chunk)
-					if chunk.IsBuffered(false) {
-						s.bufferRemove(chunk)
-					}
+					// else: Although unlikely, objects can be reset. Dealing reset by deleting it first and add it later.
 					chunk = nil // Reset to nil, so it can be added back later.
 				}
 			}
-			// New or reset chunk
-			if chunk == nil && s.isRecoverable(op, meta, false) {
-				// Main repository or backup repository if backup ID matches.
-				chunk := &types.Chunk{
-					Key:      op.Key,
-					Id:       op.Id,
-					Body:     nil,
-					Size:     op.Size,
-					Term:     term.Term,
-					Accessed: op.Accessed,
-					Bucket:   op.Bucket,
-					Backup:   meta.Type == types.LineageMetaTypeBackup,
-				}
 
-				// New chunk can't be a deleted chunk, just in case something wrong.
-				if op.Op != types.OP_DEL {
-					tbds = append(tbds, chunk)
-					s.helper.set(op.Key, chunk)
-					if meta.Type == types.LineageMetaTypeMain {
-						chunk.BuffIdx = op.BIdx
-						if chunk.IsBuffered(false) {
-							chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
-							s.bufferAdd(chunk) // No eviction will be considered since we are restoring existed state.
-						}
+			// New or reset chunk
+			if chunk == nil {
+				if s.isRecoverable(op, meta, false) {
+					// Main repository or backup repository if backup ID matches.
+					chunk = &types.Chunk{
+						Key:       op.Key,
+						Id:        op.Id,
+						Body:      nil,
+						Size:      op.Size,
+						Term:      term.Term,
+						Status:    types.CHUNK_AVAILABLE,
+						Available: 0,
+						Accessed:  op.Accessed,
+						Bucket:    op.Bucket,
+						Backup:    meta.Type == types.LineageMetaTypeBackup,
 					}
+				} else {
+					// Skip non-recoverable objects.
+					continue
 				}
+			}
+
+			// Chunks to be added can't be a deleted chunk (delete before added), just in case something wrong.
+			if op.Op != types.OP_DEL {
+				continue
+			}
+
+			if chunk.Backup {
+				s.Storage.set(chunk.Key, chunk)
+				s.backup.Set(chunk.Key, chunk)
+				s.meta.bakSize += chunk.Size
+			} else {
+				s.Storage.setWithOption(op.Key, chunk, nil) // Update size by calling "Storage.setWithOption".
+				// For types.LineageMetaTypeMain only, types.LineageMetaTypeDelegate will not call "doReplayLineage".
+				chunk.BuffIdx = op.BIdx
+				if chunk.IsBuffered(false) {
+					// Chunk was indicated to be buffered, rebuff it.
+					chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
+					// No size update by calling "bufferAdd". Update the size after object downloaded.
+					s.bufferAdd(chunk) // No eviction will be considered since we are restoring existed state.
+				}
+			}
+			if op.Key != servingKey {
+				tbds = append(tbds, chunk)
 			}
 		}
 		// Remove servingKey from the download list if it is not new and no reset is required.
-		if servingKey != "" && tbds[0].Available == tbds[0].Size {
+		if servingKey != "" && tbds[0].IsAvailable() {
 			tbds = tbds[1:]
 		}
 
@@ -987,7 +1001,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 			s.diffrank.AddOp(&s.lineage.Ops[i])
 		}
 	} else {
-		s.backupMeta = meta
+		s.backupLineage = meta
 		// var allchunks strings.Builder
 		// for _, tbd := range tbds {
 		// 	allchunks.WriteString(" ")
@@ -1011,7 +1025,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 	for _, term := range terms {
 		for i := 0; i < len(term.Ops); i++ {
 			op := &term.Ops[i]
-			chunk, existed := s.get(op.Key)
+			chunk, existed := s.Storage.get(op.Key)
 			if existed && op.Accessed.Before(chunk.Accessed) {
 				// Skip duplicated
 				continue
@@ -1024,28 +1038,31 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 						chunk.Term = s.lineage.Term + 1
 						tbds = append(tbds, chunk)
 					}
-				} else if op.Op == types.OP_SET {
-					// Unlikely, just in case. Keep final status if conflict.
-					chunk.Status = types.CHUNK_AVAILABLE
+				} else {
+					// Skip
+					// In case op.Op == types.OP_SET && chunk.Status == types.CHUNK_DELETED, unlikely and nothing we should do.
+					continue
 				}
 			}
 			// Added delegate chunks
 			if chunk == nil && op.Op != types.OP_DEL && s.isRecoverable(op, meta, false) {
 				// Main repository or backup repository if backup ID matches.
 				chunk := &types.Chunk{
-					Key:      op.Key,
-					Id:       op.Id,
-					Body:     nil,
-					Size:     op.Size,
-					Term:     s.lineage.Term + 1,
-					Accessed: op.Accessed,
-					Bucket:   op.Bucket,
-					Backup:   false,
-					BuffIdx:  types.CHUNK_TOBEBUFFERED, // Temporary, original op.BIdx is discarded.
+					Key:       op.Key,
+					Id:        op.Id,
+					Body:      nil,
+					Size:      op.Size,
+					Term:      s.lineage.Term + 1,
+					Status:    types.CHUNK_AVAILABLE,
+					Available: 0,
+					Accessed:  op.Accessed,
+					Bucket:    op.Bucket,
+					Backup:    false,
+					BuffIdx:   types.CHUNK_TOBEBUFFERED, // Temporary, original op.BIdx is discarded.
 				}
 
 				tbds = append(tbds, chunk)
-				// Avoid meta change
+				// Placeholder for deduplication purpoose.
 				s.repo.Set(op.Key, chunk)
 			}
 		}
@@ -1061,31 +1078,34 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 	ru := &ChunkQueue{queue: tbds, lru: false}
 	heap.Init(ru)
 	breaked := false
-	// Iterate from ru to lru
+	// Iterate from ru to lru, no object added here will be evicted again.
 	for ru.Len() > 0 {
 		tbd := heap.Pop(ru).(*types.Chunk)
 		if !tbd.IsBuffered(true) && tbd.IsDeleted() {
-			// Changes to main repo
+			// Changes to main repo, append oplog to lineage.
 			s.PersistentStorage.delWithOption(tbd, nil)
 			continue
 		}
 
-		// Remove from store first
-		s.repo.Del(tbd.Key)
 		if tbd.IsDeleted() {
-			// Skip, remove if already in buffer queue
+			// Skip, remove if already in buffer
 			if tbd.IsBuffered(false) {
 				s.bufferRemove(tbd)
 				s.PersistentStorage.delWithOption(tbd, nil)
+			} else {
+				// Remove the placeholder.
+				s.repo.Del(tbd.Key)
 			}
 			continue
 		}
 
+		// Remove the placeholder. Objects buffered but undeleted will not show here in the first place.
+		s.repo.Del(tbd.Key)
 		if breaked {
 			continue
 		}
 
-		// Add to buffer
+		// Size check and add to buffer
 		s.bufferAdd(tbd)
 		size := s.meta.IncreaseSize(tbd.Size) // Oversize test.
 		for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
@@ -1095,6 +1115,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 			if evicted == tbd {
 				break
 			}
+			// evicted must be objects previously in buffer.
 			s.PersistentStorage.delWithOption(evicted, nil)
 			size = s.meta.Size()
 		}
@@ -1193,6 +1214,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 	}()
 
 	// Wait for objects, if all is not successful, wait for err.
+	// Safe if objects are in buffer and has been evicted on downloaded.
 	for more || received < atomic.LoadUint32(&requested) {
 		select {
 		case err := <-chanError:
@@ -1201,7 +1223,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 			received++
 			dobj := input.(*mys3.BatchDownloadObject)
 			tbd := dobj.Meta.(*types.Chunk)
-			receivedBytes += len(dobj.Bytes())
+			receivedBytes += int(dobj.Downloaded)
 			available := atomic.AddUint64(&tbd.Available, uint64(dobj.Downloaded))
 			// objectRange := ""
 			// if dobj.Object.Range != nil {
@@ -1283,18 +1305,18 @@ func (s *LineageStorage) isSafeToGet(chunk *types.Chunk) bool {
 	}
 }
 
-func (s *LineageStorage) bufferAdd(chunk *types.Chunk) uint64 {
+func (s *LineageStorage) bufferAdd(chunk *types.Chunk) {
 	heap.Push(s.bufferQueue, chunk)
-	return s.bufferMeta.IncreaseSize(chunk.Size)
+	s.bufferMeta.IncreaseSize(chunk.Size)
 }
 
-func (s *LineageStorage) bufferRemove(chunk *types.Chunk) uint64 {
+func (s *LineageStorage) bufferRemove(chunk *types.Chunk) {
 	if validation := s.bufferQueue.Chunk(chunk.BuffIdx - 1); validation == nil || validation.Key != chunk.Key {
-		return s.bufferMeta.Size()
+		return
 	}
 
 	heap.Remove(s.bufferQueue, chunk.BuffIdx-1)
-	return s.bufferMeta.DecreaseSize(chunk.Size)
+	s.bufferMeta.DecreaseSize(chunk.Size)
 }
 
 func (s *LineageStorage) bufferFix(chunk *types.Chunk) {

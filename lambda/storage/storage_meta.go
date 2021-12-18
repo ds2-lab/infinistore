@@ -75,7 +75,7 @@ func (m *StorageMeta) DecreaseSize(dec uint64) uint64 {
 func (m *StorageMeta) Calibrate() {
 	runtime.GC()
 	runtime.ReadMemStats(&m.memStat)
-	overhead := float64(m.memStat.Sys - m.Size())
+	overhead := float64(m.memStat.Sys - m.Size() - m.bakSize)
 	if overhead > m.overhead {
 		m.overhead = overhead*CalibrateFactor + m.overhead*(1-CalibrateFactor)
 	} else {
