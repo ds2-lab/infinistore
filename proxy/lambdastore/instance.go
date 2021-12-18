@@ -1059,7 +1059,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		ins.Meta.ResetCapacity(outputStatus.Capacity, outputStatus.Effective)
 		ins.Meta.mem = outputStatus.Mem
 		ins.Meta.sizeModified = outputStatus.Modified
-		ins.log.Debug("Capacity synchronized: cap %d, effective %d, stored %d", ins.Meta.Capacity, ins.Meta.EffectiveCapacity(), ins.Meta.Size())
+		ins.log.Debug("Capacity synchronized: cap %d, effective %d, stored %d, modified %d", ins.Meta.Capacity, ins.Meta.EffectiveCapacity(), ins.Meta.Size(), outputStatus.Modified)
 	}
 	if len(outputStatus.Metas) > 0 {
 		uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
