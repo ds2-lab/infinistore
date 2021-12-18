@@ -143,8 +143,10 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 func (l *DefaultPlacer) testChunk(ins *lambdastore.Instance, inc uint64) bool {
 	numChunk := 0
+	threshold := config.Threshold
 	if inc > 0 {
 		numChunk = 1
+		threshold = 1.0
 	}
-	return ins.NumChunks()+numChunk > global.Options.GetInstanceChunkThreshold() || ins.Meta.ModifiedOccupancy(inc) > config.Threshold
+	return ins.NumChunks()+numChunk > global.Options.GetInstanceChunkThreshold() || ins.Meta.ModifiedOccupancy(inc) > threshold
 }

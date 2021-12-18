@@ -129,7 +129,7 @@ func (s *Storage) set(key string, chunk *types.Chunk) {
 
 func (s *Storage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
 	ck, ok := s.repo.Get(key)
-	s.repo.Set(key, chunk)
+	s.helper.set(key, chunk)
 	change := uint64(0)
 	if ok {
 		change -= ck.(*types.Chunk).Size
@@ -141,7 +141,6 @@ func (s *Storage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWra
 		s.meta.IncreaseSize(change)
 	}
 
-	s.helper.set(key, chunk)
 	return types.OpSuccess()
 }
 
