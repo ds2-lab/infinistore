@@ -145,7 +145,7 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 
 	// Oversize check.
 	size := s.meta.IncreaseSize(chunk.Size)
-	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
+	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 { // No need to init buffer here, bufferMeta.Size() would be 0 otherwise.
 		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
 		s.bufferMeta.DecreaseSize(evicted.Size)
 		s.PersistentStorage.delWithOption(evicted, nil)
@@ -827,6 +827,9 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
 
+	// Init buffer according terms[0], usually it should be a snapshot, or the buffer has been initialized.
+	s.bufferInit(terms[0].Buffered)
+
 	// Deal with the key that is currently serving.
 	servingKey := meta.ServingKey()
 	if servingKey != "" {
@@ -1068,9 +1071,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 		}
 	}
 
-	if s.bufferQueue == nil {
-		s.bufferQueue = &ChunkQueue{queue: make([]*types.Chunk, 0, len(tbds)), lru: true}
-	}
+	s.bufferInit(len(tbds))
 
 	// Now tbds are settled, add delegates to buffer and evict least accessed if necessary.
 	filtered := tbds[:]
@@ -1302,6 +1303,12 @@ func (s *LineageStorage) isSafeToGet(chunk *types.Chunk) bool {
 		return note&RECOVERING_BACKUP == 0
 	} else {
 		return (note&RECOVERING_MAIN) == 0 || chunk.Term > s.lineage.Term // Objects of Term beyond lineage.Term are newly set.
+	}
+}
+
+func (s *LineageStorage) bufferInit(size int) {
+	if s.bufferQueue == nil {
+		s.bufferQueue = &ChunkQueue{queue: make([]*types.Chunk, 0, size), lru: true}
 	}
 }
 
