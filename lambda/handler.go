@@ -262,8 +262,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
-	log.Debug("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB, stored: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),
-		float64(Store.Meta().Effective())/1000000, float64(Store.Meta().System())/1000000, float64(Store.Meta().Waterline())/1000000, float64(Store.Meta().Size())/1000000)
+	log.Debug("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB, stored: %.2f MB, backed: %.2f MB",
+		session.Timeout.Since(), session.Timeout.Interrupted(),
+		float64(Store.Meta().Effective())/1000000, float64(Store.Meta().System())/1000000, float64(Store.Meta().Waterline())/1000000,
+		float64(Store.Meta().Size())/1000000, float64(Store.Meta().(*storage.StorageMeta).BackupSize())/1000000)
 	return *meta, nil
 }
 
