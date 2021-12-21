@@ -34,6 +34,10 @@ var (
 	ErrNotSuppport        = errors.New("not support")
 )
 
+type RequestCloser interface {
+	Close()
+}
+
 type Request struct {
 	Seq            int64
 	Id             Id
@@ -49,6 +53,8 @@ type Request struct {
 	Changes        int
 	CollectorEntry interface{}
 	QueuedAt       time.Time
+	Cleanup        RequestCloser
+	Optional       bool // Flag response is optional. There is a compete fallback will eventually fulfill the request.
 
 	conn             Conn
 	status           uint32
@@ -125,12 +131,17 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
+	if req.Optional {
+		conn.Writer().WriteBulkString("1")
+	} else {
+		conn.Writer().WriteBulkString("0")
+	}
 	req.conn = conn
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
@@ -205,6 +216,7 @@ func (req *Request) Close() {
 			holdable.Unhold()
 		}
 	}
+	req.Cleanup = nil
 }
 
 func (req *Request) IsReturnd() bool {
@@ -226,7 +238,10 @@ func (req *Request) IsResponse(rsp *Response) bool {
 }
 
 func (req *Request) SetResponse(rsp interface{}) error {
-	req.MarkReturned()
+	// Makeup: do cleanup
+	if req.MarkReturned() && req.Cleanup != nil {
+		req.Cleanup.Close()
+	}
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}

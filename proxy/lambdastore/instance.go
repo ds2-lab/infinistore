@@ -117,6 +117,7 @@ var (
 	ErrValidationTimeout  = errors.New("funciton validation timeout")
 	ErrCapacityExceeded   = errors.New("capacity exceeded")
 	ErrTimeout            = errors.New("queue timeout")
+	ErrRelocationFailed   = errors.New("relocation failed")
 )
 
 type InstanceManager interface {
@@ -309,8 +310,12 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 
 func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
-		ins.tryRerouteDelegateRequest(cmd.GetRequest())
-		return ErrInstanceClosed
+		// tryRerouteDelegateRequest will always try relocation.
+		if !ins.tryRerouteDelegateRequest(cmd.GetRequest()) {
+			return ErrRelocationFailed
+		} else {
+			return nil
+		}
 	}
 
 	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
@@ -332,7 +337,6 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
-		ins.tryRerouteDelegateRequest(cmd.GetRequest())
 		ins.cleanCmdChannel(ins.chanCmd)
 	}
 
@@ -1295,8 +1299,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// 2. Report not found
 		reclaimPass := false
 		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
-			reclaimPass = reclaimPass || ins.tryRerouteDelegateRequest(cmd.GetRequest())
-			reclaimPass = reclaimPass || ins.relocateGetRequest(cmd.GetRequest())
+			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest())
 		}
 
 		if reclaimPass {
@@ -1400,9 +1403,13 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) bool {
 		return false
 	}
 
+	// Delegate will always relocate the chunk.
+	// This will only happen once since redelegated instance will refuse relocation due to req.InsId != ins.Id()
+	fallbacked := ins.relocateGetRequest(req)
+
 	if ins.delegates == nil {
 		ins.log.Warn("Has not delegated yet, stop reroute %v", req)
-		return false
+		return fallbacked
 	}
 
 	loc, total, _ := ins.delegates.Locator().Locate(req.Key)
@@ -1410,16 +1417,21 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) bool {
 
 	// No reroute for chunk larger than threshold()
 	if req.Size() > int64(delegate.getRerouteThreshold()) {
-		return false
+		return fallbacked
 	}
 
+	// Set optional flag will not be override.
+	if fallbacked {
+		req.Optional = fallbacked
+	}
+	// Chained delegation is safe if the instance triggering relocation is not current instance.
 	err := delegate.Dispatch(req)
 	if err != nil {
 		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
-		return false
+		return fallbacked
 	} else {
 		ins.log.Debug("Delegate %s to node %d as %d of %d.", req.Key, delegate.Id(), loc, total)
-		return true
+		return true // fallbacked || true
 	}
 }
 

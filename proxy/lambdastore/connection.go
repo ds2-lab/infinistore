@@ -575,6 +575,10 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 //   You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
 	if req := conn.popRequest(); req != nil {
+		if req.Optional {
+			// For optional request, simply ignore err
+			return nil
+		}
 		return req.SetResponse(err)
 	}
 
@@ -725,7 +729,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		// Connection will not be flagged available until SkipBulk() is executed.
 		req, _ := conn.SetResponse(rsp, false)
-		if req != nil {
+		if req != nil && !returned {
 			_, err := collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
 				conn.log.Warn("LogRequestFuncResponse err %v", err)

@@ -187,6 +187,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		Client:         client,
 		CollectorEntry: collectorEntry,
 		Info:           meta,
+		Cleanup:        counter,
 	}
 	// Update counter
 	counter.Requests[dChunkId] = req
@@ -226,13 +227,15 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// Validate the status of the instance
 	instance := p.cluster.Instance(uint64(lambdaDest))
 	var err error
-	if instance == nil || instance.IsReclaimed() {
+	// No long we care if instance is reclaimed or not. Reclaimed instance will be delegated.
+	if instance == nil {
 		err = lambdastore.ErrInstanceClosed
 	} else {
+		// If reclaimed, instance will try delegate and relocate chunk concurrently, return ErrRelocationFailed if failed.
 		err = instance.Dispatch(req)
 	}
-	if err != nil && err != lambdastore.ErrTimeout {
-		// In both case, the instance can be closed, try relocate.
+	if err != nil && err != lambdastore.ErrTimeout && err != lambdastore.ErrRelocationFailed {
+		// In some cases, the instance doesn't try relocating, relocate the chunk as failover.
 		_, err = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
 	}
 	if err != nil {
