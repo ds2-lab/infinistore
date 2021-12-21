@@ -53,10 +53,10 @@ func (s *Pool) NumActives() int {
 // for the validity of the index, and the index can be a virtual one.
 // This operation will be blocked if no more deployment available
 func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *GroupInstance {
-	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
-	s.actives.Set(ins.Id(), ins)
-	g.Set(ins)
-	return ins
+	gins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
+	s.actives.Set(gins.Id(), gins)
+	g.Set(gins)
+	return gins
 }
 
 // Reserve a deployment at ith position in the group.
@@ -65,9 +65,9 @@ func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *GroupInstance {
 func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (*GroupInstance, error) {
 	select {
 	case item := <-s.backend:
-		ins := g.Reserve(idx, item)
-		s.actives.Set(ins.Id(), ins)
-		return ins, nil
+		gins := g.Reserve(idx, item)
+		s.actives.Set(gins.Id(), gins)
+		return gins, nil
 	default:
 		return nil, types.ErrNoSpareDeployment
 	}
@@ -76,39 +76,44 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (*GroupInstance, error)
 // Reserve a deployment to replace specified instance.
 // Can be a different deployment other than the instance's for different mode.
 func (s *Pool) ReserveForInstance(insId uint64) (*GroupInstance, error) {
-	got, exists := s.getActive(insId)
+	gins, exists := s.getActive(insId)
 	if !exists {
 		return nil, fmt.Errorf("instance %d not found", insId)
 	}
 
-	ins := got.(*GroupInstance)
 	if IN_DEPLOYMENT_MIGRATION {
-		return ins, nil
+		return gins, nil
 	} else {
-		return s.ReserveForGroup(ins.group, ins.idx)
+		return s.ReserveForGroup(gins.group, gins.idx)
 	}
 }
 
 // Helper function for two phase deletion
-func (s *Pool) getActive(key interface{}) (interface{}, bool) {
+func (s *Pool) getActive(key interface{}) (*GroupInstance, bool) {
 	active, exists := s.actives.Get(key)
-	if exists && active != nil {
-		return active, true
-	} else {
+	if !exists {
 		return nil, false
+	} else if legacy, ok := active.(*Legacy); ok {
+		return legacy.GroupInstance, false
+	} else {
+		return active.(*GroupInstance), true
 	}
 }
 
+// Recycle lambda deployment for later use
+// Instead of removing instance from actives, placehold a legacy instance to keep track delegate information.
+// TODO: Relocate meta to reflect delegated placements.
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
 	// There is no atomic delete that can detect the existence of the key. Using two phase deletion here.
 	// We need this to ensure a active being recycle once.
 	if active, ok := s.getActive(dp.Id()); !ok {
 		return
-	} else if !s.actives.Cas(dp.Id(), active, nil) {
+	} else if !s.actives.Cas(dp.Id(), active, &Legacy{GroupInstance: active}) {
 		return
 	}
 
-	s.actives.Del(dp.Id())
+	// TODO: Uncomment if metas were relocated.
+	// s.actives.Del(dp.Id())
 	switch backend := dp.(type) {
 	case *lambdastore.Deployment:
 		s.backend <- backend
@@ -118,29 +123,31 @@ func (s *Pool) Recycle(dp types.LambdaDeployment) {
 }
 
 func (s *Pool) Deployment(id uint64) (types.LambdaDeployment, bool) {
-	ins, exists := s.getActive(id)
+	gins, exists := s.getActive(id)
 	if exists {
-		return ins.(*GroupInstance).LambdaDeployment, exists
+		return gins.LambdaDeployment, exists
 	} else {
 		return nil, exists
 	}
 }
 
 func (s *Pool) Instance(id uint64) *lambdastore.Instance {
-	got, exists := s.getActive(id)
-	if !exists {
+	gins, _ := s.getActive(id)
+	// Legacy may be returned.
+	if gins == nil {
 		return nil
 	}
-	return got.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance)
+	return gins.LambdaDeployment.(*lambdastore.Instance)
 }
 
 func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
 	gins, exists := s.getActive(id)
+	// Legacy will be filtered to avoid error.
 	if !exists {
 		return nil, exists
 	}
 
-	return gins.(*GroupInstance), exists
+	return gins, exists
 }
 
 func (s *Pool) Clear(g *Group) {

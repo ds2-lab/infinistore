@@ -15,7 +15,8 @@ func (h *ChunkQueue) Len() int {
 
 func (h *ChunkQueue) Less(i, j int) bool {
 	// log.Printf("Less %d, %d (%v, %v) of %d", i, j, h[i], h[j], len(h))
-	return h.lru == h.queue[i].Accessed.Before(h.queue[j].Accessed)
+	// Change LRU to Largest Chunk Size. Larger chunk will be evicted first.
+	return h.lru == (h.queue[i].Size > h.queue[j].Size)
 }
 
 func (h ChunkQueue) Swap(i, j int) {

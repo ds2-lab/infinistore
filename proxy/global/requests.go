@@ -220,3 +220,7 @@ func (c *RequestCounter) ReleaseIfAllReturned(status ...uint64) {
 		c.Release()
 	}
 }
+
+func (c *RequestCounter) Close() {
+	c.ReleaseIfAllReturned(c.Status())
+}

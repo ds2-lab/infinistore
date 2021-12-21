@@ -36,8 +36,8 @@ const (
 	RECOVERING_MAIN   uint32 = 0x01
 	RECOVERING_BACKUP uint32 = 0x02
 
-	LineageStorageOverhead    = 150000000
-	BackupStoreageReservation = 0.1 // 1/N * 2, N = 20, backups per lambda.
+	LineageStorageOverhead    = StorageOverhead // Reuse StorageOverhead
+	BackupStoreageReservation = 0.1             // 1/N * 2, N = 20, backups per lambda.
 )
 
 var (

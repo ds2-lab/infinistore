@@ -79,6 +79,15 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		errRsp := &worker.ErrorResponse{}
 		chunkId = c.Arg(1).String()
 		sizeArg := c.Arg(3)
+		noRecovery, _ := c.Arg(4).Int()
+		if noRecovery > 0 {
+			errRsp.Error = ret.Error()
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
 		if sizeArg == nil {
 			errRsp.Error = errors.New("size must be set for trying recovery from persistent layer")
 			Server.AddResponses(errRsp, client)
