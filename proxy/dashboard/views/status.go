@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	MemLimit = uint64(3096000000)
+	MemLimit = uint64(0)
 )
 
 type StatusView struct {
@@ -52,7 +52,7 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 		buf.SetCell(cell, image.Pt(x, v.Inner.Max.Y-v.Inner.Min.Y-1).Add(v.Inner.Min))
 	}
 
-	if v.maxMemory > MemLimit {
+	if MemLimit > 0 && v.maxMemory > MemLimit {
 		go func(dash DashControl) {
 			runtime.Gosched()
 			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
