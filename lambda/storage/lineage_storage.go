@@ -837,10 +837,12 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 		chunk, existed := s.Storage.get(servingKey)
 		if !existed {
 			chunk = &types.Chunk{
-				Key:    servingKey,
-				Body:   nil,
-				Size:   0, // To be filled later.
-				Backup: meta.Type == types.LineageMetaTypeBackup,
+				Key:       servingKey,
+				Body:      nil,
+				Size:      0, // To be filled later.
+				Status:    types.CHUNK_RECOVERING,
+				Available: 0,
+				Backup:    meta.Type == types.LineageMetaTypeBackup,
 			}
 			// Occupy the repository, details will be filled later.
 			s.Storage.set(servingKey, chunk) // No size update (don't know how) by calling "repo.Set". Just a placeholder.
@@ -874,39 +876,39 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 			if existed {
 				// Exclude out of date operations, possibilities are:
 				// 1. New incoming write operations during recovery: chunk.Term > s.lineage.Term >= term.Term
-				// 2. Overlap operations (included in the snapshot): chunk.Term >= op.Term
+				// 2. Overlap operations (included in the snapshot): chunk.Term >= term.Term
 				if term.Term <= chunk.Term {
 					// Skip
 					continue
 				}
 
-				// Update operations (del or overwritten set). Delete what-so-ever. Special cases will be handler below.
-				if chunk.Backup {
-					s.Storage.del(chunk, "replay lineage") // logic deletion.
-					s.meta.bakSize -= chunk.Size           // placeholder servingKey has Size 0
-				} else {
-					s.Storage.delWithOption(chunk, "replay lineage", nil) // Decreasing size in storage only by calling "Storage.delWithOption" (placeholder servingKey has Size 0).
-					if chunk.IsBuffered(false) {
-						s.bufferRemove(chunk) // "bufferRemove" will remove chunk from buffer and update buffer size.
-					}
-				}
-
 				if op.Op == types.OP_DEL {
+					if !chunk.IsDeleted() {
+						chunk.Term = term.Term
+						chunk.Accessed = op.Accessed
+						if chunk.Backup {
+							s.Storage.del(chunk, "sync lineage") // logic deletion.
+							s.meta.bakSize -= chunk.Size         // In case servingKey, placeholder chunk with servingKey has Size 0
+						} else {
+							s.Storage.delWithOption(chunk, "sync lineage", &types.OpWrapper{Accessed: true}) // Decreasing size in storage only by calling "Storage.delWithOption" (placeholder servingKey has Size 0).
+							if chunk.IsBuffered(false) {
+								s.bufferRemove(chunk) // "bufferRemove" will remove chunk from buffer and update buffer size.
+							}
+						}
+					}
 					// Deletion after set will be dealed on recovering objects.
 					continue
-				} else if op.Key == servingKey {
+				} else if op.Key == servingKey && chunk.Id == "" {
 					// Updaet data of servingKey, overwrite is OK.
 					chunk.Id = op.Id
 					chunk.Size = op.Size
 					chunk.Term = term.Term
 					chunk.Accessed = op.Accessed
-					chunk.Status = types.CHUNK_RECOVERING
-					chunk.Available = 0
 					chunk.Bucket = op.Bucket
-					// Unlikely, the servingKey can be RESET (see comments below)
 				} else {
-					// else: Although unlikely, objects can be reset. Dealing reset by deleting it first and add it later.
-					chunk = nil // Reset to nil, so it can be added back later.
+					// overlap
+					chunk.Accessed = op.Accessed
+					continue
 				}
 			}
 
@@ -926,32 +928,40 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 						Bucket:    op.Bucket,
 						Backup:    meta.Type == types.LineageMetaTypeBackup,
 					}
+					if op.Op == types.OP_DEL {
+						chunk.Status = types.CHUNK_DELETED
+						chunk.Note = "restore lineage"
+					}
 				} else {
 					// Skip non-recoverable objects.
 					continue
 				}
 			}
 
-			// Chunks to be added can't be a deleted chunk (delete before added), just in case something wrong.
-			if op.Op == types.OP_DEL {
-				continue
-			}
-
 			if chunk.Backup {
 				s.Storage.set(chunk.Key, chunk)
 				s.backup.Set(chunk.Key, chunk)
-				s.meta.bakSize += chunk.Size
+				if !chunk.IsDeleted() {
+					s.meta.bakSize += chunk.Size
+				}
 			} else {
-				s.Storage.setWithOption(op.Key, chunk, nil) // Update size by calling "Storage.setWithOption".
 				// For types.LineageMetaTypeMain only, types.LineageMetaTypeDelegate will not call "doReplayLineage".
 				chunk.BuffIdx = op.BIdx
-				if chunk.IsBuffered(false) {
-					// Chunk was indicated to be buffered, rebuff it.
-					chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
-					// No size update by calling "bufferAdd". Update the size after object downloaded.
-					s.bufferAdd(chunk) // No eviction will be considered since we are restoring existed state.
+				if !chunk.IsDeleted() {
+					s.Storage.setWithOption(op.Key, chunk, nil) // Update size by calling "Storage.setWithOption".
+					if chunk.IsBuffered(false) {
+						// Chunk was indicated to be buffered, rebuff it.
+						chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
+						// No size update by calling "bufferAdd". Update the size after object downloaded.
+						s.bufferAdd(chunk) // No eviction will be considered since we are restoring existed state.
+					}
+				} else if !chunk.IsBuffered(false) {
+					s.Storage.set(chunk.Key, chunk) // Simply set to indicate the object is deleted
 				}
+				// Deleted buffered chunk = evicted chunk, and will not be restore.
 			}
+
+			// Append to tbd list.
 			if op.Key != servingKey {
 				tbds = append(tbds, chunk)
 			}
