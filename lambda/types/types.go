@@ -186,9 +186,9 @@ func (c *Chunk) AddRecovered(bytes uint64) bool {
 }
 
 // NotifyRecovered notified concurrent requests that recovery has ended, success or not.
-func (c *Chunk) EndRecover(status int) {
+func (c *Chunk) EndRecover(status uint32) {
 	// If still recovering, set to incomplete
-	if atomic.CompareAndSwapUint32(&c.Status, CHUNK_RECOVERING, CHUNK_INCOMPLETE) {
+	if atomic.CompareAndSwapUint32(&c.Status, CHUNK_RECOVERING, status) {
 		c.Notifier.Done() // Done StartRecover
 	}
 }
