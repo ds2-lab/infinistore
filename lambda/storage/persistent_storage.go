@@ -181,9 +181,7 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		input.Size = size
 		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
 		input.After = func() error {
-			if !chunk.AddRecovered(uint64(input.Downloaded)) {
-				return types.ErrIncomplete
-			}
+			chunk.AddRecovered(uint64(input.Downloaded))
 			return nil
 		}
 	}); err != nil {
