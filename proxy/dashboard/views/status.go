@@ -10,8 +10,12 @@ import (
 	"github.com/gizak/termui/v3/widgets"
 )
 
+const (
+	GB = 1073741824
+)
+
 var (
-	MemLimit = uint64(0)
+	MemLimit = uint64(20) * GB
 )
 
 type StatusView struct {
