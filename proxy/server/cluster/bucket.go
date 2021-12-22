@@ -61,7 +61,10 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		return nil, ErrInsufficientDeployments
 	}
 
-	flushLimit := global.Options.GetNumFunctions()
+	flushLimit := 12
+	if global.Options.GetNumFunctions() > 0 {
+		flushLimit = global.Options.GetNumFunctions()
+	}
 	bucket = &Bucket{
 		id:         id,
 		group:      group,
