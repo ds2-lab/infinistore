@@ -29,6 +29,7 @@ type storageAdapterCommand struct {
 	bodyStream resp.AllReadCloser
 	handler    func(*storageAdapterCommand)
 	ret        chan *types.OpRet
+	note       string
 }
 
 func (cmd *storageAdapterCommand) reset() *storageAdapterCommand {
@@ -142,20 +143,21 @@ func (a *StorageAdapter) Migrate(key string) (string, *types.OpRet) {
 	return cmd.chunk, ret
 }
 
-func (a *StorageAdapter) Del(key string) *types.OpRet {
+func (a *StorageAdapter) Del(key string, reason string) *types.OpRet {
 	cmd := cmds.Get().(*storageAdapterCommand)
 	defer cmds.Put(cmd)
 
 	cmd.key = key
 	cmd.chunk = ""
 	cmd.handler = a.delHandler
+	cmd.note = reason
 	a.serializer <- cmd
 
 	return <-cmd.ret
 }
 
 func (a *StorageAdapter) LocalDel(key string) {
-	a.store.Del(key)
+	a.store.Del(key, "migrator localdel")
 }
 func (a *StorageAdapter) Len() int {
 	return a.store.Len()
@@ -290,7 +292,7 @@ func (a *StorageAdapter) delHandler(cmd *storageAdapterCommand) {
 	}
 
 	log.Debug("Forwarding Del cmd on key %s(chunk %s): success", cmd.key, cmd.chunk)
-	cmd.ret <- a.store.Del(cmd.key)
+	cmd.ret <- a.store.Del(cmd.key, cmd.note)
 }
 
 func (a *StorageAdapter) readGetResponse(reader resp.ResponseReader, cmd *storageAdapterCommand) (err error) {

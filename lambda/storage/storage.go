@@ -34,8 +34,8 @@ type StorageHelper interface {
 	getWithOption(string, *types.OpWrapper) (*types.Chunk, *types.OpRet)
 	set(string, *types.Chunk)
 	setWithOption(string, *types.Chunk, *types.OpWrapper) *types.OpRet
-	del(*types.Chunk)
-	delWithOption(*types.Chunk, *types.OpWrapper) *types.OpRet
+	del(*types.Chunk, string)
+	delWithOption(*types.Chunk, string, *types.OpWrapper) *types.OpRet
 	newChunk(string, string, uint64, []byte) *types.Chunk
 }
 
@@ -97,7 +97,7 @@ func (s *Storage) getWithOption(key string, opt *types.OpWrapper) (*types.Chunk,
 		chunk.Access()
 	}
 	if chunk.IsDeleted() {
-		return nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else {
 		// Ensure val is available regardless chunk is deleted or not.
 		return chunk, types.OpSuccess()
@@ -164,28 +164,28 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 	return s.Set(key, chunkId, val)
 }
 
-func (s *Storage) del(chunk *types.Chunk) {
-	chunk.Delete()
+func (s *Storage) del(chunk *types.Chunk, reason string) {
+	chunk.Delete(reason)
 }
 
-func (s *Storage) delWithOption(chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+func (s *Storage) delWithOption(chunk *types.Chunk, reason string, opt *types.OpWrapper) *types.OpRet {
 	if opt == nil || !opt.Accessed {
 		chunk.Access()
 	}
-	s.helper.del(chunk)
+	s.helper.del(chunk, reason)
 	if opt == nil || !opt.Sized {
 		s.meta.DecreaseSize(chunk.Size)
 	}
 	return types.OpSuccess()
 }
 
-func (s *Storage) Del(key string) *types.OpRet {
+func (s *Storage) Del(key string, reason string) *types.OpRet {
 	chunk, ok := s.helper.get(key)
 	if !ok {
 		return types.OpError(types.ErrNotFound)
 	}
 
-	return s.helper.delWithOption(chunk, nil)
+	return s.helper.delWithOption(chunk, reason, nil)
 }
 
 func (s *Storage) Len() int {

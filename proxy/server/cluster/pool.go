@@ -152,16 +152,17 @@ func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
 
 func (s *Pool) Clear(g *Group) {
 	for item := range s.actives.Iter() {
-		ins := item.Value.(*GroupInstance)
-		if ins.group == g {
-			ins.LambdaDeployment.(*lambdastore.Instance).Close()
+		if gins, ok := item.Value.(*GroupInstance); ok && gins.group == g {
+			gins.LambdaDeployment.(*lambdastore.Instance).Close()
 		}
 	}
 }
 
 func (s *Pool) ClearAll() {
 	for item := range s.actives.Iter() {
-		item.Value.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance).Close()
+		if gins, ok := item.Value.(*GroupInstance); ok {
+			gins.LambdaDeployment.(*lambdastore.Instance).Close()
+		}
 	}
 }
 
