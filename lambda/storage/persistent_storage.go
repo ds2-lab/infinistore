@@ -77,7 +77,7 @@ func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (*ty
 		chunk.Access()
 	}
 	if chunk.IsDeleted() {
-		return nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
 		return chunk, types.OpSuccess()
@@ -91,7 +91,7 @@ func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (*ty
 		chunk.Access()
 	}
 	if chunk.IsDeleted() {
-		return nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
 		return chunk, types.OpSuccess()
@@ -143,11 +143,24 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		return err
 	}
 
-	chunk := s.helper.newChunk(key, chunkId, size, nil)
-	chunk.Delete() // Delete to ensure call PrepareRecover() succssfully
-	chunk.PrepareRecover()
-	inserted, loaded := s.repo.GetOrInsert(key, chunk)
-	chunk = inserted.(*types.Chunk)
+	emptyChunk := s.helper.newChunk(key, chunkId, size, nil)
+	emptyChunk.Delete("prepare recovery") // Delete to ensure call PrepareRecover() succssfully
+	emptyChunk.PrepareRecover()
+	inserted, loaded := s.repo.GetOrInsert(key, emptyChunk)
+	chunk := inserted.(*types.Chunk)
+	// Legacy chunk that failed to download
+	if loaded && chunk.IsIncomplete() {
+		// Replace chunk
+		changed := s.repo.Cas(key, chunk, emptyChunk)
+		if changed {
+			chunk = emptyChunk
+			loaded = false
+		} else {
+			inserted, _ = s.repo.Get(key)
+			chunk = inserted.(*types.Chunk)
+			loaded = true
+		}
+	}
 	if loaded && !chunk.PrepareRecover() {
 		chunk.WaitRecovered()
 		if chunk.IsAvailable() {
@@ -168,8 +181,7 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		input.Size = size
 		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
 		input.After = func() error {
-			chunk.AddRecovered(uint64(input.Downloaded), false)
-			if !chunk.IsAvailable() {
+			if !chunk.AddRecovered(uint64(input.Downloaded)) {
 				return types.ErrIncomplete
 			}
 			return nil
@@ -186,8 +198,8 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 	return ret
 }
 
-func (s *PersistentStorage) delWithOption(chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
-	s.Storage.delWithOption(chunk, opt)
+func (s *PersistentStorage) delWithOption(chunk *types.Chunk, reason string, opt *types.OpWrapper) *types.OpRet {
+	s.Storage.delWithOption(chunk, reason, opt)
 
 	if s.chanOps != nil {
 		op := &types.OpWrapper{

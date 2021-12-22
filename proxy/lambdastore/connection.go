@@ -288,6 +288,8 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		return
 	}
 
+	conn.log.Debug("Sent %v", req)
+
 	// Set instance busy. Yes requests will call busy twice:
 	// on schedule(instance.handleRequest) and on request.
 	ins := conn.instance // Save a reference in case the connection being released later.

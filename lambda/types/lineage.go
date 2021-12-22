@@ -150,22 +150,31 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 type OpRet struct {
 	error
 	delayed chan struct{}
+	msg     string
 }
 
 func OpError(err error) *OpRet {
-	return &OpRet{err, nil}
+	return &OpRet{err, nil, ""}
+}
+
+func OpErrorWithMessage(err error, msg string) *OpRet {
+	return &OpRet{err, nil, msg}
 }
 
 func OpSuccess() *OpRet {
-	return &OpRet{nil, nil}
+	return &OpRet{nil, nil, ""}
 }
 
 func OpDelayedSuccess() *OpRet {
-	return &OpRet{nil, make(chan struct{}, 1)}
+	return &OpRet{nil, make(chan struct{}, 1), ""}
 }
 
 func (ret *OpRet) Error() error {
 	return ret.error
+}
+
+func (ret *OpRet) Message() string {
+	return ret.msg
 }
 
 func (ret *OpRet) IsDelayed() bool {

@@ -71,7 +71,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId, stream, ret := Store.GetStream(key)
 	// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
 	// Deleted chunk(ret.Error() == types.ErrDeleted) will not be recovered.
-	if ret.Error() == types.ErrNotFound && Persist != nil {
+	if (ret.Error() == types.ErrNotFound || ret.Error() == types.ErrIncomplete) && Persist != nil {
 		log.Debug("Key not found locally, try recovery: %v %s", key, reqId)
 		if Lineage != nil {
 			log.Warn("Key not found while recovery is enabled: %v", key)
@@ -154,7 +154,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			// Not found
 			respError = NewResponseError(404, "Key not found %s: %v", key, ret.Error())
 		} else {
-			respError = NewResponseError(500, "Failed to get %s: %v", key, ret.Error())
+			respError = NewResponseError(500, "Failed to get %s: %v,%s", key, ret.Error(), ret.Message())
 		}
 		errResponse := &worker.ErrorResponse{Error: respError}
 		Server.AddResponses(errResponse, client)
@@ -389,7 +389,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId := c.Arg(1).String()
 	key := c.Arg(2).String()
 
-	ret = Store.Del(key)
+	ret = Store.Del(key, "request")
 	if ret.Error() == nil {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{

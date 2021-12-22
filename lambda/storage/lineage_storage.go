@@ -148,7 +148,7 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 { // No need to init buffer here, bufferMeta.Size() would be 0 otherwise.
 		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
 		s.bufferMeta.DecreaseSize(evicted.Size)
-		s.PersistentStorage.delWithOption(evicted, nil)
+		s.PersistentStorage.delWithOption(evicted, "eviction", nil)
 		size = s.meta.Size()
 	}
 	if size >= s.meta.Effective() {
@@ -171,7 +171,7 @@ func (s *LineageStorage) newChunk(key string, chunkId string, size uint64, val [
 	return chunk
 }
 
-func (s *LineageStorage) Del(key string) *types.OpRet {
+func (s *LineageStorage) Del(key string, reason string) *types.OpRet {
 	s.getSafe.Wait()
 
 	chunk, ok := s.helper.get(key)
@@ -186,7 +186,7 @@ func (s *LineageStorage) Del(key string) *types.OpRet {
 	defer s.lineageMu.Unlock()
 
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
-	return s.helper.delWithOption(chunk, nil)
+	return s.helper.delWithOption(chunk, reason, nil)
 }
 
 func (s *LineageStorage) Len() int {
@@ -882,10 +882,10 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 
 				// Update operations (del or overwritten set). Delete what-so-ever. Special cases will be handler below.
 				if chunk.Backup {
-					s.Storage.del(chunk)         // logic deletion.
-					s.meta.bakSize -= chunk.Size // placeholder servingKey has Size 0
+					s.Storage.del(chunk, "replay lineage") // logic deletion.
+					s.meta.bakSize -= chunk.Size           // placeholder servingKey has Size 0
 				} else {
-					s.Storage.delWithOption(chunk, nil) // Decreasing size in storage only by calling "Storage.delWithOption" (placeholder servingKey has Size 0).
+					s.Storage.delWithOption(chunk, "replay lineage", nil) // Decreasing size in storage only by calling "Storage.delWithOption" (placeholder servingKey has Size 0).
 					if chunk.IsBuffered(false) {
 						s.bufferRemove(chunk) // "bufferRemove" will remove chunk from buffer and update buffer size.
 					}
@@ -900,7 +900,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 					chunk.Size = op.Size
 					chunk.Term = term.Term
 					chunk.Accessed = op.Accessed
-					chunk.Status = types.CHUNK_AVAILABLE
+					chunk.Status = types.CHUNK_RECOVERING
 					chunk.Available = 0
 					chunk.Bucket = op.Bucket
 					// Unlikely, the servingKey can be RESET (see comments below)
@@ -920,7 +920,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 						Body:      nil,
 						Size:      op.Size,
 						Term:      term.Term,
-						Status:    types.CHUNK_AVAILABLE,
+						Status:    types.CHUNK_RECOVERING,
 						Available: 0,
 						Accessed:  op.Accessed,
 						Bucket:    op.Bucket,
@@ -981,7 +981,7 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 	// Now tbds are settled, initiate notifiers
 	for _, tbd := range tbds {
 		if !tbd.IsDeleted() {
-			tbd.Notifier.Add(1)
+			tbd.StartRecover()
 		}
 	}
 
@@ -1034,8 +1034,9 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 				continue
 			} else if existed {
 				chunk.Accessed = op.Accessed
-				if op.Op == types.OP_DEL && chunk.Status != types.CHUNK_DELETED {
+				if op.Op == types.OP_DEL && !chunk.IsDeleted() {
 					chunk.Status = types.CHUNK_DELETED
+					chunk.Note = "delegation preflight"
 					// Status changed, track.
 					if chunk.Term < s.lineage.Term+1 {
 						chunk.Term = s.lineage.Term + 1
@@ -1056,7 +1057,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 					Body:      nil,
 					Size:      op.Size,
 					Term:      s.lineage.Term + 1,
-					Status:    types.CHUNK_AVAILABLE,
+					Status:    types.CHUNK_RECOVERING,
 					Available: 0,
 					Accessed:  op.Accessed,
 					Bucket:    op.Bucket,
@@ -1084,7 +1085,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 		tbd := heap.Pop(ru).(*types.Chunk)
 		if !tbd.IsBuffered(true) && tbd.IsDeleted() {
 			// Changes to main repo, append oplog to lineage.
-			s.PersistentStorage.delWithOption(tbd, nil)
+			s.PersistentStorage.delWithOption(tbd, "delegation", nil)
 			continue
 		}
 
@@ -1092,7 +1093,7 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 			// Skip, remove if already in buffer
 			if tbd.IsBuffered(false) {
 				s.bufferRemove(tbd)
-				s.PersistentStorage.delWithOption(tbd, nil)
+				s.PersistentStorage.delWithOption(tbd, "delegation", nil)
 			} else {
 				// Remove the placeholder.
 				s.repo.Del(tbd.Key)
@@ -1117,13 +1118,13 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 				break
 			}
 			// evicted must be objects previously in buffer.
-			s.PersistentStorage.delWithOption(evicted, nil)
+			s.PersistentStorage.delWithOption(evicted, "eviction", nil)
 			size = s.meta.Size()
 		}
 		if size < s.meta.Effective() {
 			// Op log will be merged to main with special flag
 			s.PersistentStorage.setWithOption(tbd.Key, tbd, &types.OpWrapper{Persisted: true, Sized: true})
-			tbd.Notifier.Add(1)
+			tbd.StartRecover()
 			delegated++
 			filtered[len(filtered)-delegated] = tbd
 		} else {
@@ -1225,20 +1226,20 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 			dobj := input.(*mys3.BatchDownloadObject)
 			tbd := dobj.Meta.(*types.Chunk)
 			receivedBytes += int(dobj.Downloaded)
-			available := atomic.AddUint64(&tbd.Available, uint64(dobj.Downloaded))
 			// objectRange := ""
 			// if dobj.Object.Range != nil {
 			// 	objectRange = *dobj.Object.Range
 			// }
 			// s.log.Debug("Update object availability %s(%s): %d of %d", tbd.Key, objectRange, available, tbd.Size)
-			if available == tbd.Size {
-				succeed++
-				tbd.Notifier.Done()
-			}
+			tbd.AddRecovered(uint64(dobj.Downloaded))
 			downloader.Done(dobj)
 			// s.log.Info("Object: %s, size: %d, available: %d", *dobj.Object.Key, tbd.Size, available)
 			// s.log.Info("Requested: %d, Received: %d, Succeed: %d", requested, received, succeed)
 		}
+	}
+	// Set any recovering chunk to CHUNK_INCOMPLETE
+	for _, tbd := range tbds {
+		tbd.EndRecover(types.CHUNK_INCOMPLETE)
 	}
 	return receivedBytes, nil
 }
