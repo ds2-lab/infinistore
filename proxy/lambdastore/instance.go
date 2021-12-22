@@ -18,6 +18,7 @@ import (
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/google/uuid"
+	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -84,6 +85,7 @@ const (
 	DESCRIPTION_UNDEFINED  = "undefined"
 
 	BUSY_CHECK = 0x0001
+	RELOCATED  = 0x0002
 )
 
 var (
@@ -311,7 +313,7 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
 		// tryRerouteDelegateRequest will always try relocation.
-		if !ins.tryRerouteDelegateRequest(cmd.GetRequest()) {
+		if !ins.tryRerouteDelegateRequest(cmd.GetRequest(), opts&RELOCATED > 0) {
 			return ErrRelocationFailed
 		} else {
 			return nil
@@ -1299,7 +1301,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// 2. Report not found
 		reclaimPass := false
 		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
-			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest())
+			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), false)
 		}
 
 		if reclaimPass {
@@ -1398,14 +1400,17 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 	return true
 }
 
-func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) bool {
+func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, relocated bool) bool {
 	if req == nil || req.Cmd != protocol.CMD_GET {
 		return false
 	}
 
 	// Delegate will always relocate the chunk.
 	// This will only happen once since redelegated instance will refuse relocation due to req.InsId != ins.Id()
-	fallbacked := ins.relocateGetRequest(req)
+	fallbacked := relocated
+	if !fallbacked {
+		fallbacked = ins.relocateGetRequest(req)
+	}
 
 	if ins.delegates == nil {
 		ins.log.Warn("Has not delegated yet, stop reroute %v", req)
@@ -1425,7 +1430,7 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request) bool {
 		req.Optional = fallbacked
 	}
 	// Chained delegation is safe if the instance triggering relocation is not current instance.
-	err := delegate.Dispatch(req)
+	err := delegate.DispatchWithOptions(req, utils.Ifelse(fallbacked, 0, RELOCATED).(int))
 	if err != nil {
 		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
 		return fallbacked
