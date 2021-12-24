@@ -255,7 +255,11 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	log.Debug("Waiting for timeout...")
 	status := wait(session, Lifetime)
 
-	Server.Pause()
+	if DRY_RUN {
+		Server.Close()
+	} else {
+		Server.Pause()
+	}
 	meta := finalize(status)
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {

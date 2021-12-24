@@ -293,9 +293,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	// Set instance busy. Yes requests will call busy twice:
 	// on schedule(instance.handleRequest) and on request.
 	ins := conn.instance // Save a reference in case the connection being released later.
-	ins.busy()
+	ins.busy(req)
 	go func() {
-		defer ins.doneBusy()
+		defer ins.doneBusy(req)
 		err := req.Timeout()
 		if err == nil {
 			return
@@ -577,7 +577,7 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 //   You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
 	if req := conn.popRequest(); req != nil {
-		if req.Optional {
+		if req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
 			// For optional request, simply ignore err
 			return nil
 		}

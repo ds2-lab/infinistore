@@ -81,7 +81,7 @@ type PersistentStorage interface {
 	Storage
 
 	ConfigS3(string, string)
-	SetRecovery(string, string, uint64) *OpRet
+	SetRecovery(string, string, uint64, int) *OpRet
 	StartTracker()
 	StopTracker()
 }

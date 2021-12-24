@@ -37,6 +37,7 @@ type StorageHelper interface {
 	del(*types.Chunk, string)
 	delWithOption(*types.Chunk, string, *types.OpWrapper) *types.OpRet
 	newChunk(string, string, uint64, []byte) *types.Chunk
+	validate(*types.Chunk, *types.OpWrapper) (*types.OpWrapper, bool)
 }
 
 // Storage with lineage
@@ -146,6 +147,10 @@ func (s *Storage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWra
 
 func (s *Storage) newChunk(key string, chunkId string, size uint64, val []byte) *types.Chunk {
 	return types.NewChunk(key, chunkId, val)
+}
+
+func (s *Storage) validate(_ *types.Chunk, opt *types.OpWrapper) (*types.OpWrapper, bool) {
+	return opt, true
 }
 
 // Set chunk

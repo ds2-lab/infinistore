@@ -144,22 +144,12 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
-	size := s.meta.IncreaseSize(chunk.Size)
-	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 { // No need to init buffer here, bufferMeta.Size() would be 0 otherwise.
-		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
-		s.bufferMeta.DecreaseSize(evicted.Size)
-		s.PersistentStorage.delWithOption(evicted, "eviction", nil)
-		size = s.meta.Size()
-	}
-	if size >= s.meta.Effective() {
-		s.meta.DecreaseSize(chunk.Size)
+	if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
+		opt = updatedOpt
+	} else {
 		return types.OpError(ErrOOStorage)
 	}
 
-	if opt == nil {
-		opt = &types.OpWrapper{}
-	}
-	opt.Sized = true // Size update has been dealed for both backups and nonbackups.
 	return s.PersistentStorage.setWithOption(key, chunk, opt)
 }
 
@@ -169,6 +159,38 @@ func (s *LineageStorage) newChunk(key string, chunkId string, size uint64, val [
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
 	chunk.Bucket = s.getBucket(key)
 	return chunk
+}
+
+func (s *LineageStorage) validate(test *types.Chunk, opt *types.OpWrapper) (*types.OpWrapper, bool) {
+	if test.IsBuffered(true) {
+		s.bufferInit(100)
+		s.bufferAdd(test)
+	}
+
+	size := s.meta.IncreaseSize(test.Size)                      // Oversize test.
+	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 { // No need to init buffer if test is not to be buffered, bufferMeta.Size() would be 0 in this case.
+		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
+		s.bufferMeta.DecreaseSize(evicted.Size)
+		// If validate is called iteratively, make sure iterate test chunks using reversed heap.
+		// RU of to be delegated is before LRU of delegated already. Stop.
+		if evicted == test {
+			break
+		}
+
+		// evicted must be objects previously in buffer.
+		s.PersistentStorage.delWithOption(evicted, "eviction", nil)
+		size = s.meta.Size()
+	}
+	if size < s.meta.Effective() {
+		if opt == nil {
+			opt = &types.OpWrapper{}
+		}
+		opt.Sized = true // Size update has been dealed for both backups and nonbackups.
+		return opt, true
+	} else {
+		s.meta.DecreaseSize(test.Size) // Reset meta size.
+		return opt, false
+	}
 }
 
 func (s *LineageStorage) Del(key string, reason string) *types.OpRet {
@@ -1118,22 +1140,9 @@ func (s *LineageStorage) doDelegateLineage(meta *types.LineageMeta, terms []*typ
 		}
 
 		// Size check and add to buffer
-		s.bufferAdd(tbd)
-		size := s.meta.IncreaseSize(tbd.Size) // Oversize test.
-		for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 {
-			evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
-			s.bufferMeta.DecreaseSize(evicted.Size)
-			// RU of to be delegated is before LRU of delegated already. Stop.
-			if evicted == tbd {
-				break
-			}
-			// evicted must be objects previously in buffer.
-			s.PersistentStorage.delWithOption(evicted, "eviction", nil)
-			size = s.meta.Size()
-		}
-		if size < s.meta.Effective() {
-			// Op log will be merged to main with special flag
-			s.PersistentStorage.setWithOption(tbd.Key, tbd, &types.OpWrapper{Persisted: true, Sized: true})
+		if opt, ok := s.helper.validate(tbd, nil); ok {
+			opt.Persisted = true
+			s.PersistentStorage.setWithOption(tbd.Key, tbd, opt)
 			tbd.StartRecover()
 			delegated++
 			filtered[len(filtered)-delegated] = tbd
