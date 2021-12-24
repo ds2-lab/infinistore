@@ -52,7 +52,7 @@ start-server: build
 
 start-local: build-local
 	#bin/proxy -cluster=static -functions=10 -invoker=local -disable-recovery -ip=127.0.0.1 $(PARAMS)
-	bin/proxy -cluster=static -functions=10 -invoker=local -ip=127.0.0.1 $(PARAMS)
+	bin/proxy -cluster=window -functions=10 -invoker=local -ip=127.0.0.1 $(PARAMS)
 
 stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
