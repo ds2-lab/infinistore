@@ -108,7 +108,10 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 
 		ins := instances.Instance(test)
 		cmd.GetRequest().InsId = ins.Id()
-		if l.testChunk(ins, uint64(meta.ChunkSize)) {
+		if ins.IsReclaimed() {
+			// Only possible in testing.
+			test += len(meta.Placement)
+		} else if l.testChunk(ins, uint64(meta.ChunkSize)) {
 			// Recheck capacity. Capacity can be calibrated and miss post-check.
 			if l.testChunk(ins, 0) {
 				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), ins.Meta.Size(), ins.Meta.EffectiveCapacity())

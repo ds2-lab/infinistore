@@ -11,6 +11,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/zhangjyr/hashmap"
 
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -61,17 +62,20 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		return nil, ErrInsufficientDeployments
 	}
 
-	flushLimit := 12
+	limit := config.NumLambdaClusters
 	if global.Options.GetNumFunctions() > 0 {
-		flushLimit = global.Options.GetNumFunctions()
+		limit = global.Options.GetNumFunctions()
+	}
+	if limit > num {
+		limit = num
 	}
 	bucket = &Bucket{
 		id:         id,
 		group:      group,
 		log:        global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
 		instances:  make([]*GroupInstance, 0, num),
-		disabled:   hashmap.New(uintptr(flushLimit)),
-		flushLimit: flushLimit,
+		disabled:   hashmap.New(uintptr(num)),
+		flushLimit: limit,
 	}
 
 	// expand
@@ -277,7 +281,10 @@ func (b *Bucket) redundantInstances() []*GroupInstance {
 
 	// Return all actives
 	// Force to create a new slice mapping to avoid the length being changed.
-	return b.instances[b.activeStart.Idx()-b.start.Idx() : b.end.Idx()-b.start.Idx()]
+	if b.activeStart.Idx()+b.flushLimit >= b.end.Idx() {
+		return nil
+	}
+	return b.instances[b.activeStart.Idx()+b.flushLimit-b.start.Idx() : b.end.Idx()-b.start.Idx()]
 }
 
 func (b *Bucket) len() int {
