@@ -240,7 +240,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		_, err = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
 	}
 	if err != nil {
-		p.log.Warn("Failed to request %v: %v", req.Id, err)
+		p.log.Warn("Failed to dispatch %v: %v", req.Id, err)
 		status, _ := counter.AddReturned(int(dChunkId))
 		req.SetResponse(err)
 		counter.ReleaseIfAllReturned(status)
@@ -290,15 +290,6 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		if _, err := collector.CollectRequest(collector.LogRequestProxyResponse, wrapper.Request.CollectorEntry,
 			int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano()); err != nil {
 			p.log.Warn("LogRequestProxyResponse err %v", err)
-		}
-
-		// update placement at reroute
-		if wrapper.Request.Cmd == protocol.CMD_RECOVER {
-			if wrapper.Request.Changes&types.CHANGE_PLACEMENT > 0 {
-				meta := wrapper.Request.Info.(*metastore.Meta)
-				meta.Placement[rsp.Id.Chunk()] = wrapper.Request.InsId
-				p.log.Debug("Relocated %v to %d.", wrapper.Request.Key, wrapper.Request.InsId)
-			}
 		}
 
 		// Async logic

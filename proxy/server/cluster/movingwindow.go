@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"errors"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -202,7 +201,6 @@ func (mw *MovingWindow) GetBackupCandidates() mapreduce.Iterator {
 
 func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
 	all := mw.GetCurrentBucket().redundantInstances()
-	log.Printf("Candidates of delegates: %d", len(all))
 	_, delegates := mw.getBackupsForNode(all, -1, config.BackupsPerInstance)
 	return delegates
 }
@@ -210,6 +208,8 @@ func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
 // lambdastore.Relocator implementation
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
 	ins, _, err := mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
+	// update placement
+	meta.(*metastore.Meta).Placement[chunkId] = ins.Id()
 	return ins, err
 }
 

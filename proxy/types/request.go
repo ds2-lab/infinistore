@@ -152,10 +152,11 @@ func (req *Request) PrepareForDel(conn Conn) {
 }
 
 func (req *Request) ToRecover() *Request {
-	req.Cmd = protocol.CMD_RECOVER
-	req.RetCommand = protocol.CMD_GET
-	req.Changes = req.Changes & CHANGE_PLACEMENT
-	return req
+	recover := *req
+	recover.Cmd = protocol.CMD_RECOVER
+	recover.RetCommand = protocol.CMD_GET
+	recover.Changes = req.Changes & CHANGE_PLACEMENT
+	return &recover
 }
 
 func (req *Request) PrepareForRecover(conn Conn) {

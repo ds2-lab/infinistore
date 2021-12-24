@@ -186,6 +186,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 					// In backing only mode, we will not try to recover main repository.
 					// And any data loss will be regarded as signs of reclaimation.
 					flags |= protocol.PONG_RECLAIMED
+					if metas[i].ServingKey() != "" {
+						// Invalidate extended timeout.
+						session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR, input.Cmd)
+					}
 				} else {
 					inconsistency++
 				}

@@ -295,6 +295,10 @@ func (b *Backups) GetByHash(hash uint64) (*Instance, bool) {
 }
 
 func (b *Backups) GetByLocation(loc int, required int) (*Instance, bool) {
+	if loc >= len(b.backups) || loc > required {
+		return nil, false
+	}
+
 	// Copy pointer to ensure the instance will not change
 	backups := b.backups[:required]
 	backup := backups[loc]

@@ -301,9 +301,8 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			return
 		}
 
-		if resErr := req.SetResponse(err); resErr == nil {
+		if resErr := conn.SetErrorResponse(err); resErr == nil {
 			conn.log.Warn("Request timeout: %v", req)
-			conn.popRequest()
 			// close connection to discard late response.
 			conn.Close()
 		} else if resErr != types.ErrResponded {

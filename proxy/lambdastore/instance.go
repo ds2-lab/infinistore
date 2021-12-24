@@ -22,6 +22,7 @@ import (
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
@@ -1076,9 +1077,10 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	}
 	if len(outputStatus.Metas) > 0 {
 		uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
-		if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
+		if err != nil && err == ErrInstanceReclaimed {
 			// Reclaimed
 			ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
+
 			return err
 		} else if uptodate {
 			// If the node was invoked by other than the proxy, it could be stale.
@@ -1211,9 +1213,8 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
 				ins.log.Info("Reclaimed")
-				// Close current instance.
-				ins.closeLocked()
-				return conn, nil
+				validConn, _ := ins.flagValidatedLocked(conn, ErrInstanceReclaimed)
+				return validConn, nil
 			} else {
 				ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
 			}
@@ -1236,7 +1237,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		err = errs[0]
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
-		if err != nil && err != ErrWarmupReturn {
+		if err != nil && err != ErrWarmupReturn && err != ErrInstanceReclaimed {
 			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
 			if int(numFailure) >= MaxValidationFailure || err == ErrValidationTimeout {
@@ -1247,7 +1248,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		} else {
 			atomic.StoreUint32(&ins.numFailure, 0)
 			if err != nil {
-				ins.log.Debug("[%v]%v", err)
+				ins.log.Debug("[%v]%v", ins, err)
 			} else {
 				ins.log.Debug("[%v]Validated", ins)
 			}
@@ -1299,8 +1300,6 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		ctrlLink, err := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
-		ins.log.Debug("Ready to %v", cmd)
-
 		// Only after validated, we know whether the instance is reclaimed.
 		// If instance is expiring and reclaimed, we will relocate objects in main repository while backing objects are not affected.
 		// Two options available to handle reclaiming event:
@@ -1308,7 +1307,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// 2. Report not found
 		reclaimPass := false
 		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
-			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), 0)
+			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), util.Ifelse(cmd.GetRequest().Option&protocol.REQUEST_GET_OPTIONAL > 0, DISPATCH_OPT_RELOCATED, 0).(int))
 		}
 
 		if reclaimPass {
@@ -1327,6 +1326,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 			ins.log.Warn("Unexpected nil control link with no error returned.")
 			return
 		}
+
+		ins.log.Debug("Ready to %v", cmd)
 
 		// Make request
 		lastErr = ins.request(ctrlLink, cmd, validateDuration)
@@ -1426,6 +1427,10 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, opts int) boo
 
 	loc, total, _ := ins.delegates.Locator().Locate(req.Key)
 	delegate, _ := ins.delegates.GetByLocation(loc, total)
+
+	if delegate == nil {
+		return fallbacked
+	}
 
 	// No reroute for chunk larger than threshold()
 	if req.Size() > int64(delegate.getRerouteThreshold()) {
