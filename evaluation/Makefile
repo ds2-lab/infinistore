@@ -47,6 +47,9 @@ playback-static-average: build build-simulator
 playback-static-norecovery: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery -log=proxy.log" "-d=10 -p=2 -fo=300" 1>./log 2>&1 &
 
+playback-azure: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/azurefunctions-accesses-2020-bursty.csv 1000 "" "-d=10 -p=2 -trace=azurefunctions" -enable-dashboard 1>./log 2>&1 &
+
 start-server: build
 	./server.sh 1>./log 2>&1 &
 

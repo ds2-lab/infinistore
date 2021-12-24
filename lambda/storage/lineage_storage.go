@@ -247,8 +247,11 @@ func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 
 	// Assertion: lineage exists.
 	if lineage.Term > meta.Term {
-		meta.Consistent = false
-		return meta.Consistent, fmt.Errorf("detected staled term of lambda %d, expected at least %d, have %d", meta.Id, lineage.Term, meta.Term)
+		// meta.Consistent = false
+		// return meta.Consistent, fmt.Errorf("detected staled term of lambda %d, expected at least %d, have %d", meta.Id, lineage.Term, meta.Term)
+		// TODO: ignore for now.
+		meta.Consistent = true
+		return meta.Consistent, nil
 	}
 	// Don't check hash if term is the start term(1).
 	meta.Consistent = lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash)
