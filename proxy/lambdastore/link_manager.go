@@ -19,18 +19,14 @@ const (
 )
 
 var (
-	ErrLinkRequestClosed  = &LinkRequestError{error: errors.New("link request closed")}
-	ErrLinkRequestTimeout = &LinkRequestError{error: errors.New("link request timeout")}
-	ErrLinkManagerReset   = &LinkRequestError{error: errors.New("link manager reset")}
-	ErrNilLink            = &LinkRequestError{error: errors.New("unexpected nil link")}
+	ErrLinkRequestClosed  = &LambdaError{error: errors.New("link request closed")}
+	ErrLinkRequestTimeout = &LambdaError{error: errors.New("link request timeout"), typ: LambdaErrorTimeout}
+	ErrLinkManagerReset   = &LambdaError{error: errors.New("link manager reset")}
+	ErrNilLink            = &LambdaError{error: errors.New("unexpected nil link")}
 
 	// Keep following variables as false. They are only for unit tests.
 	UnitTestMTC1 = false
 )
-
-type LinkRequestError struct {
-	error
-}
 
 type manageableLink interface {
 	SendRequest(*types.Request, ...interface{}) error

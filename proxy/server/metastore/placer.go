@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -30,6 +31,7 @@ type Placer interface {
 	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
 	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
+	Dispatch(*lambdastore.Instance, types.Command) error
 }
 
 type MetaInitializer func(meta *Meta)
@@ -114,10 +116,10 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			}
 			// Try next group
 			test += len(meta.Placement)
-		} else if ins.IsBusy() {
+		} else if ins.IsBusy(cmd) {
 			// Try next group
 			test += len(meta.Placement)
-		} else if err := ins.DispatchWithOptions(cmd, lambdastore.BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
+		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
 			// Try next group
 			test += len(meta.Placement)
 		} else if err != nil {
@@ -137,6 +139,55 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			}
 
 			return ins, nil, nil
+		}
+	}
+}
+
+func (l *DefaultPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) (err error) {
+	if ins.IsBusy(cmd) {
+		err = lambdastore.ErrInstanceBusy
+	} else {
+		err = ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK)
+	}
+	if err == nil || err != lambdastore.ErrInstanceBusy {
+		return err
+	}
+
+	req := cmd.GetRequest()
+	req.Option |= protocol.REQUEST_GET_OPTION_BUFFER
+	meta := req.GetInfo().(*Meta)
+	// Start from exploring the buffer instances, active instances are for chunk relocation and has been covered by Instance.Dispatch.
+	start := cmd.GetRequest().Id.Chunk() + len(meta.Placement)
+	test := start
+	instances := l.cluster.GetActiveInstances(len(meta.Placement) * 2)
+	for {
+		// Not test is 0 based.
+		if test >= instances.Len() {
+			// Rotation safe: because rotation will not affect the number of active instances.
+			instances = l.cluster.GetActiveInstances((test/len(meta.Placement) + 1) * len(meta.Placement)) // Force scale to ceil(test/meta.chunks)
+
+			// If failed to get required number of instances, reset "test" and wish luck.
+			if test >= instances.Len() {
+				test = start
+			}
+
+			// continue and test agian
+			continue
+		}
+
+		ins := instances.Instance(test)
+		cmd.GetRequest().InsId = ins.Id()
+		if l.testChunk(ins, uint64(meta.ChunkSize)) {
+			// Sizing check failed, try next group
+			test += len(meta.Placement)
+		} else if ins.IsBusy(cmd) {
+			// Try next group
+			test += len(meta.Placement)
+		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK|lambdastore.DISPATCH_OPT_RELOCATED); err == lambdastore.ErrInstanceBusy || lambdastore.IsLambdaTimeout(err) {
+			// Try next group
+			test += len(meta.Placement)
+		} else {
+			return err
 		}
 	}
 }

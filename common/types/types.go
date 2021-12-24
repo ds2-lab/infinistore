@@ -124,6 +124,9 @@ const (
 	CMD_DATA        = "data"        // Control command
 	CMD_BYE         = "bye"         // Control command
 
+	REQUEST_GET_OPTIONAL      = 0x0001 // Flag response is optional. There is a compete fallback will eventually fulfill the request.
+	REQUEST_GET_OPTION_BUFFER = 0x0002 // Flag the chunk should be put in buffer area.
+
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"
 	// TIP_BACKUP_TOTAL Total backups available.

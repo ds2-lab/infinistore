@@ -54,7 +54,7 @@ type Request struct {
 	CollectorEntry interface{}
 	QueuedAt       time.Time
 	Cleanup        RequestCloser
-	Optional       bool // Flag response is optional. There is a compete fallback will eventually fulfill the request.
+	Option         int64
 
 	conn             Conn
 	status           uint32
@@ -137,11 +137,7 @@ func (req *Request) PrepareForGet(conn Conn) {
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
-	if req.Optional {
-		conn.Writer().WriteBulkString("1")
-	} else {
-		conn.Writer().WriteBulkString("0")
-	}
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.Option, 10))
 	req.conn = conn
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }

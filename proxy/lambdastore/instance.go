@@ -84,8 +84,8 @@ const (
 	DESCRIPTION_MAYBE      = "unmanaged"
 	DESCRIPTION_UNDEFINED  = "undefined"
 
-	BUSY_CHECK = 0x0001
-	RELOCATED  = 0x0002
+	DISPATCH_OPT_BUSY_CHECK = 0x0001
+	DISPATCH_OPT_RELOCATED  = 0x0002
 )
 
 var (
@@ -116,9 +116,9 @@ var (
 	ErrInstanceBusy       = errors.New("instance busy")
 	ErrWarmupReturn       = errors.New("return from warmup")
 	ErrUnknown            = errors.New("unknown error")
-	ErrValidationTimeout  = errors.New("funciton validation timeout")
+	ErrValidationTimeout  = &LambdaError{error: errors.New("funciton validation timeout"), typ: LambdaErrorTimeout}
 	ErrCapacityExceeded   = errors.New("capacity exceeded")
-	ErrTimeout            = errors.New("queue timeout")
+	ErrQueueTimeout       = &LambdaError{error: errors.New("queue timeout"), typ: LambdaErrorTimeout}
 	ErrRelocationFailed   = errors.New("relocation failed")
 )
 
@@ -164,7 +164,8 @@ type Instance struct {
 	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
 	validated       promise.Promise
-	numBusy         int32
+	numOutbound     int32
+	numInbound      int32
 	mu              sync.Mutex
 	closed          chan struct{}
 	coolTimer       *time.Timer
@@ -313,7 +314,7 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
 		// tryRerouteDelegateRequest will always try relocation.
-		if !ins.tryRerouteDelegateRequest(cmd.GetRequest(), opts&RELOCATED > 0) {
+		if !ins.tryRerouteDelegateRequest(cmd.GetRequest(), opts) {
 			return ErrRelocationFailed
 		} else {
 			return nil
@@ -325,7 +326,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	case ins.chanCmd <- cmd:
 		// continue after select
 	default:
-		if opts&BUSY_CHECK > 0 {
+		if opts&DISPATCH_OPT_BUSY_CHECK > 0 {
 			return ErrInstanceBusy
 		}
 
@@ -333,7 +334,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		select {
 		case ins.chanCmd <- cmd:
 		case <-time.After(protocol.GetHeaderTimeout()):
-			return ErrTimeout
+			return ErrQueueTimeout
 		}
 	}
 
@@ -346,8 +347,14 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	return nil
 }
 
-func (ins *Instance) IsBusy() bool {
-	return atomic.LoadInt32(&ins.numBusy) > 0 || len(ins.chanCmd) > 0 || len(ins.chanPriorCmd) > 0
+func (ins *Instance) IsBusy(cmd types.Command) bool {
+	if len(ins.chanCmd) >= MAX_CMD_QUEUE_LEN {
+		return true
+	} else if cmd.String() == protocol.CMD_SET {
+		return atomic.LoadInt32(&ins.numOutbound) > 0
+	} else {
+		return false
+	}
 }
 
 func (ins *Instance) WarmUp() {
@@ -1278,8 +1285,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Set instance busy on request.
-	ins.busy()
-	defer ins.doneBusy()
+	ins.busy(cmd)
+	defer ins.doneBusy(cmd)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1301,7 +1308,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		// 2. Report not found
 		reclaimPass := false
 		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
-			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), false)
+			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), 0)
 		}
 
 		if reclaimPass {
@@ -1400,14 +1407,14 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 	return true
 }
 
-func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, relocated bool) bool {
+func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, opts int) bool {
 	if req == nil || req.Cmd != protocol.CMD_GET {
 		return false
 	}
 
 	// Delegate will always relocate the chunk.
 	// This will only happen once since redelegated instance will refuse relocation due to req.InsId != ins.Id()
-	fallbacked := relocated
+	fallbacked := opts&DISPATCH_OPT_RELOCATED > 0
 	if !fallbacked {
 		fallbacked = ins.relocateGetRequest(req)
 	}
@@ -1427,10 +1434,10 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, relocated boo
 
 	// Set optional flag will not be override.
 	if fallbacked {
-		req.Optional = fallbacked
+		req.Option |= protocol.REQUEST_GET_OPTIONAL
 	}
 	// Chained delegation is safe if the instance triggering relocation is not current instance.
-	err := delegate.DispatchWithOptions(req, utils.Ifelse(fallbacked, 0, RELOCATED).(int))
+	err := delegate.DispatchWithOptions(req, opts|utils.Ifelse(fallbacked, DISPATCH_OPT_RELOCATED, 0).(int))
 	if err != nil {
 		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
 		return fallbacked
@@ -1529,12 +1536,20 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	}
 }
 
-func (ins *Instance) busy() {
-	atomic.AddInt32(&ins.numBusy, 1)
+func (ins *Instance) busy(cmd types.Command) {
+	if cmd.String() == protocol.CMD_SET {
+		atomic.AddInt32(&ins.numOutbound, 1)
+	} else {
+		atomic.AddInt32(&ins.numInbound, 1)
+	}
 }
 
-func (ins *Instance) doneBusy() {
-	atomic.AddInt32(&ins.numBusy, -1)
+func (ins *Instance) doneBusy(cmd types.Command) {
+	if cmd.String() == protocol.CMD_SET {
+		atomic.AddInt32(&ins.numOutbound, -1)
+	} else {
+		atomic.AddInt32(&ins.numInbound, -1)
+	}
 }
 
 func (ins *Instance) CollectData() {

@@ -17,6 +17,7 @@ import (
 	"github.com/cespare/xxhash"
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
@@ -137,7 +138,7 @@ func (s *PersistentStorage) newChunk(key string, chunkId string, size uint64, va
 	return chunk
 }
 
-func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64) *types.OpRet {
+func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64, opts int) *types.OpRet {
 	_, err := s.helper.getWithOption(key, nil)
 	if err.Error() == nil {
 		return err
@@ -170,6 +171,14 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		}
 	}
 
+	if opts&protocol.REQUEST_GET_OPTION_BUFFER > 0 {
+		chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
+	}
+	opt, ok := s.helper.validate(chunk, nil)
+	if !ok {
+		return types.OpError(ErrOOStorage)
+	}
+
 	chunk.Body = make([]byte, size) // Pre-allocate fixed sized buffer.
 	chunk.StartRecover()
 	downloader := s.getS3Downloader()
@@ -191,7 +200,11 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 
 	// This is to reuse persistent implementation.
 	// Chunk inserted previously will be loaded, and no new chunk will be created.
-	ret := s.helper.setWithOption(key, chunk, &types.OpWrapper{Persisted: true})
+	if opt == nil {
+		opt = &types.OpWrapper{}
+	}
+	opt.Persisted = true
+	ret := s.helper.setWithOption(key, chunk, opt)
 	chunk.NotifyRecovered()
 	return ret
 }

@@ -232,10 +232,11 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		err = lambdastore.ErrInstanceClosed
 	} else {
 		// If reclaimed, instance will try delegate and relocate chunk concurrently, return ErrRelocationFailed if failed.
-		err = instance.Dispatch(req)
+		err = p.placer.Dispatch(instance, req)
 	}
-	if err != nil && err != lambdastore.ErrTimeout && err != lambdastore.ErrRelocationFailed {
+	if err != nil && err != lambdastore.ErrQueueTimeout && err != lambdastore.ErrRelocationFailed {
 		// In some cases, the instance doesn't try relocating, relocate the chunk as failover.
+		req.Option = 0
 		_, err = p.relocate(req, meta, int(dChunkId), chunkKey, fmt.Sprintf("Instance(%d) failed: %v", lambdaDest, err))
 	}
 	if err != nil {

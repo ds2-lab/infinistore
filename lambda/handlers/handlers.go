@@ -79,8 +79,8 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		errRsp := &worker.ErrorResponse{}
 		chunkId = c.Arg(1).String()
 		sizeArg := c.Arg(3)
-		noRecovery, _ := c.Arg(4).Int()
-		if noRecovery > 0 {
+		option, _ := c.Arg(4).Int()
+		if option&protocol.REQUEST_GET_OPTIONAL > 0 {
 			errRsp.Error = ret.Error()
 			Server.AddResponses(errRsp, client)
 			if err := errRsp.Flush(); err != nil {
@@ -105,7 +105,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			}
 			return
 		}
-		ret = Persist.SetRecovery(key, chunkId, uint64(size))
+		ret = Persist.SetRecovery(key, chunkId, uint64(size), int(option))
 		if ret.Error() != nil {
 			errRsp.Error = ret.Error()
 			Server.AddResponses(errRsp, client)
@@ -313,7 +313,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// Recover.
-	ret = Persist.SetRecovery(key, chunkId, uint64(size))
+	ret = Persist.SetRecovery(key, chunkId, uint64(size), 0)
 	if ret.Error() != nil {
 		errRsp.Error = ret.Error()
 		Server.AddResponses(errRsp, client)
