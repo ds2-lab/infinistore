@@ -74,6 +74,9 @@ func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
 
 		done: make(chan struct{}),
 	}
+	if cluster.numBufferFuncs < numFuncSteps {
+		cluster.numBufferFuncs = numFuncSteps
+	}
 	cluster.placer = metastore.NewDefaultPlacer(metastore.New(), cluster)
 	if cluster.numBufferFuncs+cluster.numFuncSteps > config.LambdaMaxDeployments {
 		cluster.numBufferFuncs = config.LambdaMaxDeployments - cluster.numFuncSteps

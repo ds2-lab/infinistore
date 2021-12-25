@@ -32,10 +32,17 @@ var (
 	ErrResponded          = errors.New("responded")
 	ErrNoClient           = errors.New("no client set")
 	ErrNotSuppport        = errors.New("not support")
+
+	PlaceholderResponse = &response{}
 )
 
 type RequestCloser interface {
 	Close()
+}
+
+type response struct {
+	status uint32
+	client *redeo.Client
 }
 
 type Request struct {
@@ -48,22 +55,29 @@ type Request struct {
 	BodySize       int64
 	Body           []byte
 	BodyStream     resp.AllReadCloser
-	Client         *redeo.Client
 	Info           interface{}
 	Changes        int
 	CollectorEntry interface{}
-	QueuedAt       time.Time
 	Cleanup        RequestCloser
 	Option         int64
 
 	conn             Conn
-	status           uint32
 	streamingStarted bool
-	responseTimeout  time.Duration
-	responded        promise.Promise
 	err              error
 	leftAttempts     int
 	reason           error
+	responseTimeout  time.Duration
+	responded        promise.Promise
+
+	// Shared if request to be send to multiple lambdas
+	response *response
+}
+
+func GetRequest(client *redeo.Client) *Request {
+	return &Request{response: &response{
+		status: REQUEST_INVOKED,
+		client: client,
+	}}
 }
 
 func (req *Request) String() string {
@@ -156,6 +170,7 @@ func (req *Request) ToRecover() *Request {
 	recover.Cmd = protocol.CMD_RECOVER
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
+	recover.conn = nil
 	return &recover
 }
 
@@ -217,15 +232,15 @@ func (req *Request) Close() {
 }
 
 func (req *Request) IsReturnd() bool {
-	return atomic.LoadUint32(&req.status) >= REQUEST_RETURNED
+	return atomic.LoadUint32(&req.response.status) >= REQUEST_RETURNED
 }
 
 func (req *Request) IsResponded() bool {
-	return atomic.LoadUint32(&req.status) >= REQUEST_RESPONDED
+	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
 }
 
 func (req *Request) MarkReturned() bool {
-	return atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RETURNED)
+	return atomic.CompareAndSwapUint32(&req.response.status, REQUEST_INVOKED, REQUEST_RETURNED)
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {
@@ -235,26 +250,28 @@ func (req *Request) IsResponse(rsp *Response) bool {
 }
 
 func (req *Request) SetResponse(rsp interface{}) error {
+	responded := req.responded
+	req.responded = nil
+	if responded != nil {
+		responded.Resolve(rsp)
+	}
+
 	// Makeup: do cleanup
 	if req.MarkReturned() && req.Cleanup != nil {
 		req.Cleanup.Close()
 	}
-	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
+	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}
 	req.Close()
 
-	if req.responded != nil {
-		req.responded.Resolve(rsp)
-		req.responded = nil
-	}
-	if req.Client == nil {
+	if req.response.client == nil {
 		return ErrNoClient
 	}
 
-	ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
+	ret := req.response.client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 	// Release reference so chan can be garbage collected.
-	req.Client = nil
+	req.response.client = nil
 	return ret
 }
 
