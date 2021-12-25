@@ -232,14 +232,23 @@ func (req *Request) Close() {
 }
 
 func (req *Request) IsReturnd() bool {
+	if req.response == nil {
+		return false
+	}
 	return atomic.LoadUint32(&req.response.status) >= REQUEST_RETURNED
 }
 
 func (req *Request) IsResponded() bool {
+	if req.response == nil {
+		return false
+	}
 	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
 }
 
 func (req *Request) MarkReturned() bool {
+	if req.response == nil {
+		return false
+	}
 	return atomic.CompareAndSwapUint32(&req.response.status, REQUEST_INVOKED, REQUEST_RETURNED)
 }
 
@@ -254,6 +263,10 @@ func (req *Request) SetResponse(rsp interface{}) error {
 	req.responded = nil
 	if responded != nil {
 		responded.Resolve(rsp)
+	}
+
+	if req.response == nil {
+		return ErrNoClient
 	}
 
 	// Makeup: do cleanup
