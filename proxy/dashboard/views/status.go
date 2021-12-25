@@ -15,7 +15,7 @@ const (
 )
 
 var (
-	MemLimit = uint64(20) * GB
+	MemLimit = uint64(10) * GB
 )
 
 type StatusView struct {

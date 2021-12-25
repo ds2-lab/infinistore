@@ -182,12 +182,22 @@ func main() {
 	prxy.Release()
 
 	if global.Options.MemProfile != "" {
+		dump, err := os.Create(global.Options.MemProfile + "_dump")
+		if err != nil {
+			log.Error("could not create memory dump: ", err)
+		}
+		defer dump.Close() // error handling omitted for example
+		if err := pprof.WriteHeapProfile(dump); err != nil {
+			log.Error("could not write memory dump: ", err)
+		}
+
+		runtime.GC() // get up-to-date statistics
+
 		f, err := os.Create(global.Options.MemProfile)
 		if err != nil {
 			log.Error("could not create memory profile: ", err)
 		}
 		defer f.Close() // error handling omitted for example
-		runtime.GC()    // get up-to-date statistics
 		if err := pprof.WriteHeapProfile(f); err != nil {
 			log.Error("could not write memory profile: ", err)
 		}
@@ -218,12 +228,11 @@ func finalize(fix bool) {
 		log.Error("%v", err)
 
 		if global.Options.MemProfile != "" {
-			f, err := os.Create(global.Options.MemProfile + "crash")
+			f, err := os.Create(global.Options.MemProfile + "_crash")
 			if err != nil {
 				log.Error("could not create memory profile: ", err)
 			}
 			defer f.Close() // error handling omitted for example
-			runtime.GC()    // get up-to-date statistics
 			if err := pprof.WriteHeapProfile(f); err != nil {
 				log.Error("could not write memory profile: ", err)
 			}
