@@ -258,11 +258,23 @@ func (req *Request) IsResponse(rsp *Response) bool {
 		req.Id.ChunkId == rsp.Id.ChunkId
 }
 
+// SetResponse sets response of the request. Concurrent request dispatching is
+// supported, in which case the request will be dispatched to multiple instances,
+// one of which is required and others are optional. SetResponse ensure only one
+// response will be sent by:
+// 1. Cancel timeout for individual request copy.
+// 2. Ignore err if the request copy is optional.
+// 3. Exclusively set response for first responder.
 func (req *Request) SetResponse(rsp interface{}) error {
 	responded := req.responded
 	req.responded = nil
 	if responded != nil {
 		responded.Resolve(rsp)
+	}
+
+	// Ignore err if request is optional
+	if _, ok := rsp.(error); ok && req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
+		return nil
 	}
 
 	if req.response == nil {
