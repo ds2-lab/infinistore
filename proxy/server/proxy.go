@@ -114,17 +114,15 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	prepared := p.placer.NewMeta(
 		key, size, int(dataChunks), int(parityChunks), int(dChunkId), int64(bodyStream.Len()), uint64(lambdaId), int(randBase))
 	chunkKey := prepared.ChunkKey(int(dChunkId))
-	req := &types.Request{
-		Seq:            seq,
-		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
-		InsId:          uint64(lambdaId),
-		Cmd:            protocol.CMD_SET,
-		Key:            chunkKey,
-		BodyStream:     bodyStream,
-		Client:         client,
-		CollectorEntry: collectEntry,
-		Info:           prepared,
-	}
+	req := types.GetRequest(client)
+	req.Seq = seq
+	req.Id = types.Id{ReqId: reqId, ChunkId: chunkId}
+	req.InsId = uint64(lambdaId)
+	req.Cmd = protocol.CMD_SET
+	req.Key = chunkKey
+	req.BodyStream = bodyStream
+	req.CollectorEntry = collectEntry
+	req.Info = prepared
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
@@ -177,18 +175,16 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
-	req := &types.Request{
-		Seq:            seq,
-		Id:             types.Id{ReqId: reqId, ChunkId: chunkId},
-		InsId:          uint64(lambdaDest),
-		Cmd:            protocol.CMD_GET,
-		BodySize:       meta.ChunkSize,
-		Key:            chunkKey,
-		Client:         client,
-		CollectorEntry: collectorEntry,
-		Info:           meta,
-		Cleanup:        counter,
-	}
+	req := types.GetRequest(client)
+	req.Seq = seq
+	req.Id = types.Id{ReqId: reqId, ChunkId: chunkId}
+	req.InsId = uint64(lambdaDest)
+	req.Cmd = protocol.CMD_GET
+	req.BodySize = meta.ChunkSize
+	req.Key = chunkKey
+	req.CollectorEntry = collectorEntry
+	req.Info = meta
+	req.Cleanup = counter
 	// Update counter
 	counter.Requests[dChunkId] = req
 

@@ -791,8 +791,9 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
 	goodDue := time.Duration(ins.due - time.Now().Add(RTT).UnixNano())
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
-		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
-		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 {
+		(opt.Command == nil || opt.Command.Name() != protocol.CMD_PING) && // Time critical immediate ping
+		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp && // Lambda extended not thanks to warmup
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 { // Lambda extended long enough to ignore ping.
 		ins.mu.Unlock()
 		ins.log.Info("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
@@ -944,7 +945,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			ins.lm.Reset()
 
 			ins.log.Info("[%v]Reactivateing...", ins)
-			err = ins.doTriggerLambda(opt)
+			err = ins.doTriggerLambda(ins.validated.Options().(*ValidateOption))
 			awakeness = atomic.LoadUint32(&ins.awakeness)
 		}
 	}
@@ -993,7 +994,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
 	}
 	// Check extra one time store status (eg. delegate store)
-	// ins.log.Info("invoke with command: %v", opt.Command)
+	ins.log.Debug("invoke with command: %v", opt.Command)
 	if opt.Command != nil {
 		// ins.log.Info("command with info: %v", opt.Command.GetInfo())
 		if meta, ok := opt.Command.GetInfo().(*protocol.Meta); ok {
