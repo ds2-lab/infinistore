@@ -70,7 +70,7 @@ for (( i=$FROM; i<=$TO; i++ ))
 do
   # try 3 times
   BACKOFF=2
-  for k in {0..2}
+  for k in {0..10}
   do
     echo "exporting $LAMBDA$LOG_PREFIX$i"
     RUNNING=`aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i | grep taskId | awk -F \" '{ print $4 }'`
