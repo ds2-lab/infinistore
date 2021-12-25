@@ -576,10 +576,6 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 //   You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
 	if req := conn.popRequest(); req != nil {
-		if req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
-			// For optional request, simply ignore err
-			return nil
-		}
 		return req.SetResponse(err)
 	}
 
