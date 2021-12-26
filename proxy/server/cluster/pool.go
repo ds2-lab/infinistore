@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
@@ -24,8 +25,9 @@ var (
 )
 
 type Pool struct {
-	backend chan *lambdastore.Deployment
-	actives *hashmap.HashMap
+	backend  chan *lambdastore.Deployment
+	actives  *hashmap.HashMap
+	recycled int32
 }
 
 // numCluster = small number, numDeployment = large number
@@ -45,7 +47,7 @@ func (s *Pool) NumAvailable() int {
 }
 
 func (s *Pool) NumActives() int {
-	return s.actives.Len()
+	return s.actives.Len() - int(atomic.LoadInt32(&s.recycled))
 }
 
 // Get a instance at ith position for the group.
@@ -114,6 +116,7 @@ func (s *Pool) Recycle(dp types.LambdaDeployment) {
 
 	// TODO: Uncomment if metas were relocated.
 	// s.actives.Del(dp.Id())
+	atomic.AddInt32(&s.recycled, 1)
 	switch backend := dp.(type) {
 	case *lambdastore.Deployment:
 		s.backend <- backend
