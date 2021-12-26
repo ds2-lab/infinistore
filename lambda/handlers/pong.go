@@ -34,9 +34,9 @@ type PongHandler struct {
 	// at the same time.
 	limiter   chan int
 	mu        sync.Mutex
-	pong      pong // For test
-	fail      fail // For test
-	requested promise.Promise
+	pong      pong            // For test
+	fail      fail            // For test
+	requested promise.Promise // For ctrl link only
 }
 
 func NewPongHandler() *PongHandler {
@@ -108,9 +108,11 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	timeoutRequired := !NoTimeout && (link == nil || link.IsControl())
+
 	attempts := 0
 	// No retrial and multi-PONGs avoidance if the link is specified, which is triggered by the worker and will not duplicate.
-	if link == nil {
+	if timeoutRequired {
 		select {
 		case attempts = <-p.limiter:
 			// Quota avaiable or abort.
@@ -124,9 +126,12 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 		// Abandon
 		return nil
 	}
-	// Refresh promise
-	p.requested.Resolve()
-	p.requested.Reset()
+
+	if timeoutRequired {
+		// Refresh promise
+		p.requested.Resolve()
+		p.requested.Reset()
+	}
 
 	// Do send
 	pongLog(flags, link)
@@ -135,7 +140,9 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 		return err
 	}
 
-	if attempts > 0 {
+	if !timeoutRequired {
+		return nil
+	} else if attempts > 0 {
 		// To keep a ealier pong will always send first, occupy the limiter now.
 		p.limiter <- attempts - 1
 
@@ -149,7 +156,7 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 				p.sendImpl(flags, link, true)
 			}
 		}()
-	} else if link == nil && !NoTimeout {
+	} else {
 		// For ack/pong, link will be disconnected if no attempt left.
 		p.requested.SetTimeout(DefaultPongTimeout)
 
