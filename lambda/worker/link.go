@@ -68,7 +68,11 @@ func (ln *Link) ID() int {
 }
 
 func (ln *Link) String() string {
-	return ln.addr
+	if ln.ctrl {
+		return ln.addr + "(c)"
+	} else {
+		return ln.addr + "(d)"
+	}
 }
 
 func (ln *Link) IsControl() bool {
