@@ -36,10 +36,10 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
+const DefaultInstanceCapacity = 1024 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 300 * 1000000 // 200MB
+const InstanceOverhead = 200 * 1000000 // 200MB
 
 // Threshold Scaling out avg instance size threshold
 const Threshold = 0.9 // Don't set beyond 0.9
@@ -58,14 +58,14 @@ const RecoverRate = 40 * 1000000 // Not actually used.
 const BackupsPerInstance = 20 // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 // Each bucket's active duration
-const BucketDuration = 10 // min
+const BucketDuration = 1 // min
 
 // Number of buckets that warmup every InstanceWarmTimeout
-const NumActiveBuckets = 6
+const NumActiveBuckets = 8
 
 // Number of buckets before expiring
 // Buckets beyond NumActiveBuckets but within ExpireBucketsNum will get degraded warmup: InstanceDegradeWarmTimeout
-const NumAvailableBuckets = 18
+const NumAvailableBuckets = 23
 
 // Async migrate control
 const ActiveReplica = 2 //min

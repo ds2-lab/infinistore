@@ -147,10 +147,12 @@ func (req *request) OnRespond(notifier ResponseNotifier) {
 }
 
 func (req *request) Context() context.Context {
-	if req.ctx == nil {
-		req.ctx = context.Background()
+	ctx := req.ctx
+	if ctx == nil {
+		return context.Background()
+	} else {
+		return ctx
 	}
-	return req.ctx
 }
 
 func (req *request) SetContext(ctx context.Context) {
