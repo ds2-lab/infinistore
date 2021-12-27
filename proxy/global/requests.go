@@ -222,7 +222,7 @@ func (c *RequestCounter) ReleaseIfAllReturned(status ...uint64) {
 }
 
 func (c *RequestCounter) Close(reqId string) {
-	if c.reqId == reqId {
+	if c != nil && c.reqId == reqId {
 		c.ReleaseIfAllReturned()
 	}
 }
