@@ -110,24 +110,8 @@ func (c *RequestCoordinator) Load(reqId string) interface{} {
 	}
 }
 
-func (c *RequestCoordinator) Clear(item interface{}) {
-	reqId, ok := item.(string)
-	if ok {
-		// reserved for types except RequestCounter
-		c.registry.Del(reqId)
-		return
-	}
-
-	c.tryClearCounter(item)
-}
-
-func (c *RequestCoordinator) tryClearCounter(item interface{}) bool {
-	counter, ok := item.(*RequestCounter)
-	if ok {
-		c.registry.Del(counter.reqId)
-	}
-
-	return ok
+func (c *RequestCoordinator) Clear(reqId string) {
+	c.registry.Del(reqId)
 }
 
 func (c *RequestCoordinator) Recycle(item interface{}) bool {
@@ -231,7 +215,7 @@ func (c *RequestCounter) IsAllReturned(status ...uint64) bool {
 }
 
 func (c *RequestCounter) Release() {
-	c.coordinator.Clear(c)
+	c.coordinator.Clear(c.reqId)
 }
 
 func (c *RequestCounter) ReleaseIfAllReturned(status ...uint64) bool {
@@ -249,8 +233,8 @@ func (c *RequestCounter) Load() *RequestCounter {
 }
 
 func (c *RequestCounter) Close() {
-	released := c.ReleaseIfAllReturned()
-	if atomic.AddInt32(&c.refs, -1) <= 0 && released {
+	cnt := atomic.AddInt32(&c.refs, -1)
+	if cnt >= 0 && c.ReleaseIfAllReturned() && cnt == 0 {
 		c.coordinator.Recycle(c)
 		c.coordinator = nil
 	}
