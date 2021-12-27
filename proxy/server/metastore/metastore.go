@@ -34,3 +34,7 @@ func (ms *MetaStore) Get(key string) (*Meta, bool) {
 		return nil, ok
 	}
 }
+
+func (ms *MetaStore) Len() int {
+	return ms.metaMap.Len()
+}

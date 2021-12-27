@@ -77,11 +77,13 @@ func (dash *Dashboard) ConfigCluster(cluster interface{}, cols int) {
 		dash.Grid.Items[0].Entry = dash.ClusterView
 		dash.ClusterView.Cluster = stats
 		dash.ClusterView.Cols = 25
+		dash.StatusView.Meta = stats.MetaStats()
 		dash.ClusterView.Update()
 	case types.GroupedClusterStats:
 		dash.Grid.Items[0].Entry = dash.GroupedView
 		dash.GroupedView.Cluster = stats
 		dash.GroupedView.Cols = cols
+		dash.StatusView.Meta = stats.MetaStats()
 		dash.GroupedView.Update()
 	default:
 		log.Println("ConfigCluster(): Invalid cluster type")

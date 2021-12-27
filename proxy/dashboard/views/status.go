@@ -8,6 +8,8 @@ import (
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
@@ -20,6 +22,7 @@ var (
 
 type StatusView struct {
 	*widgets.Paragraph
+	Meta types.MetaStoreStats
 
 	dash      DashControl
 	memStat   runtime.MemStats
@@ -41,7 +44,9 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	if v.maxMemory < mem {
 		v.maxMemory = mem
 	}
-	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s", v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory))
+	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s, Objects: %d, Gets: %d",
+		v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory),
+		v.Meta.Len(), global.ReqCoordinator.Len())
 
 	// Draw overwrite
 	v.Block.Draw(buf)

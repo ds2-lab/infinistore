@@ -52,6 +52,10 @@ func NewRequestCoordinator(size uintptr) *RequestCoordinator {
 	}
 }
 
+func (c *RequestCoordinator) Len() int {
+	return c.registry.Len()
+}
+
 func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *RequestCounter {
 	prepared := c.pool.Get().(*RequestCounter)
 	prepared.initialized.Add(1) // Block in case initalization is need.
