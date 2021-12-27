@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -49,7 +50,7 @@ type Connection struct {
 	r           resp.ResponseReader
 	mu          sync.Mutex
 	chanWait    chan *types.Request
-	headRequest *types.Request
+	headRequest unsafe.Pointer
 	respType    chan interface{}
 	closed      uint32
 	done        chan struct{}
@@ -253,9 +254,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	// conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
 	// conn.chanWait <- req
 	// Moved end
-	conn.headRequest = req
+	conn.prePushRequest(req)
 	if req.IsResponded() {
-		conn.popRequest()
+		conn.popRequest(req)
 		return
 	}
 
@@ -305,25 +306,42 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			conn.log.Warn("Request timeout: %v", req)
 			// close connection to discard late response.
 			conn.Close()
-		} else if resErr != types.ErrResponded {
+		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
 		}
 		// If req is responded, err has been reported somewhere.
 	}()
 }
 
-func (conn *Connection) peekRequest() *types.Request {
-	return conn.headRequest
+func (conn *Connection) prePushRequest(req *types.Request) bool {
+	return atomic.CompareAndSwapPointer(&conn.headRequest, nil, unsafe.Pointer(req))
 }
 
-func (conn *Connection) popRequest() *types.Request {
-	conn.headRequest = nil
-	select {
-	case req := <-conn.chanWait:
-		return req
-	default:
+func (conn *Connection) peekRequest() *types.Request {
+	ptr := atomic.LoadPointer(&conn.headRequest)
+	if ptr == nil {
 		return nil
+	} else {
+		return (*types.Request)(ptr)
 	}
+}
+
+// popRequest pop the head of channel lock freely by:
+// 1. Set head before queuing.
+// 2. Test head using peekRequest.
+// 3. Clear head before dequeuing.
+// So if the queue channel is unlocked, head must be nil.
+// If peekRequest test (2) is passed, and popRequest is guarded by atomic operation and can't pop twice.
+func (conn *Connection) popRequest(req *types.Request) *types.Request {
+	if atomic.CompareAndSwapPointer(&conn.headRequest, unsafe.Pointer(req), nil) {
+		select {
+		case req := <-conn.chanWait:
+			return req
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 // func (conn *Connection) isRequestPending() bool {
@@ -561,7 +579,7 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 	}
 
 	// Lock free: double check that poped is what we peeked.
-	if poped := conn.popRequest(); poped == req {
+	if poped := conn.popRequest(req); poped == req {
 		if release {
 			conn.flagAvailable()
 		}
@@ -575,22 +593,22 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 // SetErrorResponse Set response to last request as a error.
 //   You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
-	if req := conn.popRequest(); req != nil {
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req != nil && conn.popRequest(req) == req {
 		return req.SetResponse(err)
 	}
 
-	conn.log.Warn("Unexpected error response: no request pending. err: %v", err)
 	return ErrMissingRequest
 }
 
 func (conn *Connection) ClearResponses() {
-	req := conn.popRequest()
-	for req != nil {
-		req.SetResponse(ErrConnectionClosed)
+	for req := conn.peekRequest(); req != nil; req = conn.peekRequest() {
+		if conn.popRequest(req) == req {
+			req.SetResponse(ErrConnectionClosed)
+		}
 		// Yield for pending req a chance to push.
 		runtime.Gosched()
-
-		req = conn.popRequest()
 	}
 }
 
