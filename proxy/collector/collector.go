@@ -195,7 +195,7 @@ func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (
 		return nil, ErrUnexpectedEntry
 	}
 
-	pool.Put(entry)
+	defer pool.Put(entry)
 	return nil, nanolog.Log(LogChunk, fmt.Sprintf("%schunk", entry.cmd), entry.reqId, entry.chunkId,
 		entry.start, entry.duration,
 		entry.firstByte, entry.lambda2Server, entry.server2Client,
