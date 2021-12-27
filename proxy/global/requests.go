@@ -94,7 +94,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 		// Wait for counter to be initalized.
 		counter.initialized.Wait()
 	}
-	return counter
+	return counter.Load()
 }
 
 func (c *RequestCoordinator) RegisterControl(reqId string, ctrl *types.Control) {
@@ -102,8 +102,12 @@ func (c *RequestCoordinator) RegisterControl(reqId string, ctrl *types.Control) 
 }
 
 func (c *RequestCoordinator) Load(reqId string) interface{} {
-	counter, _ := c.registry.Get(reqId)
-	return counter
+	item, _ := c.registry.Get(reqId)
+	if counter, ok := item.(*RequestCounter); ok {
+		return counter.Load()
+	} else {
+		return item
+	}
 }
 
 func (c *RequestCoordinator) Clear(item interface{}) {
@@ -121,6 +125,14 @@ func (c *RequestCoordinator) tryClearCounter(item interface{}) bool {
 	counter, ok := item.(*RequestCounter)
 	if ok {
 		c.registry.Del(counter.reqId)
+	}
+
+	return ok
+}
+
+func (c *RequestCoordinator) Recycle(item interface{}) bool {
+	counter, ok := item.(*RequestCounter)
+	if ok {
 		copy(counter.Requests, getEmptySlice(len(counter.Requests))) // reset to nil and release memory
 		c.pool.Put(counter)
 	}
@@ -140,6 +152,7 @@ type RequestCounter struct {
 	status       uint64 // int32(succeed) + int32(returned)
 	numToFulfill uint64
 	initialized  sync.WaitGroup
+	refs         int32
 }
 
 func newRequestCounter() interface{} {
@@ -161,7 +174,8 @@ func (c *RequestCounter) AddSucceeded(chunk int, recovered bool) (uint64, bool) 
 	} else if recovered {
 		return atomic.AddUint64(&c.status, REQCNT_STATUS_RECOVERED|REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), !marked
 	} else {
-		return atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED), !marked
+		status := atomic.AddUint64(&c.status, REQCNT_STATUS_SUCCEED|REQCNT_STATUS_RETURNED)
+		return status, !marked
 	}
 }
 
@@ -174,7 +188,8 @@ func (c *RequestCounter) AddReturned(chunk int) (uint64, bool) {
 	if !marked {
 		return c.Status(), !marked
 	} else {
-		return atomic.AddUint64(&c.status, REQCNT_STATUS_RETURNED), !marked
+		status := atomic.AddUint64(&c.status, REQCNT_STATUS_RETURNED)
+		return status, !marked
 	}
 }
 
@@ -219,14 +234,37 @@ func (c *RequestCounter) Release() {
 	c.coordinator.Clear(c)
 }
 
-func (c *RequestCounter) ReleaseIfAllReturned(status ...uint64) {
+func (c *RequestCounter) ReleaseIfAllReturned(status ...uint64) bool {
 	if c.IsAllReturned(status...) {
 		c.Release()
+		return true
+	} else {
+		return false
 	}
 }
 
-func (c *RequestCounter) Close(reqId string) {
-	if c != nil && c.reqId == reqId {
-		c.ReleaseIfAllReturned()
+func (c *RequestCounter) Load() *RequestCounter {
+	atomic.AddInt32(&c.refs, 1)
+	return c
+}
+
+func (c *RequestCounter) Close() {
+	released := c.ReleaseIfAllReturned()
+	if atomic.AddInt32(&c.refs, -1) <= 0 && released {
+		c.coordinator.Recycle(c)
+		c.coordinator = nil
 	}
+}
+
+func (c *RequestCounter) CloseChunk(id *types.Id) {
+	if c == nil {
+		return
+	}
+
+	if id.ReqId != c.reqId {
+		return
+	}
+
+	c.AddReturned(id.Chunk())
+	c.Close()
 }
