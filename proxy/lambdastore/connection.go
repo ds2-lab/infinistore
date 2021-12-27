@@ -737,6 +737,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 		return
 	}
+	defer counter.Close()
 
 	status, returned := counter.AddSucceeded(chunk, recovered == 1)
 	if returned || counter.IsLate(status) {
@@ -750,7 +751,6 @@ func (conn *Connection) getHandler(start time.Time) {
 				conn.log.Warn("LogRequestFuncResponse err %v", err)
 			}
 		}
-		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
 		if err := stream.Close(); err != nil {
@@ -854,17 +854,8 @@ func (conn *Connection) bye() {
 func (conn *Connection) recoverHandler() {
 	conn.log.Debug("RECOVER from lambda.")
 
-	reqId, _ := conn.r.ReadBulkString()
+	conn.r.ReadBulkString() // reqId
 	conn.r.ReadBulkString() // chunkId
-
-	ctrl := global.ReqCoordinator.Load(reqId)
-	if ctrl == nil {
-		conn.log.Warn("No control found for %s", reqId)
-	} else if ctrl.(*types.Control).Callback == nil {
-		conn.log.Warn("Control callback not defined for recover request %s", reqId)
-	} else {
-		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
-	}
 
 	// Check lambda if it is supported
 	conn.finalizeCommmand(protocol.CMD_RECOVER)

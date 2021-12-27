@@ -199,9 +199,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
 			p.log.Warn("Failed to replace %v: %v", req.Id, err)
-			status, _ := counter.AddReturned(int(dChunkId))
 			req.SetResponse(err)
-			counter.ReleaseIfAllReturned(status)
 			return
 		}
 		if postProcess != nil {
@@ -214,9 +212,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	if counter.IsFulfilled() {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
-		status, _ := counter.AddReturned(int(dChunkId))
 		req.Abandon()
-		counter.ReleaseIfAllReturned(status)
 		return
 	}
 
@@ -237,9 +233,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 	if err != nil {
 		p.log.Warn("Failed to dispatch %v: %v", req.Id, err)
-		status, _ := counter.AddReturned(int(dChunkId))
 		req.SetResponse(err)
-		counter.ReleaseIfAllReturned(status)
 	}
 }
 
@@ -304,7 +298,6 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 					Info:       wrapper.Request.Info,
 					Changes:    types.CHANGE_PLACEMENT,
 				},
-				Callback: p.handleRecoverCallback,
 			}
 
 			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
@@ -314,7 +307,6 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			} else if err != nil {
 				p.log.Debug("Relocation triggered. Failed to relocate %s(%d): %v", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), err)
 			} else {
-				global.ReqCoordinator.RegisterControl(recoverReqId, control)
 				p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), instance.Id())
 			}
 		}
@@ -332,12 +324,6 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 // CollectData Trigger data collection.
 func (p *Proxy) CollectData() {
 	p.cluster.CollectData()
-}
-
-func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
-	instance := arg.(*lambdastore.Instance)
-	ctrl.GetRequest().Info.(*metastore.Meta).Placement[ctrl.Request.Id.Chunk()] = instance.Id()
-	p.log.Debug("async updated instance %v", int(instance.Id()))
 }
 
 func (p *Proxy) dropEvicted(meta *metastore.Meta) {
