@@ -37,7 +37,7 @@ var (
 )
 
 type RequestCloser interface {
-	Close()
+	Close(string)
 }
 
 type response struct {
@@ -283,7 +283,7 @@ func (req *Request) SetResponse(rsp interface{}) error {
 
 	// Makeup: do cleanup
 	if req.MarkReturned() && req.Cleanup != nil {
-		req.Cleanup.Close()
+		req.Cleanup.Close(req.Id.ReqId)
 	}
 	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
