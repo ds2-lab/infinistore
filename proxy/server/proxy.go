@@ -173,6 +173,12 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	lambdaDest := meta.Placement[dChunkId]
+	if meta.DChunks+meta.PChunks == 0 {
+		p.log.Error("Detect unexpected ec settings from meta of key %s, fix using default value.", key)
+		meta.DChunks = global.Options.D
+		meta.PChunks = global.Options.P
+		meta.NumChunks = global.Options.D + global.Options.P
+	}
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := types.GetRequest(client)
