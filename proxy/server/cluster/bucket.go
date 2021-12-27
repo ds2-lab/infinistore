@@ -324,3 +324,7 @@ func (b *Bucket) InstanceStatsFromIterator(iter types.Iterator) (int, types.Inst
 
 	return i, ins
 }
+
+func (b *Bucket) MetaStats() types.MetaStoreStats {
+	return nil
+}

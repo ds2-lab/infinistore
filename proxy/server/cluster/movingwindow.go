@@ -188,6 +188,10 @@ func (mw *MovingWindow) ClusterStatsFromIterator(iter types.Iterator) (int, type
 	return i, b
 }
 
+func (mw *MovingWindow) MetaStats() types.MetaStoreStats {
+	return mw.placer.MetaStats()
+}
+
 // lambdastore.InstanceManager implementation
 func (mw *MovingWindow) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
