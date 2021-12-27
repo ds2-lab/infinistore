@@ -212,7 +212,9 @@ func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
 	ins, _, err := mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
 	// update placement
-	meta.(*metastore.Meta).Placement[chunkId] = ins.Id()
+	if ins != nil {
+		meta.(*metastore.Meta).Placement[chunkId] = ins.Id()
+	}
 	return ins, err
 }
 
