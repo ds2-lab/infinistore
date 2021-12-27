@@ -1013,7 +1013,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		Id:      ins.Id(),
 		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix:  global.Options.Prefix,
-		Log:     global.Log.GetLevel(),
+		Log:     logger.LOG_LEVEL_ALL,
 		Flags:   global.Flags | localFlags,
 		Backups: config.BackupsPerInstance,
 		Status:  status,
