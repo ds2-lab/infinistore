@@ -29,11 +29,12 @@ var (
 	readerPool sync.Pool
 	writerPool sync.Pool
 
-	ErrConnectionClosed  = errors.New("connection closed")
-	ErrMissingResponse   = errors.New("missing response")
-	ErrUnexpectedCommand = errors.New("unexpected command")
-	ErrUnexpectedType    = errors.New("unexpected type")
-	ErrMissingRequest    = errors.New("missing request")
+	ErrConnectionClosed      = errors.New("connection closed")
+	ErrMissingResponse       = errors.New("missing response")
+	ErrUnexpectedCommand     = errors.New("unexpected command")
+	ErrUnexpectedType        = errors.New("unexpected type")
+	ErrMissingRequest        = errors.New("missing request")
+	ErrUnexpectedSendRequest = errors.New("unexpected SendRequest call")
 )
 
 // TODO: use bsm/pool
@@ -183,7 +184,11 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		lm, _ = args[1].(*LinkManager)
 	}
 
-	if !conn.control {
+	if lm == nil {
+		if conn.control {
+			conn.log.Warn("Unexpectly calling SendRequest as a data link, ignore.")
+			return ErrUnexpectedSendRequest
+		}
 		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
 		select {
 		case conn.chanWait <- req:
@@ -308,6 +313,10 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			conn.Close()
 		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
+			// Connection has been set avaialbe somewhere
+		} else {
+			conn.log.Warn("Request timeout (%v) and failed to set response unexpectly: %v", req, resErr)
+			conn.Close()
 		}
 		// If req is responded, err has been reported somewhere.
 	}()
@@ -568,7 +577,7 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 }
 
 // SetResponse Set response for last request.
-// If parameter release is set, the connection will be flagged available.
+// If parameter release is set and no error, the connection will be flagged available.
 func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, error) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
@@ -591,7 +600,7 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 }
 
 // SetErrorResponse Set response to last request as a error.
-//   You may need to flag the connection as available manually depends on the error.
+// You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
