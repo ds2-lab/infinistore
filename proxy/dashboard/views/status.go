@@ -8,6 +8,7 @@ import (
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
@@ -42,7 +43,7 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	}
 	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s, Objects: %d, Gets: %d",
 		v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory),
-		v.Meta.Len(), global.ReqCoordinator.Len())
+		util.Ifelse(v.Meta != nil, v.Meta.Len(), 0).(int), global.ReqCoordinator.Len())
 
 	// Draw overwrite
 	v.Block.Draw(buf)

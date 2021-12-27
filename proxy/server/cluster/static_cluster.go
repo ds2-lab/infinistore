@@ -169,6 +169,10 @@ func (c *StaticCluster) InstanceStatsFromIterator(iter types.Iterator) (int, typ
 	}
 }
 
+func (c *StaticCluster) MetaStats() types.MetaStoreStats {
+	return c.placer.MetaStats()
+}
+
 // lambdastore.InstanceManager implementation
 func (c *StaticCluster) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
