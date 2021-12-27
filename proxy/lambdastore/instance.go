@@ -70,7 +70,7 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN                       = 5
+	MAX_CMD_QUEUE_LEN                       = 2
 	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
 	TEMP_MAP_SIZE                           = 10
 	BACKING_DISABLED                        = 0
