@@ -728,7 +728,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
-		conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
+		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
 		// Set response and exhaust value
 		conn.SetResponse(rsp, false)
 		if err := stream.Close(); err != nil {
