@@ -32,6 +32,7 @@ type Placer interface {
 	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
 	Dispatch(*lambdastore.Instance, types.Command) error
+	MetaStats() types.MetaStoreStats
 }
 
 type MetaInitializer func(meta *Meta)
@@ -193,6 +194,10 @@ func (l *DefaultPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) (
 			return err
 		}
 	}
+}
+
+func (l *DefaultPlacer) MetaStats() types.MetaStoreStats {
+	return l.metaStore
 }
 
 func (l *DefaultPlacer) testChunk(ins *lambdastore.Instance, inc uint64) bool {
