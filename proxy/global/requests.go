@@ -236,7 +236,6 @@ func (c *RequestCounter) Close() {
 	cnt := atomic.AddInt32(&c.refs, -1)
 	if cnt >= 0 && c.ReleaseIfAllReturned() && cnt == 0 {
 		c.coordinator.Recycle(c)
-		c.coordinator = nil
 	}
 }
 
