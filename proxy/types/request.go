@@ -24,6 +24,8 @@ const (
 
 	CHANGE_PLACEMENT = 0x0001
 	MAX_ATTEMPTS     = 3
+
+	DEBUG_INITPROMISE_WAIT = 0x0001
 )
 
 var (
@@ -37,7 +39,8 @@ var (
 )
 
 type RequestCloser interface {
-	CloseChunk(*Id)
+	MarkReturnd(*Id) bool
+	Close()
 }
 
 type response struct {
@@ -58,7 +61,6 @@ type Request struct {
 	Info           interface{}
 	Changes        int
 	CollectorEntry interface{}
-	Cleanup        RequestCloser
 	Option         int64
 
 	conn             Conn
@@ -71,6 +73,7 @@ type Request struct {
 
 	// Shared if request to be send to multiple lambdas
 	response *response
+	Cleanup  RequestCloser
 }
 
 func GetRequest(client *redeo.Client) *Request {
@@ -171,6 +174,7 @@ func (req *Request) ToRecover() *Request {
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
 	recover.conn = nil
+	recover.responded = nil
 	return &recover
 }
 
@@ -208,8 +212,6 @@ func (req *Request) Flush() error {
 		req.streamingStarted = true
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(req.BodyStream.Len()))
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
-			// On error, close the request.
-			req.Close()
 			return err
 		}
 	}
@@ -219,7 +221,7 @@ func (req *Request) Flush() error {
 }
 
 // Close cleans up resources of the request: drain unread data in the request frame.
-func (req *Request) Close() {
+func (req *Request) close() {
 	// Unhold the stream if bodyStream was set. So the bodyStream.Close can be unblocked.
 	bodyStream := req.BodyStream
 	// Lock free pointer swap.
@@ -228,7 +230,11 @@ func (req *Request) Close() {
 			holdable.Unhold()
 		}
 	}
-	req.Cleanup = nil
+
+	if req.Cleanup != nil {
+		req.Cleanup.Close()
+		req.Cleanup = nil
+	}
 }
 
 func (req *Request) IsReturnd() bool {
@@ -282,14 +288,17 @@ func (req *Request) SetResponse(rsp interface{}) error {
 	}
 
 	// Makeup: do cleanup
-	if req.Cleanup != nil {
-		req.Cleanup.CloseChunk(&req.Id)
+	// req.close safe
+	cleanup := req.Cleanup
+	if cleanup != nil {
+		cleanup.MarkReturnd(&req.Id)
+	} else {
+		req.MarkReturned()
 	}
-	req.MarkReturned()
 	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}
-	req.Close()
+	req.close()
 
 	if req.response.client == nil {
 		return ErrNoClient
@@ -309,18 +318,27 @@ func (req *Request) Abandon() error {
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }
 
-func (req *Request) Timeout() error {
+func (req *Request) Timeout(opts ...int) error {
 	if req.responseTimeout < protocol.GetHeaderTimeout() {
 		req.responseTimeout = protocol.GetHeaderTimeout()
 	}
-	p := req.initPromise()
-	p.SetTimeout(req.responseTimeout)
-	return p.Timeout()
+	// Initialize
+	req.initPromise(opts...)
+	p := req.responded
+	if p != nil {
+		p.SetTimeout(req.responseTimeout)
+		return p.Timeout()
+	} else {
+		// Responded
+		return nil
+	}
 }
 
-func (req *Request) initPromise() promise.Promise {
+func (req *Request) initPromise(opts ...int) {
 	if req.responded == nil {
 		req.responded = promise.NewPromise()
 	}
-	return req.responded
+	if len(opts) > 0 && opts[0]&DEBUG_INITPROMISE_WAIT > 0 {
+		<-time.After(50 * time.Millisecond)
+	}
 }

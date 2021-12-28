@@ -68,22 +68,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 	counter := ret.(*RequestCounter)
 	if !ok {
 		// New counter registered, initialize values.
-		counter.Cmd = cmd
-		counter.DataShards = d
-		counter.ParityShards = p
-		counter.coordinator = c
-		counter.reqId = reqId
-		counter.status = 0
-		counter.numToFulfill = uint64(d)
-		if Options.Evaluation && Options.NoFirstD {
-			counter.numToFulfill = uint64(d + p)
-		}
-		l := int(d + p)
-		if cap(counter.Requests) < l {
-			counter.Requests = make([]*types.Request, l)
-		} else if len(counter.Requests) != l {
-			counter.Requests = counter.Requests[:l]
-		}
+		counter.reset(c, reqId, cmd, d, p)
 		// Release initalization lock
 		counter.initialized.Done()
 	} else {
@@ -141,6 +126,25 @@ type RequestCounter struct {
 
 func newRequestCounter() interface{} {
 	return &RequestCounter{}
+}
+
+func (counter *RequestCounter) reset(c *RequestCoordinator, reqId string, cmd string, d int, p int) {
+	counter.Cmd = cmd
+	counter.DataShards = d
+	counter.ParityShards = p
+	counter.coordinator = c
+	counter.reqId = reqId
+	counter.status = 0
+	counter.numToFulfill = uint64(d)
+	if Options.Evaluation && Options.NoFirstD {
+		counter.numToFulfill = uint64(d + p)
+	}
+	l := int(d + p)
+	if cap(counter.Requests) < l {
+		counter.Requests = make([]*types.Request, l)
+	} else if len(counter.Requests) != l {
+		counter.Requests = counter.Requests[:l]
+	}
 }
 
 func (c *RequestCounter) String() string {
@@ -232,22 +236,21 @@ func (c *RequestCounter) Load() *RequestCounter {
 	return c
 }
 
+func (c *RequestCounter) MarkReturnd(id *types.Id) bool {
+	_, ok := c.AddReturned(id.Chunk())
+	return ok
+}
+
 func (c *RequestCounter) Close() {
+	c.close()
+}
+
+func (c *RequestCounter) close() bool {
 	cnt := atomic.AddInt32(&c.refs, -1)
 	if cnt >= 0 && c.ReleaseIfAllReturned() && cnt == 0 {
 		c.coordinator.Recycle(c)
+		return true
+	} else {
+		return false
 	}
-}
-
-func (c *RequestCounter) CloseChunk(id *types.Id) {
-	if c == nil {
-		return
-	}
-
-	if id.ReqId != c.reqId {
-		return
-	}
-
-	c.AddReturned(id.Chunk())
-	c.Close()
 }
