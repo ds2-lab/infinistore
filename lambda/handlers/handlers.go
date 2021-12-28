@@ -45,10 +45,15 @@ func TestHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func GetHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Get Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -166,10 +171,15 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Set Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -256,10 +266,15 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 }
 
 func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Recover Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -363,10 +378,15 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func DelHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Del Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
