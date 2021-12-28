@@ -451,7 +451,7 @@ func (conn *Connection) ServeLambda() {
 		case error:
 			if util.IsConnectionFailed(ret) {
 				if conn.control {
-					conn.log.Warn("Lambda store disconnected.")
+					conn.log.Debug("Lambda store disconnected.")
 				} else {
 					conn.log.Debug("Disconnected.")
 				}
