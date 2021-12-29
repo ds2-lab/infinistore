@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 
@@ -344,6 +345,8 @@ func (mw *MovingWindow) Daemon() {
 			collector.Collect(collector.LogBucketRotate,
 				collector.LogTypeBucketRotate, ts.UnixNano(),
 				inherited, old.InstanceLen()-inherited, degraded, expired)
+
+			runtime.GC()
 
 			// reset ticker
 			timer.Reset(time.Duration(config.BucketDuration) * time.Minute)
