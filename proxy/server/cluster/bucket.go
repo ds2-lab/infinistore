@@ -123,11 +123,14 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, er
 	copy(bucket.instances, b.instances[b.activeStart.Idx()-b.start.Idx():])
 	b.disabled = nil
 
-	// Adjust current bucket
+	// Adjust current bucket, keep old instances array intact because it can be referenced somewhere.
 	b.end = bucket.start
+	newInstances := make([]*GroupInstance, len(b.instances))
+	copy(newInstances[:b.end.Idx()-b.start.Idx()], b.instances[:b.end.Idx()-b.start.Idx()])
 	for i := b.end.Idx() - b.start.Idx(); i < len(b.instances); i++ {
-		b.instances[i] = &GroupInstance{LambdaDeployment: b.instances[i].Instance().GetShadowInstance()}
+		newInstances[i] = &GroupInstance{LambdaDeployment: b.instances[i].Instance().GetShadowInstance()}
 	}
+	b.instances = newInstances
 
 	// Update bucketIndex
 	for _, gins := range bucket.instances {
