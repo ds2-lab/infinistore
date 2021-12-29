@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	LargeObjectThreshold = 500000000 // 500 MB
+	LargeObjectThreshold = 200000000 // 200 MB
 	LargeObjectSplitUnit = 100000000 // 100 MB
 )
 
