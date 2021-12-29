@@ -94,8 +94,8 @@ var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
 	TriggerTimeout        = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
-	RTT                   = 2 * time.Millisecond
-	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
+	RTT                   = 10 * time.Millisecond
+	DefaultConnectTimeout = 200 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
