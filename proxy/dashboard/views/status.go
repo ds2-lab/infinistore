@@ -65,6 +65,10 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	}
 
 	if MemLimit > 0 && v.maxMemory > MemLimit {
+		go func(dash DashControl) {
+			runtime.Gosched()
+			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
+		}(v.dash)
 		if global.Options.MemProfile != "" {
 			f, err := os.Create(global.Options.MemProfile + "_status")
 			if err == nil {
@@ -72,9 +76,5 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 				pprof.WriteHeapProfile(f)
 			}
 		}
-		go func(dash DashControl) {
-			runtime.Gosched()
-			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
-		}(v.dash)
 	}
 }
