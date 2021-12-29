@@ -313,9 +313,6 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			conn.Close()
 		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
-			// Connection has been set avaialbe somewhere
-		} else {
-			conn.log.Warn("Request timeout (%v) and failed to set response unexpectly: %v", req, resErr)
 			conn.Close()
 		}
 		// If req is responded, err has been reported somewhere.
