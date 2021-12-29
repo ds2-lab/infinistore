@@ -3,7 +3,9 @@ package views
 import (
 	"fmt"
 	"image"
+	"os"
 	"runtime"
+	"runtime/pprof"
 
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
@@ -67,5 +69,12 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 			runtime.Gosched()
 			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
 		}(v.dash)
+		if global.Options.MemProfile != "" {
+			f, err := os.Create(global.Options.MemProfile + "_status")
+			if err == nil {
+				defer f.Close() // error handling omitted for example
+				pprof.WriteHeapProfile(f)
+			}
+		}
 	}
 }
