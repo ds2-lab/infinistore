@@ -204,12 +204,14 @@ func (req *Request) Flush() error {
 	// When read timeout on lambda side, link close may be delayed and flush may be blocked. This blockage can happen, especially on streaming body.
 	defer conn.SetWriteDeadline(time.Time{})
 	if req.Body != nil {
+		req.responseTimeout = protocol.GetBodyTimeout(int64(len(req.Body)))
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(int64(len(req.Body))))
 		if err := conn.Writer().CopyBulk(bytes.NewReader(req.Body), int64(len(req.Body))); err != nil {
 			return err
 		}
 	} else if req.BodyStream != nil {
 		req.streamingStarted = true
+		req.responseTimeout = protocol.GetBodyTimeout(req.BodyStream.Len())
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(req.BodyStream.Len()))
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
 			return err
