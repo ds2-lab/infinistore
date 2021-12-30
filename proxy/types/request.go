@@ -14,6 +14,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
@@ -273,7 +274,9 @@ func (req *Request) IsResponse(rsp *Response) bool {
 // 1. Cancel timeout for individual request copy.
 // 2. Ignore err if the request copy is optional.
 // 3. Exclusively set response for first responder.
-func (req *Request) SetResponse(rsp interface{}) error {
+func (req *Request) SetResponse(rsp interface{}) (err error) {
+	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+
 	responded := req.responded
 	req.responded = nil
 	if responded != nil {
@@ -320,7 +323,9 @@ func (req *Request) Abandon() error {
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }
 
-func (req *Request) Timeout(opts ...int) error {
+func (req *Request) Timeout(opts ...int) (err error) {
+	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+
 	if req.responseTimeout < protocol.GetHeaderTimeout() {
 		req.responseTimeout = protocol.GetHeaderTimeout()
 	}
