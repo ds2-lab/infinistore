@@ -849,8 +849,8 @@ func (conn *Connection) bye() {
 		if client != nil {
 			if local, ok := client.(*invoker.LocalInvoker); ok {
 				sid, _ := conn.r.ReadBulkString()
-				payload, _ := conn.r.ReadBulk(nil)
-				local.SetOutputPayload(sid, payload)
+				payload, _ := conn.r.ReadBulkString()
+				local.SetOutputPayload(sid, []byte(payload))
 			}
 		}
 		conn.instance.bye(conn)

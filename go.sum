@@ -69,6 +69,8 @@ github.com/mason-leap-lab/go-utils v1.2.2 h1:0SPcjBKtGjWvje0DOXAk0vOItcUuYxCfkP0
 github.com/mason-leap-lab/go-utils v1.2.2/go.mod h1:dPISDUg+VBr/0oEFxdKk0fsXI7LJwbc0W5/kSZe5QCE=
 github.com/mason-leap-lab/redeo v1.1.9 h1:Vj+dHNPdA4BSqQHwpQQ2R13qeN3PbK9nqF3WiOEzB+M=
 github.com/mason-leap-lab/redeo v1.1.9/go.mod h1:YxTqTJR9f+KO8eP8TjsAFST+Lz4BcuyE/8pgvBAJAOQ=
+github.com/mason-leap-lab/redeo v1.1.10 h1:NkJdyUIcyOM1IBpaheX5BNrMvzssSHlIZIc6PYnopxI=
+github.com/mason-leap-lab/redeo v1.1.10/go.mod h1:YxTqTJR9f+KO8eP8TjsAFST+Lz4BcuyE/8pgvBAJAOQ=
 github.com/mattn/go-colorable v0.1.8 h1:c1ghPdyEDarC70ftn0y+A/Ee++9zz8ljHG1b13eJ0s8=
 github.com/mattn/go-colorable v0.1.8/go.mod h1:u6P/XSegPjTcexA+o6vUJrdnUu04hMope9wVRipJSqc=
 github.com/mattn/go-isatty v0.0.12 h1:wuysRhFDzyxgEmMf5xjvJ2M9dZoWAXNNr5LSBS7uHXY=
