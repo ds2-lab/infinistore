@@ -31,7 +31,6 @@ type CommandlineOptions struct {
 
 	lambdaPrefix       string
 	funcCapacity       uint64
-	funcThreshold      uint64
 	funcChunkThreshold int
 	disableRecovery    bool
 	cluster            string
@@ -64,14 +63,6 @@ func (o *CommandlineOptions) GetInstanceCapacity() uint64 {
 		o.funcCapacity = o.funcCapacity * 1000000
 	}
 	return o.funcCapacity
-}
-
-func (o *CommandlineOptions) GetInstanceThreshold() uint64 {
-	if o.funcThreshold == 0 {
-		o.funcThreshold = uint64(float64(o.GetInstanceCapacity()) * config.Threshold)
-	}
-
-	return o.funcThreshold
 }
 
 func (o *CommandlineOptions) GetInstanceChunkThreshold() int {

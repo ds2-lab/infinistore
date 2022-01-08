@@ -14,6 +14,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
@@ -24,6 +25,8 @@ const (
 
 	CHANGE_PLACEMENT = 0x0001
 	MAX_ATTEMPTS     = 3
+
+	DEBUG_INITPROMISE_WAIT = 0x0001
 )
 
 var (
@@ -32,7 +35,19 @@ var (
 	ErrResponded          = errors.New("responded")
 	ErrNoClient           = errors.New("no client set")
 	ErrNotSuppport        = errors.New("not support")
+
+	PlaceholderResponse = &response{}
 )
+
+type RequestCloser interface {
+	MarkReturnd(*Id) bool
+	Close()
+}
+
+type response struct {
+	status uint32
+	client *redeo.Client
+}
 
 type Request struct {
 	Seq            int64
@@ -44,20 +59,29 @@ type Request struct {
 	BodySize       int64
 	Body           []byte
 	BodyStream     resp.AllReadCloser
-	Client         *redeo.Client
 	Info           interface{}
 	Changes        int
 	CollectorEntry interface{}
-	QueuedAt       time.Time
+	Option         int64
 
 	conn             Conn
-	status           uint32
 	streamingStarted bool
-	responseTimeout  time.Duration
-	responded        promise.Promise
 	err              error
 	leftAttempts     int
 	reason           error
+	responseTimeout  time.Duration
+	responded        promise.Promise
+
+	// Shared if request to be send to multiple lambdas
+	response *response
+	Cleanup  RequestCloser
+}
+
+func GetRequest(client *redeo.Client) *Request {
+	return &Request{response: &response{
+		status: REQUEST_INVOKED,
+		client: client,
+	}}
 }
 
 func (req *Request) String() string {
@@ -66,6 +90,10 @@ func (req *Request) String() string {
 
 func (req *Request) Name() string {
 	return strings.ToLower(req.Cmd)
+}
+
+func (req *Request) GetInfo() interface{} {
+	return req.Info
 }
 
 func (req *Request) GetRequest() *Request {
@@ -121,12 +149,13 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.Option, 10))
 	req.conn = conn
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
@@ -141,10 +170,13 @@ func (req *Request) PrepareForDel(conn Conn) {
 }
 
 func (req *Request) ToRecover() *Request {
-	req.Cmd = protocol.CMD_RECOVER
-	req.RetCommand = protocol.CMD_GET
-	req.Changes = req.Changes & CHANGE_PLACEMENT
-	return req
+	recover := *req
+	recover.Cmd = protocol.CMD_RECOVER
+	recover.RetCommand = protocol.CMD_GET
+	recover.Changes = req.Changes & CHANGE_PLACEMENT
+	recover.conn = nil
+	recover.responded = nil
+	return &recover
 }
 
 func (req *Request) PrepareForRecover(conn Conn) {
@@ -173,16 +205,16 @@ func (req *Request) Flush() error {
 	// When read timeout on lambda side, link close may be delayed and flush may be blocked. This blockage can happen, especially on streaming body.
 	defer conn.SetWriteDeadline(time.Time{})
 	if req.Body != nil {
+		req.responseTimeout = protocol.GetBodyTimeout(int64(len(req.Body)))
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(int64(len(req.Body))))
 		if err := conn.Writer().CopyBulk(bytes.NewReader(req.Body), int64(len(req.Body))); err != nil {
 			return err
 		}
 	} else if req.BodyStream != nil {
 		req.streamingStarted = true
+		req.responseTimeout = protocol.GetBodyTimeout(req.BodyStream.Len())
 		conn.SetWriteDeadline(protocol.GetBodyDeadline(req.BodyStream.Len()))
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
-			// On error, close the request.
-			req.Close()
 			return err
 		}
 	}
@@ -192,7 +224,7 @@ func (req *Request) Flush() error {
 }
 
 // Close cleans up resources of the request: drain unread data in the request frame.
-func (req *Request) Close() {
+func (req *Request) close() {
 	// Unhold the stream if bodyStream was set. So the bodyStream.Close can be unblocked.
 	bodyStream := req.BodyStream
 	// Lock free pointer swap.
@@ -201,18 +233,32 @@ func (req *Request) Close() {
 			holdable.Unhold()
 		}
 	}
+
+	if req.Cleanup != nil {
+		req.Cleanup.Close()
+		req.Cleanup = nil
+	}
 }
 
 func (req *Request) IsReturnd() bool {
-	return atomic.LoadUint32(&req.status) >= REQUEST_RETURNED
+	if req.response == nil {
+		return false
+	}
+	return atomic.LoadUint32(&req.response.status) >= REQUEST_RETURNED
 }
 
 func (req *Request) IsResponded() bool {
-	return atomic.LoadUint32(&req.status) >= REQUEST_RESPONDED
+	if req.response == nil {
+		return false
+	}
+	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
 }
 
-func (req *Request) MarkReturned() {
-	atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RETURNED)
+func (req *Request) MarkReturned() bool {
+	if req.response == nil {
+		return false
+	}
+	return atomic.CompareAndSwapUint32(&req.response.status, REQUEST_INVOKED, REQUEST_RETURNED)
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {
@@ -221,24 +267,51 @@ func (req *Request) IsResponse(rsp *Response) bool {
 		req.Id.ChunkId == rsp.Id.ChunkId
 }
 
-func (req *Request) SetResponse(rsp interface{}) error {
-	req.MarkReturned()
-	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
-		return ErrResponded
-	}
-	req.Close()
+// SetResponse sets response of the request. Concurrent request dispatching is
+// supported, in which case the request will be dispatched to multiple instances,
+// one of which is required and others are optional. SetResponse ensure only one
+// response will be sent by:
+// 1. Cancel timeout for individual request copy.
+// 2. Ignore err if the request copy is optional.
+// 3. Exclusively set response for first responder.
+func (req *Request) SetResponse(rsp interface{}) (err error) {
+	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
-	if req.responded != nil {
-		req.responded.Resolve(rsp)
-		req.responded = nil
+	responded := req.responded
+	req.responded = nil
+	if responded != nil {
+		responded.Resolve(rsp)
 	}
-	if req.Client == nil {
+
+	// Ignore err if request is optional
+	if _, ok := rsp.(error); ok && req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
+		return nil
+	}
+
+	if req.response == nil {
 		return ErrNoClient
 	}
 
-	ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
+	// Makeup: do cleanup
+	// req.close safe
+	cleanup := req.Cleanup
+	if cleanup != nil {
+		cleanup.MarkReturnd(&req.Id)
+	} else {
+		req.MarkReturned()
+	}
+	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
+		return ErrResponded
+	}
+	req.close()
+
+	if req.response.client == nil {
+		return ErrNoClient
+	}
+
+	ret := req.response.client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 	// Release reference so chan can be garbage collected.
-	req.Client = nil
+	req.response.client = nil
 	return ret
 }
 
@@ -250,18 +323,29 @@ func (req *Request) Abandon() error {
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }
 
-func (req *Request) Timeout() error {
+func (req *Request) Timeout(opts ...int) (err error) {
+	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+
 	if req.responseTimeout < protocol.GetHeaderTimeout() {
 		req.responseTimeout = protocol.GetHeaderTimeout()
 	}
-	p := req.initPromise()
-	p.SetTimeout(req.responseTimeout)
-	return p.Timeout()
+	// Initialize
+	req.initPromise(opts...)
+	p := req.responded
+	if p != nil {
+		p.SetTimeout(req.responseTimeout)
+		return p.Timeout()
+	} else {
+		// Responded
+		return nil
+	}
 }
 
-func (req *Request) initPromise() promise.Promise {
+func (req *Request) initPromise(opts ...int) {
 	if req.responded == nil {
 		req.responded = promise.NewPromise()
 	}
-	return req.responded
+	if len(opts) > 0 && opts[0]&DEBUG_INITPROMISE_WAIT > 0 {
+		<-time.After(50 * time.Millisecond)
+	}
 }

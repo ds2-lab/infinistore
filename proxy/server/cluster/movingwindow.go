@@ -11,6 +11,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
 
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -40,7 +41,8 @@ type MovingWindow struct {
 	startTime time.Time
 
 	scaler         chan *types.ScaleEvent
-	candidateQueue *lambdastore.CandidateQueue
+	backupQueue    *lambdastore.CandidateQueue
+	backupIterator mapreduce.Iterator
 	// scaleCounter int32
 
 	mu   sync.RWMutex
@@ -72,6 +74,9 @@ func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
 
 		done: make(chan struct{}),
 	}
+	if cluster.numBufferFuncs < numFuncSteps {
+		cluster.numBufferFuncs = numFuncSteps
+	}
 	cluster.placer = metastore.NewDefaultPlacer(metastore.New(), cluster)
 	if cluster.numBufferFuncs+cluster.numFuncSteps > config.LambdaMaxDeployments {
 		cluster.numBufferFuncs = config.LambdaMaxDeployments - cluster.numFuncSteps
@@ -79,7 +84,8 @@ func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
 	if cluster.numBufferFuncs < 0 {
 		cluster.numBufferFuncs = 0
 	}
-	cluster.candidateQueue = lambdastore.NewCandidateQueue(config.BackupsPerInstance, cluster)
+	cluster.backupQueue = lambdastore.NewCandidateQueue(config.BackupsPerInstance, cluster)
+	cluster.backupIterator, _ = mapreduce.NewIterator(cluster.backupQueue.Candidates())
 	return cluster
 }
 
@@ -96,8 +102,8 @@ func (mw *MovingWindow) Start() error {
 
 	// assign backup node for all nodes of this bucket
 	mw.assignBackupLocked(mw.group.SubGroup(bucket.start, bucket.end))
-	if mw.candidateQueue != nil {
-		mw.candidateQueue.Start()
+	if mw.backupQueue != nil {
+		mw.backupQueue.Start()
 	}
 
 	// Set cursor to latest bucket.
@@ -142,9 +148,9 @@ func (mw *MovingWindow) Close() {
 	}
 
 	close(mw.done)
-	if mw.candidateQueue != nil {
-		mw.candidateQueue.Close()
-		mw.candidateQueue = nil
+	if mw.backupQueue != nil {
+		mw.backupQueue.Close()
+		mw.backupQueue = nil
 	}
 	for i, gins := range mw.group.all {
 		gins.Instance().Close()
@@ -182,6 +188,10 @@ func (mw *MovingWindow) ClusterStatsFromIterator(iter types.Iterator) (int, type
 	return i, b
 }
 
+func (mw *MovingWindow) MetaStats() types.MetaStoreStats {
+	return mw.placer.MetaStats()
+}
+
 // lambdastore.InstanceManager implementation
 func (mw *MovingWindow) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
@@ -192,13 +202,23 @@ func (mw *MovingWindow) Recycle(ins types.LambdaDeployment) error {
 	return nil
 }
 
-func (mw *MovingWindow) GetCandidateQueue() <-chan *lambdastore.Instance {
-	return mw.candidateQueue.Candidates()
+func (mw *MovingWindow) GetBackupCandidates() mapreduce.Iterator {
+	return mw.backupIterator
+}
+
+func (mw *MovingWindow) GetDelegates() []*lambdastore.Instance {
+	all := mw.GetCurrentBucket().redundantInstances()
+	_, delegates := mw.getBackupsForNode(all, -1, config.BackupsPerInstance)
+	return delegates
 }
 
 // lambdastore.Relocator implementation
 func (mw *MovingWindow) Relocate(meta interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, error) {
 	ins, _, err := mw.placer.Place(meta.(*metastore.Meta), chunkId, cmd)
+	// update placement
+	if ins != nil {
+		meta.(*metastore.Meta).Placement[chunkId] = ins.Id()
+	}
 	return ins, err
 }
 
@@ -225,7 +245,7 @@ func (mw *MovingWindow) TryRelocate(meta interface{}, chunkId int, cmd types.Com
 }
 
 // lambdastore.CandidateProvider implementation
-func (mw *MovingWindow) GetBackupCandidates(buf []*lambdastore.Instance) int {
+func (mw *MovingWindow) LoadCandidates(queue *lambdastore.CandidateQueue, buf []*lambdastore.Instance) int {
 	bucketRange := config.NumActiveBuckets
 	if bucketRange > len(mw.buckets) {
 		bucketRange = len(mw.buckets)
@@ -233,29 +253,30 @@ func (mw *MovingWindow) GetBackupCandidates(buf []*lambdastore.Instance) int {
 	startBucket := mw.buckets[len(mw.buckets)-bucketRange]
 
 	all := mw.group.SubGroup(startBucket.start, mw.buckets[len(mw.buckets)-1].end)
-	num, candidates := mw.getBackupsForNode(all, 0, len(buf))
+
+	num, candidates := mw.getBackupsForNode(all, -1, len(buf))
 	copy(buf[:num], candidates)
 	return num
 }
 
 // metastore.InstanceManger implementation
-func (mw *MovingWindow) GetActiveInstances(num int) []*lambdastore.Instance {
+func (mw *MovingWindow) GetActiveInstances(num int) lambdastore.InstanceEnumerator {
 	instances := mw.GetCurrentBucket().activeInstances(num)
 	if len(instances) >= num {
-		return instances
+		return NewGroupInstanceEnumerator(instances)
 	} else {
 		prm := promise.NewPromise()
 		mw.Trigger(
 			metastore.EventInsufficientStorage,
 			&types.ScaleEvent{
-				BaseInstance: instances[len(instances)-1],
+				BaseInstance: instances[len(instances)-1].Instance(),
 				ScaleTarget:  num - len(instances),
 				Scaled:       prm,
 				Reason:       "on demand",
 			})
 		if err := prm.Error(); err != nil {
 			mw.log.Warn("Failed to get at least %d active instances: %v", num, err)
-			return instances
+			return NewGroupInstanceEnumerator(instances)
 		} else {
 			// Retry
 			return mw.GetActiveInstances(num)
@@ -387,7 +408,7 @@ func (mw *MovingWindow) Rotate() (old *Bucket, inherited int, err error) {
 func (mw *MovingWindow) degrade(bucket *Bucket) int {
 	instances := bucket.getInstances()
 	for _, ins := range instances {
-		ins.Degrade()
+		ins.Instance().Degrade()
 	}
 	mw.numActives -= len(instances)
 	bucket.state = BUCKET_COLD
@@ -408,7 +429,7 @@ func (mw *MovingWindow) expire(bucket *Bucket) int {
 	// Expire instances
 	instances := bucket.getInstances()
 	for _, ins := range instances {
-		ins.Expire()
+		ins.Instance().Expire()
 	}
 	return len(instances)
 }
@@ -543,19 +564,32 @@ func (mw *MovingWindow) testScaledLocked(gins *GroupInstance, bucket *Bucket, re
 
 func (mw *MovingWindow) getBackupsForNode(gall []*GroupInstance, i int, numBaks int) (int, []*lambdastore.Instance) {
 	available := len(gall)
-	distance := available / (numBaks + 1) // main + double backup candidates
+	exclude := 1
+	if i < 0 {
+		exclude = 0
+	}
+	distance := available / (numBaks + exclude) // main + backup candidates, exclude main if i < 0
 	if distance == 0 {
 		// In case 2 * total >= g.Len()
 		distance = 1
-		numBaks = util.Ifelse(numBaks >= available, available-1, numBaks).(int) // Use all
+		numBaks = util.Ifelse(numBaks >= available, available-exclude, numBaks).(int) // Use all
 	}
 	candidates := make([]*lambdastore.Instance, numBaks)
-	for j := 0; j < numBaks; j++ {
-		candidates[j] = gall[(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
-	}
 	// Because only first numBaks backups will be used initially, shuffle to avoid the same backup set.
-	rand.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
+	perm := rand.Perm(len(gall))
+	// i is the instance we find backups for, locate i in the permutation.
+	permI := -1
+	if exclude > 0 {
+		for j := 0; j < len(perm); j++ {
+			if perm[j] == i {
+				permI = j
+				break
+			}
+		}
+	}
+	// Iterate backups start from permI
+	for j := 0; j < numBaks; j++ {
+		candidates[j] = gall[perm[(permI+j*distance+1)%available]].Instance() // Random to avoid the same backup set.
+	}
 	return numBaks, candidates
 }

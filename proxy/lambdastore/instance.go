@@ -18,8 +18,11 @@ import (
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/google/uuid"
+	"github.com/mason-leap-lab/go-utils"
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
@@ -82,7 +85,8 @@ const (
 	DESCRIPTION_MAYBE      = "unmanaged"
 	DESCRIPTION_UNDEFINED  = "undefined"
 
-	BUSY_CHECK = 0x0001
+	DISPATCH_OPT_BUSY_CHECK = 0x0001
+	DISPATCH_OPT_RELOCATED  = 0x0002
 )
 
 var (
@@ -113,15 +117,17 @@ var (
 	ErrInstanceBusy       = errors.New("instance busy")
 	ErrWarmupReturn       = errors.New("return from warmup")
 	ErrUnknown            = errors.New("unknown error")
-	ErrValidationTimeout  = errors.New("funciton validation timeout")
+	ErrValidationTimeout  = &LambdaError{error: errors.New("funciton validation timeout"), typ: LambdaErrorTimeout}
 	ErrCapacityExceeded   = errors.New("capacity exceeded")
-	ErrTimeout            = errors.New("queue timeout")
+	ErrQueueTimeout       = &LambdaError{error: errors.New("queue timeout"), typ: LambdaErrorTimeout}
+	ErrRelocationFailed   = errors.New("relocation failed")
 )
 
 type InstanceManager interface {
 	Instance(uint64) *Instance
 	Recycle(types.LambdaDeployment) error
-	GetCandidateQueue() <-chan *Instance
+	GetBackupCandidates() mapreduce.Iterator
+	GetDelegates() []*Instance
 }
 
 type Relocator interface {
@@ -159,13 +165,15 @@ type Instance struct {
 	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
 	validated       promise.Promise
-	numBusy         int32
+	numOutbound     int32
+	numInbound      int32
 	mu              sync.Mutex
 	closed          chan struct{}
 	coolTimer       *time.Timer
 	coolTimeout     time.Duration
 	coolReset       chan struct{}
 	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
+	client          invoker.FunctionInvoker
 	lambdaCanceller context.CancelFunc
 
 	// Connection management
@@ -183,6 +191,9 @@ type Instance struct {
 	backingTotal     int // Total # of backups ready for backing instance.
 	rerouteThreshold uint64
 	// TODO Lineage changed
+
+	// Delegate fields
+	delegates *Backups
 }
 
 func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
@@ -230,6 +241,7 @@ func (ins *Instance) String() string {
 	return ins.Description()
 }
 
+// InstantStats implementation
 func (ins *Instance) Status() uint64 {
 	// 0x000F  status
 	// 0x00F0  connection
@@ -251,6 +263,19 @@ func (ins *Instance) Status() uint64 {
 		(backing << 8) +
 		(uint64(atomic.LoadUint32(&ins.phase)) << 12) +
 		(failure << 28)
+}
+
+func (ins *Instance) Occupancy(mode types.InstanceOccupancyMode) float64 {
+	switch mode {
+	case types.InstanceOccupancyMain:
+		return ins.Meta.ModifiedOccupancy(0)
+	case types.InstanceOccupancyModified:
+		return float64(ins.Meta.sizeModified) / float64(ins.Meta.EffectiveCapacity())
+	case types.InstanceOccupancyMax:
+		return float64(ins.Meta.mem) / float64(ins.Meta.Capacity)
+	default:
+		return 0.0
+	}
 }
 
 func (ins *Instance) Description() string {
@@ -280,7 +305,7 @@ func (ins *Instance) StatusDescription() string {
 }
 
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
-	ins.backups.Reset(numBak, candidates)
+	ins.backups.ResetCandidates(numBak, candidates)
 }
 
 func (ins *Instance) Dispatch(cmd types.Command) error {
@@ -289,7 +314,12 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 
 func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	if ins.IsClosed() {
-		return ErrInstanceClosed
+		// tryRerouteDelegateRequest will always try relocation.
+		if !ins.tryRerouteDelegateRequest(cmd.GetRequest(), opts) {
+			return ErrRelocationFailed
+		} else {
+			return nil
+		}
 	}
 
 	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
@@ -297,7 +327,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	case ins.chanCmd <- cmd:
 		// continue after select
 	default:
-		if opts&BUSY_CHECK > 0 {
+		if opts&DISPATCH_OPT_BUSY_CHECK > 0 {
 			return ErrInstanceBusy
 		}
 
@@ -305,7 +335,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		select {
 		case ins.chanCmd <- cmd:
 		case <-time.After(protocol.GetHeaderTimeout()):
-			return ErrTimeout
+			return ErrQueueTimeout
 		}
 	}
 
@@ -318,8 +348,14 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	return nil
 }
 
-func (ins *Instance) IsBusy() bool {
-	return atomic.LoadInt32(&ins.numBusy) > 0 || len(ins.chanCmd) > 0 || len(ins.chanPriorCmd) > 0
+func (ins *Instance) IsBusy(cmd types.Command) bool {
+	if len(ins.chanCmd) >= MAX_CMD_QUEUE_LEN {
+		return true
+	} else if cmd.String() == protocol.CMD_SET {
+		return atomic.LoadInt32(&ins.numOutbound) > 0
+	} else {
+		return false
+	}
 }
 
 func (ins *Instance) WarmUp() {
@@ -390,7 +426,7 @@ func (ins *Instance) HandleRequests() {
 	}
 }
 
-// Start parallel recovery mode.
+// StartRecovery starts parallel recovery mode.
 // Return # of ready backups
 func (ins *Instance) StartRecovery() int {
 	recovering := atomic.LoadUint32(&ins.recovering)
@@ -412,7 +448,7 @@ func (ins *Instance) startRecoveryLocked() int {
 	}
 
 	// Reserve available backups
-	changes := ins.backups.Reserve(CM.GetCandidateQueue())
+	changes := ins.backups.Reserve(CM.GetBackupCandidates())
 
 	// Start backup and build logs
 	var msg strings.Builder
@@ -435,6 +471,51 @@ func (ins *Instance) startRecoveryLocked() int {
 		ins.log.Warn("Unable to start parallel recovery due to no backup instance available")
 	} else {
 		ins.log.Warn("Parallel recovery started with insufficient %d backup instances:%v, changes: %d", available, msg.String(), changes)
+	}
+
+	return available
+}
+
+// StartDelegation delegates the instance to parallel buffer instances.
+// Return # of delegates
+func (ins *Instance) StartDelegation() int {
+	if ins.delegates != nil {
+		return ins.delegates.Len()
+	}
+
+	ins.mu.Lock()
+	defer ins.mu.Unlock()
+
+	return ins.startDelegationLocked()
+}
+
+func (ins *Instance) startDelegationLocked() int {
+	if ins.delegates != nil {
+		return ins.delegates.Len()
+	}
+
+	delegates := CM.GetDelegates()
+	// TODO: do some filtering
+	ins.delegates = NewBackupsFromInstances(ins, delegates, &DelegateBackerAdapter{})
+
+	// Start backup and build logs
+	var msg strings.Builder
+	for i := 0; i < ins.delegates.Len(); i++ {
+		msg.WriteString(" ")
+		delegate, ok := ins.delegates.StartByIndex(i, ins)
+		if ok {
+			msg.WriteString(strconv.FormatUint(delegate.Id(), 10))
+		} else {
+			msg.WriteString("N/A")
+		}
+	}
+
+	// Start backups.
+	available := ins.delegates.Availables()
+	if available == 0 {
+		ins.log.Warn("No delegates available.")
+	} else {
+		ins.log.Info("Delegate to %d instances:%v", available, msg.String())
 	}
 
 	return available
@@ -505,7 +586,7 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	ins.mu.Unlock()
 
 	// Manually trigger ping with payload to initiate parallel recovery
-	payload, err := ins.backingIns.Meta.ToCmdPayload(ins.backingIns.Id(), bakId, total, ins.getRerouteThreshold())
+	payload, err := ins.backingIns.Meta.ToBackupPayload(ins.backingIns.Id(), bakId, total, ins.getRerouteThreshold())
 	if err != nil {
 		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
 	} else {
@@ -702,8 +783,9 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
 	goodDue := time.Duration(ins.due - time.Now().Add(RTT).UnixNano())
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
-		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp &&
-		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 {
+		(opt.Command == nil || opt.Command.Name() != protocol.CMD_PING) && // Time critical immediate ping
+		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp && // Lambda extended not thanks to warmup
+		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 { // Lambda extended long enough to ignore ping.
 		ins.mu.Unlock()
 		ins.log.Info("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
@@ -814,6 +896,9 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
 			ins.log.Info("Reclaimed")
 
+			// Initiate delegation.
+			ins.StartDelegation()
+
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
 				// Close() will handle status and validation and we can safely exit.
@@ -852,7 +937,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			ins.lm.Reset()
 
 			ins.log.Info("[%v]Reactivateing...", ins)
-			err = ins.doTriggerLambda(opt)
+			err = ins.doTriggerLambda(ins.validated.Options().(*ValidateOption))
 			awakeness = atomic.LoadUint32(&ins.awakeness)
 		}
 	}
@@ -866,41 +951,50 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
-	var client invoker.FunctionInvoker
 	switch global.Options.GetInvoker() {
 	case global.InvokerLocal:
-		client = &invoker.LocalInvoker{}
+		ins.client = &invoker.LocalInvoker{}
 	default:
-		client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+		ins.client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
 	}
 
 	tips := &url.Values{}
+	reqInsId := uint64(0) // Initialize reqInsId as -1
+	reqInsId--
 	if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET {
 		tips.Set(protocol.TIP_SERVING_KEY, opt.Command.GetRequest().Key)
+		reqInsId = opt.Command.GetRequest().InsId
 	}
 
 	var status protocol.Status
-	if !ins.IsBacking(false) {
-		// Main store only
-		status = protocol.Status{Metas: []protocol.Meta{*ins.Meta.ToProtocolMeta(ins.Id())}}
-		status.Metas[0].Tip = tips.Encode()
-	} else {
-		// Main store + backing store
-		status = protocol.Status{Metas: []protocol.Meta{
-			*ins.Meta.ToProtocolMeta(ins.Id()),
-			*ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()),
-		}}
-		if opt.Command != nil && opt.Command.Name() == protocol.CMD_GET && opt.Command.GetRequest().InsId == ins.Id() {
-			// Request is for main store, reset tips. Or tips will accumulatively used for backing store.
-			status.Metas[0].Tip = tips.Encode()
+	status.Metas = make([]protocol.Meta, 0, 3) // Main, backing, delegating
+	// Main store only
+	status.Metas = append(status.Metas, *ins.Meta.ToProtocolMeta(ins.Id()))
+	if reqInsId == ins.Id() {
+		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
+	}
+	// Backing store
+	if ins.IsBacking(false) {
+		status.Metas = append(status.Metas, *ins.backingIns.Meta.ToProtocolMeta(ins.backingIns.Id()))
+		if reqInsId == ins.Id() {
+			// Reset tips
 			tips = &url.Values{}
 		}
-		// Add backing infos to tips
 		tips.Set(protocol.TIP_BACKUP_KEY, strconv.Itoa(ins.backingId))
 		tips.Set(protocol.TIP_BACKUP_TOTAL, strconv.Itoa(ins.backingTotal))
 		tips.Set(protocol.TIP_MAX_CHUNK, strconv.FormatUint(ins.getRerouteThreshold(), 10))
-		status.Metas[1].Tip = tips.Encode()
+		status.Metas[len(status.Metas)-1].Tip = tips.Encode()
 	}
+	// Check extra one time store status (eg. delegate store)
+	ins.log.Debug("invoke with command: %v", opt.Command)
+	if opt.Command != nil {
+		// ins.log.Info("command with info: %v", opt.Command.GetInfo())
+		if meta, ok := opt.Command.GetInfo().(*protocol.Meta); ok {
+			// ins.log.Info("meta added: %v", meta)
+			status.Metas = append(status.Metas, *meta)
+		}
+	}
+
 	var localFlags uint64
 	if atomic.LoadUint32(&ins.phase) != PHASE_ACTIVE {
 		localFlags |= protocol.FLAG_BACKING_ONLY
@@ -938,7 +1032,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	ins.mu.Lock()
 	ins.lambdaCanceller = cancel
 	ins.mu.Unlock()
-	output, err := client.InvokeWithContext(ctx, input)
+	output, err := ins.client.InvokeWithContext(ctx, input)
+	ins.client = nil
 	ins.mu.Lock()
 	ins.lambdaCanceller = nil
 	ins.mu.Unlock()
@@ -960,35 +1055,49 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	// Handle output
 	if !event.IsRecoveryEnabled() {
 		// Ignore output
-	} else if len(output.Payload) > 0 {
-		var outputStatus protocol.Status
-		if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
-			ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
-		} else if len(outputStatus.Metas) > 0 {
-			uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
-			if err != nil && err == ErrInstanceReclaimed && ins.Phase() == PHASE_BACKING_ONLY {
-				// Reclaimed
-				ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
-				return err
-			} else if uptodate {
-				// If the node was invoked by other than the proxy, it could be stale.
-				if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
-					uptodate = false
-				} else {
-					ins.Meta.Stale = false
-				}
-			}
-
-			// Show log
-			if uptodate {
-				ins.log.Debug("Got updated instance lineage: %v", &outputStatus)
-			} else {
-				ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
-			}
-		}
-	} else {
+		return nil
+	} else if len(output.Payload) == 0 {
 		// Recovery enabled but no output
 		ins.log.Error("No instance lineage returned, output: %v", output)
+		return nil
+	}
+
+	// Parse output
+	var outputStatus protocol.Status
+	if err := json.Unmarshal(output.Payload, &outputStatus); err != nil {
+		ins.log.Error("Failed to unmarshal payload of lambda output: %v, payload", err, string(output.Payload))
+		return nil
+	}
+
+	// Handle output
+	if outputStatus.Capacity > 0 && outputStatus.Mem > 0 {
+		ins.Meta.ResetCapacity(outputStatus.Capacity, outputStatus.Effective)
+		ins.Meta.mem = outputStatus.Mem
+		ins.Meta.sizeModified = outputStatus.Modified
+		ins.log.Debug("Capacity synchronized: cap %d, effective %d, stored %d, modified %d", ins.Meta.Capacity, ins.Meta.EffectiveCapacity(), ins.Meta.Size(), outputStatus.Modified)
+	}
+	if len(outputStatus.Metas) > 0 {
+		uptodate, err := ins.Meta.FromProtocolMeta(&outputStatus.Metas[0]) // Ignore backing store
+		if err != nil && err == ErrInstanceReclaimed {
+			// Reclaimed
+			ins.log.Debug("Detected instance reclaimed from lineage: %v", &outputStatus)
+
+			return err
+		} else if uptodate {
+			// If the node was invoked by other than the proxy, it could be stale.
+			if atomic.LoadUint32(&ins.awakeness) == INSTANCE_MAYBE {
+				uptodate = false
+			} else {
+				ins.Meta.Stale = false
+			}
+		}
+
+		// Show log
+		if uptodate {
+			ins.log.Debug("Got updated instance lineage: %v", &outputStatus)
+		} else {
+			ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
+		}
 	}
 	return nil
 }
@@ -1100,11 +1209,13 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		if flags&protocol.PONG_RECLAIMED > 0 {
 			// PONG_RECLAIMED will be issued for instances in PHASE_BACKING_ONLY or PHASE_EXPIRED.
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
+			// Initiate delegation.
+			ins.startDelegationLocked()
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
 				ins.log.Info("Reclaimed")
-				ins.closeLocked()
-				return conn, nil
+				validConn, _ := ins.flagValidatedLocked(conn, ErrInstanceReclaimed)
+				return validConn, nil
 			} else {
 				ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
 			}
@@ -1127,7 +1238,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		err = errs[0]
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
-		if err != nil && err != ErrWarmupReturn {
+		if err != nil && err != ErrWarmupReturn && err != ErrInstanceReclaimed {
 			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
 			if int(numFailure) >= MaxValidationFailure || err == ErrValidationTimeout {
@@ -1138,7 +1249,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		} else {
 			atomic.StoreUint32(&ins.numFailure, 0)
 			if err != nil {
-				ins.log.Debug("[%v]%v", err)
+				ins.log.Debug("[%v]%v", ins, err)
 			} else {
 				ins.log.Debug("[%v]Validated", ins)
 			}
@@ -1176,8 +1287,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Set instance busy on request.
-	ins.busy()
-	defer ins.doneBusy()
+	ins.busy(cmd)
+	defer ins.doneBusy(cmd)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1190,14 +1301,17 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		ctrlLink, err := ins.Validate(&ValidateOption{Command: cmd})
 		validateDuration := time.Since(validateStart)
 
-		ins.log.Debug("Ready to %v", cmd)
-
 		// Only after validated, we know whether the instance is reclaimed.
 		// If instance is expiring and reclaimed, we will relocate objects in main repository while backing objects are not affected.
 		// Two options available to handle reclaiming event:
 		// 1. Recover to prevail node and reroute to the node. (current implementation)
 		// 2. Report not found
-		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() && ins.relocateGetRequest(cmd.GetRequest()) {
+		reclaimPass := false
+		if cmd.Name() == protocol.CMD_GET && ins.IsReclaimed() {
+			reclaimPass = ins.tryRerouteDelegateRequest(cmd.GetRequest(), util.Ifelse(cmd.GetRequest().Option&protocol.REQUEST_GET_OPTIONAL > 0, DISPATCH_OPT_RELOCATED, 0).(int))
+		}
+
+		if reclaimPass {
 			return
 		} else if err != nil {
 			// Handle errors
@@ -1213,6 +1327,8 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 			ins.log.Warn("Unexpected nil control link with no error returned.")
 			return
 		}
+
+		ins.log.Debug("Ready to %v", cmd)
 
 		// Make request
 		lastErr = ins.request(ctrlLink, cmd, validateDuration)
@@ -1261,7 +1377,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	}
 
 	// No reroute for chunk larger than threshold()
-	if req.Size() > int64(ins.getRerouteThreshold()) {
+	if req.Size() > int64(backup.getRerouteThreshold()) {
 		return false
 	}
 
@@ -1291,6 +1407,50 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 
 	ins.log.Debug("Instance reclaimed, relocated %v to %d", req.Key, target.Id())
 	return true
+}
+
+func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, opts int) bool {
+	if req == nil || req.Cmd != protocol.CMD_GET {
+		return false
+	}
+
+	// Delegate will always relocate the chunk.
+	// This will only happen once since redelegated instance will refuse relocation due to req.InsId != ins.Id()
+	fallbacked := opts&DISPATCH_OPT_RELOCATED > 0
+	if !fallbacked {
+		fallbacked = ins.relocateGetRequest(req)
+	}
+
+	if ins.delegates == nil {
+		ins.log.Warn("Has not delegated yet, stop reroute %v", req)
+		return fallbacked
+	}
+
+	loc, total, _ := ins.delegates.Locator().Locate(req.Key)
+	delegate, _ := ins.delegates.GetByLocation(loc, total)
+
+	if delegate == nil {
+		return fallbacked
+	}
+
+	// No reroute for chunk larger than threshold()
+	if req.Size() > int64(delegate.getRerouteThreshold()) {
+		return fallbacked
+	}
+
+	// Set optional flag will not be override.
+	if fallbacked {
+		req.Option |= protocol.REQUEST_GET_OPTIONAL
+	}
+	// Chained delegation is safe if the instance triggering relocation is not current instance.
+	err := delegate.DispatchWithOptions(req, opts|utils.Ifelse(fallbacked, DISPATCH_OPT_RELOCATED, 0).(int))
+	if err != nil {
+		ins.log.Warn("Delegate %s to node %d as %d of %d with error: %v.", req.Key, delegate.Id(), loc, total, err)
+		return fallbacked
+	} else {
+		ins.log.Debug("Delegate %s to node %d as %d of %d.", req.Key, delegate.Id(), loc, total)
+		return true // fallbacked || true
+	}
 }
 
 func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {
@@ -1382,12 +1542,20 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	}
 }
 
-func (ins *Instance) busy() {
-	atomic.AddInt32(&ins.numBusy, 1)
+func (ins *Instance) busy(cmd types.Command) {
+	if cmd.String() == protocol.CMD_SET {
+		atomic.AddInt32(&ins.numOutbound, 1)
+	} else {
+		atomic.AddInt32(&ins.numInbound, 1)
+	}
 }
 
-func (ins *Instance) doneBusy() {
-	atomic.AddInt32(&ins.numBusy, -1)
+func (ins *Instance) doneBusy(cmd types.Command) {
+	if cmd.String() == protocol.CMD_SET {
+		atomic.AddInt32(&ins.numOutbound, -1)
+	} else {
+		atomic.AddInt32(&ins.numInbound, -1)
+	}
 }
 
 func (ins *Instance) CollectData() {

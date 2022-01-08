@@ -12,6 +12,29 @@ import (
 
 var ErrNoSpareDeployment = errors.New("no spare deployment")
 
+type InstanceOccupancyMode int
+
+const (
+	InstanceOccupancyMain InstanceOccupancyMode = iota
+	InstanceOccupancyModified
+	InstanceOccupancyMax
+	InstanceOccupancyDisabled
+	InstanceOccupancyMod
+)
+
+func (iom InstanceOccupancyMode) String() string {
+	switch iom {
+	case InstanceOccupancyMain:
+		return "main"
+	case InstanceOccupancyModified:
+		return "modified"
+	case InstanceOccupancyMax:
+		return "max"
+	default:
+		return "disabled"
+	}
+}
+
 type Id struct {
 	ReqId    string
 	ChunkId  string
@@ -39,6 +62,7 @@ type Conn interface {
 type Command interface {
 	Name() string
 	String() string
+	GetInfo() interface{}
 	GetRequest() *Request
 	// MarkError Mark an failure attempt to send request, return attempts left.
 	MarkError(error) int
@@ -59,11 +83,16 @@ type MigrationScheduler interface {
 	GetDestination(uint64) (LambdaDeployment, error)
 }
 
+type MetaStoreStats interface {
+	Len() int
+}
+
 type ClusterStats interface {
 	InstanceLen() int
 	InstanceStats(int) InstanceStats
 	AllInstancesStats() Iterator
 	InstanceStatsFromIterator(Iterator) (int, InstanceStats)
+	MetaStats() MetaStoreStats
 }
 
 type GroupedClusterStats interface {
@@ -71,10 +100,12 @@ type GroupedClusterStats interface {
 	ClusterStats(int) ClusterStats
 	AllClustersStats() Iterator
 	ClusterStatsFromIterator(Iterator) (int, ClusterStats)
+	MetaStats() MetaStoreStats
 }
 
 type InstanceStats interface {
 	Status() uint64
+	Occupancy(InstanceOccupancyMode) float64
 }
 
 type ScaleEvent struct {

@@ -16,6 +16,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/net"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -80,7 +81,7 @@ func NewWorker(lifeId int64) *Worker {
 	worker := &Worker{
 		id:       rand.Int31(),
 		Server:   redeo.NewServer(nil),
-		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_ALL, Color: false, Prefix: "Worker:"},
+		log:      &logger.ColorLogger{Level: logger.LOG_LEVEL_INFO, Color: false, Prefix: "Worker:"},
 		ctrlLink: NewLink(true),
 		// dataLink:    NewLink(false),
 		heartbeater: new(DefaultHeartbeater),
@@ -326,7 +327,7 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 		}
 		delay = RetrialDelayStartFrom
 
-		wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
+		wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
 
 		// Recheck if server closed in mutex
 		if wrk.IsClosed() {
@@ -433,7 +434,7 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 		conn = cn
 		remoteAddr = cn.RemoteAddr().String()
 	}
-	wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
+	wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
 
 	// Recheck if server closed in mutex
 	if wrk.IsClosed() {

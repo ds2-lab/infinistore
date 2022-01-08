@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/cache"
@@ -83,19 +84,19 @@ func NewStaticCluster(size int) *StaticCluster {
 		c.log.Info("[Lambda store %s Registered]", ins.Name())
 	}
 	// Something can only be done after all nodes initialized.
-	all := c.instances.Value().([]*lambdastore.Instance)
-	for i, node := range all {
-		node.AssignBackups(c.getBackupsForNode(all, i))
+	all := c.instances.Value().([]*GroupInstance)
+	for i, gins := range all {
+		gins.Instance().AssignBackups(c.getBackupsForNode(all, i))
 
 		// Initialize instance, this is not neccessary if the start time of the instance is acceptable.
 		// c.ready.Add(1)
 		// go func() {
-		// 	node.WarmUp()
+		// 	gins.Instance().WarmUp()
 		// 	c.ready.Done()
 		// }()
 
 		// Begin handle requests
-		go node.HandleRequests()
+		go gins.Instance().HandleRequests()
 	}
 
 	return c
@@ -168,6 +169,10 @@ func (c *StaticCluster) InstanceStatsFromIterator(iter types.Iterator) (int, typ
 	}
 }
 
+func (c *StaticCluster) MetaStats() types.MetaStoreStats {
+	return c.placer.MetaStats()
+}
+
 // lambdastore.InstanceManager implementation
 func (c *StaticCluster) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
@@ -177,7 +182,11 @@ func (c *StaticCluster) Recycle(ins types.LambdaDeployment) error {
 	return ErrUnsupported
 }
 
-func (c *StaticCluster) GetCandidateQueue() <-chan *lambdastore.Instance {
+func (c *StaticCluster) GetBackupCandidates() mapreduce.Iterator {
+	return nil
+}
+
+func (c *StaticCluster) GetDelegates() []*lambdastore.Instance {
 	return nil
 }
 
@@ -192,8 +201,8 @@ func (c *StaticCluster) TryRelocate(o interface{}, chunkId int, cmd types.Comman
 }
 
 // metastore.InstanceManger implementation
-func (c *StaticCluster) GetActiveInstances(num int) []*lambdastore.Instance {
-	return c.instances.Value().([]*lambdastore.Instance)
+func (c *StaticCluster) GetActiveInstances(num int) lambdastore.InstanceEnumerator {
+	return NewGroupInstanceEnumerator(c.instances.Value().([]*GroupInstance))
 }
 
 func (c *StaticCluster) GetSlice(size int) metastore.Slice {
@@ -204,7 +213,7 @@ func (c *StaticCluster) Trigger(event int, args ...interface{}) {
 	// No event
 }
 
-func (c *StaticCluster) getBackupsForNode(all []*lambdastore.Instance, i int) (int, []*lambdastore.Instance) {
+func (c *StaticCluster) getBackupsForNode(all []*GroupInstance, i int) (int, []*lambdastore.Instance) {
 	numBaks := config.BackupsPerInstance
 	available := len(all)
 	selectFrom := 0 // Select backups from this index.
@@ -227,7 +236,7 @@ func (c *StaticCluster) getBackupsForNode(all []*lambdastore.Instance, i int) (i
 	}
 	candidates := make([]*lambdastore.Instance, numTotal)
 	for j := 0; j < numTotal; j++ {
-		candidates[j] = all[selectFrom+(i+j*distance+rand.Int()%distance+1)%available] // Random to avoid the same backup set.
+		candidates[j] = all[selectFrom+(i+j*distance+rand.Int()%distance+1)%available].Instance() // Random to avoid the same backup set.
 	}
 	return numBaks, candidates
 }

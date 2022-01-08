@@ -45,10 +45,15 @@ func TestHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func GetHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Get Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -71,7 +76,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId, stream, ret := Store.GetStream(key)
 	// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
 	// Deleted chunk(ret.Error() == types.ErrDeleted) will not be recovered.
-	if ret.Error() == types.ErrNotFound && Persist != nil {
+	if (ret.Error() == types.ErrNotFound || ret.Error() == types.ErrIncomplete) && Persist != nil {
 		log.Debug("Key not found locally, try recovery: %v %s", key, reqId)
 		if Lineage != nil {
 			log.Warn("Key not found while recovery is enabled: %v", key)
@@ -79,6 +84,15 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		errRsp := &worker.ErrorResponse{}
 		chunkId = c.Arg(1).String()
 		sizeArg := c.Arg(3)
+		option, _ := c.Arg(4).Int()
+		if option&protocol.REQUEST_GET_OPTIONAL > 0 {
+			errRsp.Error = ret.Error()
+			Server.AddResponses(errRsp, client)
+			if err := errRsp.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+			}
+			return
+		}
 		if sizeArg == nil {
 			errRsp.Error = errors.New("size must be set for trying recovery from persistent layer")
 			Server.AddResponses(errRsp, client)
@@ -96,7 +110,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			}
 			return
 		}
-		ret = Persist.SetRecovery(key, chunkId, uint64(size))
+		ret = Persist.SetRecovery(key, chunkId, uint64(size), int(option))
 		if ret.Error() != nil {
 			errRsp.Error = ret.Error()
 			Server.AddResponses(errRsp, client)
@@ -137,7 +151,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Debug("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
+		log.Info("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
 		collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	} else {
 		var respError *ResponseError
@@ -145,7 +159,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			// Not found
 			respError = NewResponseError(404, "Key not found %s: %v", key, ret.Error())
 		} else {
-			respError = NewResponseError(500, "Failed to get %s: %v", key, ret.Error())
+			respError = NewResponseError(500, "Failed to get %s: %v,%s", key, ret.Error(), ret.Message())
 		}
 		errResponse := &worker.ErrorResponse{Error: respError}
 		Server.AddResponses(errResponse, client)
@@ -157,10 +171,15 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Set Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -242,15 +261,20 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	d2 := time.Since(t2)
 
 	dt := time.Since(t)
-	log.Debug("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+	log.Info("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
 	finalize(ret, d1, d2, dt)
 }
 
 func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Recover Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -304,7 +328,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// Recover.
-	ret = Persist.SetRecovery(key, chunkId, uint64(size))
+	ret = Persist.SetRecovery(key, chunkId, uint64(size), 0)
 	if ret.Error() != nil {
 		errRsp.Error = ret.Error()
 		Server.AddResponses(errRsp, client)
@@ -354,10 +378,15 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 }
 
 func DelHandler(w resp.ResponseWriter, c *resp.Command) {
+	session := lambdaLife.GetSession()
+	if session == nil {
+		log.Warn("Detected nil session in Del Handler")
+		return
+	}
+
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
-	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
 	extension := lambdaLife.TICK_ERROR
@@ -380,7 +409,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	chunkId := c.Arg(1).String()
 	key := c.Arg(2).String()
 
-	ret = Store.Del(key, chunkId)
+	ret = Store.Del(key, "request")
 	if ret.Error() == nil {
 		// write Key, clientId, chunkId, body back to proxy
 		response := &worker.ObjectResponse{

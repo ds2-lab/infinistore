@@ -9,10 +9,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -27,11 +29,12 @@ var (
 	readerPool sync.Pool
 	writerPool sync.Pool
 
-	ErrConnectionClosed  = errors.New("connection closed")
-	ErrMissingResponse   = errors.New("missing response")
-	ErrUnexpectedCommand = errors.New("unexpected command")
-	ErrUnexpectedType    = errors.New("unexpected type")
-	ErrMissingRequest    = errors.New("missing request")
+	ErrConnectionClosed      = errors.New("connection closed")
+	ErrMissingResponse       = errors.New("missing response")
+	ErrUnexpectedCommand     = errors.New("unexpected command")
+	ErrUnexpectedType        = errors.New("unexpected type")
+	ErrMissingRequest        = errors.New("missing request")
+	ErrUnexpectedSendRequest = errors.New("unexpected SendRequest call")
 )
 
 // TODO: use bsm/pool
@@ -48,7 +51,7 @@ type Connection struct {
 	r           resp.ResponseReader
 	mu          sync.Mutex
 	chanWait    chan *types.Request
-	headRequest *types.Request
+	headRequest unsafe.Pointer
 	respType    chan interface{}
 	closed      uint32
 	done        chan struct{}
@@ -181,7 +184,11 @@ func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) err
 		lm, _ = args[1].(*LinkManager)
 	}
 
-	if !conn.control {
+	if lm == nil {
+		if conn.control {
+			conn.log.Warn("Unexpectly calling SendRequest as a data link, ignore.")
+			return ErrUnexpectedSendRequest
+		}
 		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
 		select {
 		case conn.chanWait <- req:
@@ -252,9 +259,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	// conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
 	// conn.chanWait <- req
 	// Moved end
-	conn.headRequest = req
+	conn.prePushRequest(req)
 	if req.IsResponded() {
-		conn.popRequest()
+		conn.popRequest(req)
 		return
 	}
 
@@ -287,41 +294,60 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		return
 	}
 
+	conn.log.Debug("Sent %v", req)
+
 	// Set instance busy. Yes requests will call busy twice:
 	// on schedule(instance.handleRequest) and on request.
 	ins := conn.instance // Save a reference in case the connection being released later.
-	ins.busy()
+	ins.busy(req)
 	go func() {
-		defer ins.doneBusy()
+		defer ins.doneBusy(req)
 		err := req.Timeout()
 		if err == nil {
 			return
 		}
 
-		if resErr := req.SetResponse(err); resErr == nil {
+		if resErr := conn.SetErrorResponse(err); resErr == nil {
 			conn.log.Warn("Request timeout: %v", req)
-			conn.popRequest()
 			// close connection to discard late response.
 			conn.Close()
-		} else if resErr != types.ErrResponded {
+		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
+			conn.Close()
 		}
 		// If req is responded, err has been reported somewhere.
 	}()
 }
 
-func (conn *Connection) peekRequest() *types.Request {
-	return conn.headRequest
+func (conn *Connection) prePushRequest(req *types.Request) bool {
+	return atomic.CompareAndSwapPointer(&conn.headRequest, nil, unsafe.Pointer(req))
 }
 
-func (conn *Connection) popRequest() *types.Request {
-	conn.headRequest = nil
-	select {
-	case req := <-conn.chanWait:
-		return req
-	default:
+func (conn *Connection) peekRequest() *types.Request {
+	ptr := atomic.LoadPointer(&conn.headRequest)
+	if ptr == nil {
 		return nil
+	} else {
+		return (*types.Request)(ptr)
 	}
+}
+
+// popRequest pop the head of channel lock freely by:
+// 1. Set head before queuing.
+// 2. Test head using peekRequest.
+// 3. Clear head before dequeuing.
+// So if the queue channel is unlocked, head must be nil.
+// If peekRequest test (2) is passed, and popRequest is guarded by atomic operation and can't pop twice.
+func (conn *Connection) popRequest(req *types.Request) *types.Request {
+	if atomic.CompareAndSwapPointer(&conn.headRequest, unsafe.Pointer(req), nil) {
+		select {
+		case req := <-conn.chanWait:
+			return req
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 // func (conn *Connection) isRequestPending() bool {
@@ -422,7 +448,7 @@ func (conn *Connection) ServeLambda() {
 		case error:
 			if util.IsConnectionFailed(ret) {
 				if conn.control {
-					conn.log.Warn("Lambda store disconnected.")
+					conn.log.Debug("Lambda store disconnected.")
 				} else {
 					conn.log.Debug("Disconnected.")
 				}
@@ -548,7 +574,7 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 }
 
 // SetResponse Set response for last request.
-// If parameter release is set, the connection will be flagged available.
+// If parameter release is set and no error, the connection will be flagged available.
 func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, error) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
@@ -559,7 +585,7 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 	}
 
 	// Lock free: double check that poped is what we peeked.
-	if poped := conn.popRequest(); poped == req {
+	if poped := conn.popRequest(req); poped == req {
 		if release {
 			conn.flagAvailable()
 		}
@@ -571,24 +597,24 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 }
 
 // SetErrorResponse Set response to last request as a error.
-//   You may need to flag the connection as available manually depends on the error.
+// You may need to flag the connection as available manually depends on the error.
 func (conn *Connection) SetErrorResponse(err error) error {
-	if req := conn.popRequest(); req != nil {
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req != nil && conn.popRequest(req) == req {
 		return req.SetResponse(err)
 	}
 
-	conn.log.Warn("Unexpected error response: no request pending. err: %v", err)
 	return ErrMissingRequest
 }
 
 func (conn *Connection) ClearResponses() {
-	req := conn.popRequest()
-	for req != nil {
-		req.SetResponse(ErrConnectionClosed)
+	for req := conn.peekRequest(); req != nil; req = conn.peekRequest() {
+		if conn.popRequest(req) == req {
+			req.SetResponse(ErrConnectionClosed)
+		}
 		// Yield for pending req a chance to push.
 		runtime.Gosched()
-
-		req = conn.popRequest()
 	}
 }
 
@@ -708,7 +734,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
-		conn.log.Warn("Request not found: %s", reqId)
+		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
 		// Set response and exhaust value
 		conn.SetResponse(rsp, false)
 		if err := stream.Close(); err != nil {
@@ -717,21 +743,20 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 		return
 	}
+	defer counter.Close()
 
-	status := counter.AddSucceeded(chunk, recovered == 1)
-	// Check if chunks are enough? Shortcut response if YES.
-	if counter.IsLate(status) {
-		conn.log.Debug("GOT %v, abandon.", rsp.Id)
+	status, returned := counter.AddSucceeded(chunk, recovered == 1)
+	if returned || counter.IsLate(status) {
+		conn.log.Debug("GOT %v, abandon (duplicated: %v)", rsp.Id, returned)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		// Connection will not be flagged available until SkipBulk() is executed.
 		req, _ := conn.SetResponse(rsp, false)
-		if req != nil {
+		if req != nil && !returned {
 			_, err := collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
 				conn.log.Warn("LogRequestFuncResponse err %v", err)
 			}
 		}
-		counter.ReleaseIfAllReturned(status)
 
 		// Consume and abandon the response.
 		if err := stream.Close(); err != nil {
@@ -820,6 +845,14 @@ func (conn *Connection) initMigrateHandler() {
 func (conn *Connection) bye() {
 	conn.log.Debug("BYE from lambda.")
 	if conn.instance != nil {
+		client := conn.instance.client
+		if client != nil {
+			if local, ok := client.(*invoker.LocalInvoker); ok {
+				sid, _ := conn.r.ReadBulkString()
+				payload, _ := conn.r.ReadBulkString()
+				local.SetOutputPayload(sid, []byte(payload))
+			}
+		}
 		conn.instance.bye(conn)
 	}
 }
@@ -827,17 +860,8 @@ func (conn *Connection) bye() {
 func (conn *Connection) recoverHandler() {
 	conn.log.Debug("RECOVER from lambda.")
 
-	reqId, _ := conn.r.ReadBulkString()
+	conn.r.ReadBulkString() // reqId
 	conn.r.ReadBulkString() // chunkId
-
-	ctrl := global.ReqCoordinator.Load(reqId)
-	if ctrl == nil {
-		conn.log.Warn("No control found for %s", reqId)
-	} else if ctrl.(*types.Control).Callback == nil {
-		conn.log.Warn("Control callback not defined for recover request %s", reqId)
-	} else {
-		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
-	}
 
 	// Check lambda if it is supported
 	conn.finalizeCommmand(protocol.CMD_RECOVER)

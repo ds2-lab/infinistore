@@ -144,6 +144,14 @@ func (p *LRUPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lambdast
 	return instance, post, err
 }
 
+func (p *LRUPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) error {
+	return ins.Dispatch(cmd)
+}
+
+func (p *LRUPlacer) MetaStats() types.MetaStoreStats {
+	return p.store
+}
+
 // NewMeta will remap idx according to following logic:
 // 0. If an LRU relocation is present, remap according to "chunk" in relocation array.
 // 1. Base on the size of slice, remap to a instance in the group.

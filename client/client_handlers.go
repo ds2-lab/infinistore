@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	LargeObjectThreshold = 500000000 // 500 MB
-	LargeObjectSplitUnit = 100000000 // 100 MB
+	LargeObjectThreshold = 30000000 // 20 MB per chunk
+	LargeObjectSplitUnit = 10000000 // 10 MB per chunk
 )
 
 var (
@@ -108,7 +108,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	// log.Debug("SET located host: %s", host)
 
 	var ret *ecRet
-	if len(val) <= LargeObjectThreshold {
+	if len(val) <= LargeObjectThreshold*len(index) {
 		ret = c.set(host, key, reqId, val, index)
 	} else {
 		ret = c.setLarge(host, key, reqId, val, index)
@@ -237,7 +237,7 @@ func (c *Client) set(host string, key string, reqId string, val []byte, placemen
 }
 
 func (c *Client) setLarge(host string, key string, reqId string, val []byte, placements []int) *ecRet {
-	numFrags := int(math.Round(float64(len(val)) / LargeObjectSplitUnit))
+	numFrags := int(math.Round(float64(len(val)) / LargeObjectSplitUnit / float64(len(placements))))
 	fragments, _ := NewEncoder(numFrags, 0, 0).Split(val)
 	shardsSet := make([][][]byte, numFrags)
 	notifiers := make([]WaitGroup, numFrags)

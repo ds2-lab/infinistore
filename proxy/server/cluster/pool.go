@@ -3,6 +3,7 @@ package cluster
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
@@ -24,8 +25,9 @@ var (
 )
 
 type Pool struct {
-	backend chan *lambdastore.Deployment
-	actives *hashmap.HashMap
+	backend  chan *lambdastore.Deployment
+	actives  *hashmap.HashMap
+	recycled int32
 }
 
 // numCluster = small number, numDeployment = large number
@@ -45,29 +47,29 @@ func (s *Pool) NumAvailable() int {
 }
 
 func (s *Pool) NumActives() int {
-	return s.actives.Len()
+	return s.actives.Len() - int(atomic.LoadInt32(&s.recycled))
 }
 
 // Get a instance at ith position for the group.
 // There is no border check for the index, which means the group should solely responsible
 // for the validity of the index, and the index can be a virtual one.
 // This operation will be blocked if no more deployment available
-func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *lambdastore.Instance {
-	ins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
-	s.actives.Set(ins.Id(), ins)
-	g.Set(ins)
-	return ins.LambdaDeployment.(*lambdastore.Instance)
+func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *GroupInstance {
+	gins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
+	s.actives.Set(gins.Id(), gins)
+	g.Set(gins)
+	return gins
 }
 
 // Reserve a deployment at ith position in the group.
 // The group may choose to instancize it later or not.
 // This operation will return err if no more deployment available
-func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment, error) {
+func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (*GroupInstance, error) {
 	select {
 	case item := <-s.backend:
-		ins := g.Reserve(idx, item)
-		s.actives.Set(ins.Id(), ins)
-		return ins.LambdaDeployment, nil
+		gins := g.Reserve(idx, item)
+		s.actives.Set(gins.Id(), gins)
+		return gins, nil
 	default:
 		return nil, types.ErrNoSpareDeployment
 	}
@@ -75,40 +77,46 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (types.LambdaDeployment
 
 // Reserve a deployment to replace specified instance.
 // Can be a different deployment other than the instance's for different mode.
-func (s *Pool) ReserveForInstance(insId uint64) (types.LambdaDeployment, error) {
-	got, exists := s.getActive(insId)
+func (s *Pool) ReserveForInstance(insId uint64) (*GroupInstance, error) {
+	gins, exists := s.getActive(insId)
 	if !exists {
 		return nil, fmt.Errorf("instance %d not found", insId)
 	}
 
-	ins := got.(*GroupInstance)
 	if IN_DEPLOYMENT_MIGRATION {
-		return ins.LambdaDeployment, nil
+		return gins, nil
 	} else {
-		return s.ReserveForGroup(ins.group, ins.idx)
+		return s.ReserveForGroup(gins.group, gins.idx)
 	}
 }
 
 // Helper function for two phase deletion
-func (s *Pool) getActive(key interface{}) (interface{}, bool) {
+func (s *Pool) getActive(key interface{}) (*GroupInstance, bool) {
 	active, exists := s.actives.Get(key)
-	if exists && active != nil {
-		return active, true
-	} else {
+	if !exists {
 		return nil, false
+	} else if legacy, ok := active.(*Legacy); ok {
+		return legacy.GroupInstance, false
+	} else {
+		return active.(*GroupInstance), true
 	}
 }
 
+// Recycle lambda deployment for later use
+// Instead of removing instance from actives, placehold a legacy instance to keep track delegate information.
+// TODO: Relocate meta to reflect delegated placements.
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
 	// There is no atomic delete that can detect the existence of the key. Using two phase deletion here.
 	// We need this to ensure a active being recycle once.
 	if active, ok := s.getActive(dp.Id()); !ok {
 		return
-	} else if !s.actives.Cas(dp.Id(), active, nil) {
+	} else if !s.actives.Cas(dp.Id(), active, &Legacy{GroupInstance: active}) {
 		return
 	}
 
-	s.actives.Del(dp.Id())
+	// TODO: Uncomment if metas were relocated.
+	// s.actives.Del(dp.Id())
+	atomic.AddInt32(&s.recycled, 1)
 	switch backend := dp.(type) {
 	case *lambdastore.Deployment:
 		s.backend <- backend
@@ -118,43 +126,46 @@ func (s *Pool) Recycle(dp types.LambdaDeployment) {
 }
 
 func (s *Pool) Deployment(id uint64) (types.LambdaDeployment, bool) {
-	ins, exists := s.getActive(id)
+	gins, exists := s.getActive(id)
 	if exists {
-		return ins.(*GroupInstance).LambdaDeployment, exists
+		return gins.LambdaDeployment, exists
 	} else {
 		return nil, exists
 	}
 }
 
 func (s *Pool) Instance(id uint64) *lambdastore.Instance {
-	got, exists := s.getActive(id)
-	if !exists {
+	gins, _ := s.getActive(id)
+	// Legacy may be returned.
+	if gins == nil {
 		return nil
 	}
-	return got.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance)
+	return gins.LambdaDeployment.(*lambdastore.Instance)
 }
 
 func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
 	gins, exists := s.getActive(id)
+	// Legacy will be filtered to avoid error.
 	if !exists {
 		return nil, exists
 	}
 
-	return gins.(*GroupInstance), exists
+	return gins, exists
 }
 
 func (s *Pool) Clear(g *Group) {
 	for item := range s.actives.Iter() {
-		ins := item.Value.(*GroupInstance)
-		if ins.group == g {
-			ins.LambdaDeployment.(*lambdastore.Instance).Close()
+		if gins, ok := item.Value.(*GroupInstance); ok && gins.group == g {
+			gins.LambdaDeployment.(*lambdastore.Instance).Close()
 		}
 	}
 }
 
 func (s *Pool) ClearAll() {
 	for item := range s.actives.Iter() {
-		item.Value.(*GroupInstance).LambdaDeployment.(*lambdastore.Instance).Close()
+		if gins, ok := item.Value.(*GroupInstance); ok {
+			gins.LambdaDeployment.(*lambdastore.Instance).Close()
+		}
 	}
 }
 
@@ -172,7 +183,12 @@ func (s *Pool) StartMigrator(lambdaId uint64) (string, error) {
 }
 
 func (s *Pool) GetDestination(lambdaId uint64) (types.LambdaDeployment, error) {
-	return pool.ReserveForInstance(lambdaId)
+	gins, err := pool.ReserveForInstance(lambdaId)
+	if err == nil {
+		return gins.LambdaDeployment, err
+	} else {
+		return nil, err
+	}
 }
 
 func initPool(size int) {

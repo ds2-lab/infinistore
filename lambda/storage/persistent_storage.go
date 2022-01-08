@@ -17,6 +17,7 @@ import (
 	"github.com/cespare/xxhash"
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
@@ -33,7 +34,10 @@ var (
 
 type PersistHelper interface {
 	onPersisted(*types.OpWrapper)
-	onStopTracker(interface{}) bool
+
+	// onSignalTracker can be overwritten to execution signal action.
+	// Returns true to stop the tracker
+	onSignalTracker(interface{}) bool
 }
 
 // PersistentStorage Storage with S3 as persistent layer
@@ -52,9 +56,9 @@ type PersistentStorage struct {
 	s3Downloader    *mys3.Downloader
 }
 
-func NewPersistentStorage(id uint64) *PersistentStorage {
+func NewPersistentStorage(id uint64, cap uint64) *PersistentStorage {
 	storage := &PersistentStorage{
-		Storage: NewStorage(id),
+		Storage: NewStorage(id, cap),
 	}
 	storage.helper = storage
 	storage.persistHelper = storage
@@ -62,60 +66,57 @@ func NewPersistentStorage(id uint64) *PersistentStorage {
 }
 
 // Storage Implementation
-func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (string, []byte, *types.OpRet) {
+func (s *PersistentStorage) getWithOption(key string, opt *types.OpWrapper) (*types.Chunk, *types.OpRet) {
 	chunk, ok := s.helper.get(key)
 	if !ok {
 		// No entry
-		return "", nil, types.OpError(types.ErrNotFound)
+		return nil, types.OpError(types.ErrNotFound)
 	}
 
-	val := chunk.Access()
+	// For objects in buffer, we will not touch object on accessing.
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
 	if chunk.IsDeleted() {
-		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
-		return chunk.Id, val, types.OpSuccess()
+		return chunk, types.OpSuccess()
 	}
 
 	// Recovering, wait to be notified.
 	chunk.WaitRecovered()
 
 	// Check again
-	val = chunk.Access()
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
 	if chunk.IsDeleted() {
-		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else if chunk.IsAvailable() {
 		// Ensure val is available regardless chunk is deleted or not.
-		return chunk.Id, val, types.OpSuccess()
+		return chunk, types.OpSuccess()
 	} else {
-		return chunk.Id, nil, types.OpError(types.ErrIncomplete)
+		return nil, types.OpError(types.ErrIncomplete)
 	}
 }
 
-func (s *PersistentStorage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
-	chunk, ok := s.helper.get(key)
-	if !ok {
-		chunk = s.helper.newChunk(key, chunkId, uint64(len(val)), val)
-	} else {
-		// No version control at store level, val can be changed.
-		chunk.Body = val
-		chunk.Size = uint64(len(val))
-		chunk.Available = chunk.Size
-	}
-
-	s.set(key, chunk)
+func (s *PersistentStorage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+	s.Storage.setWithOption(key, chunk, opt)
 	if s.chanOps != nil {
 		op := &types.OpWrapper{
 			LineageOp: types.LineageOp{
 				Op:       types.OP_SET,
 				Key:      key,
-				Id:       chunkId,
+				Id:       chunk.Id,
 				Size:     chunk.Size,
 				Accessed: chunk.Accessed,
-				Bucket:   chunk.Bucket,
 			},
 			OpRet: types.OpDelayedSuccess(),
-			Body:  val,
+			Body:  chunk.Body,
+		}
+		if chunk.BuffIdx > 0 {
+			op.LineageOp.BIdx = chunk.BuffIdx
 		}
 		// Copy options. Field "Persisted" only so far.
 		if opt != nil {
@@ -137,17 +138,30 @@ func (s *PersistentStorage) newChunk(key string, chunkId string, size uint64, va
 	return chunk
 }
 
-func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64) *types.OpRet {
-	_, _, err := s.helper.getWithOption(key, nil)
+func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64, opts int) *types.OpRet {
+	_, err := s.helper.getWithOption(key, nil)
 	if err.Error() == nil {
 		return err
 	}
 
-	chunk := s.helper.newChunk(key, chunkId, size, nil)
-	chunk.Delete() // Delete to ensure call PrepareRecover() succssfully
-	chunk.PrepareRecover()
-	inserted, loaded := s.repo.GetOrInsert(key, chunk)
-	chunk = inserted.(*types.Chunk)
+	emptyChunk := s.helper.newChunk(key, chunkId, size, nil)
+	emptyChunk.Delete("prepare recovery") // Delete to ensure call PrepareRecover() succssfully
+	emptyChunk.PrepareRecover()
+	inserted, loaded := s.repo.GetOrInsert(key, emptyChunk)
+	chunk := inserted.(*types.Chunk)
+	// Legacy chunk that failed to download
+	if loaded && chunk.IsIncomplete() {
+		// Replace chunk
+		changed := s.repo.Cas(key, chunk, emptyChunk)
+		if changed {
+			chunk = emptyChunk
+			loaded = false
+		} else {
+			inserted, _ = s.repo.Get(key)
+			chunk = inserted.(*types.Chunk)
+			loaded = true
+		}
+	}
 	if loaded && !chunk.PrepareRecover() {
 		chunk.WaitRecovered()
 		if chunk.IsAvailable() {
@@ -155,6 +169,14 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		} else {
 			return types.OpError(types.ErrIncomplete)
 		}
+	}
+
+	if opts&protocol.REQUEST_GET_OPTION_BUFFER > 0 {
+		chunk.BuffIdx = types.CHUNK_TOBEBUFFERED
+	}
+	opt, ok := s.helper.validate(chunk, nil)
+	if !ok {
+		return types.OpError(ErrOOStorage)
 	}
 
 	chunk.Body = make([]byte, size) // Pre-allocate fixed sized buffer.
@@ -168,10 +190,7 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 		input.Size = size
 		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
 		input.After = func() error {
-			chunk.AddRecovered(uint64(input.Downloaded), false)
-			if !chunk.IsAvailable() {
-				return types.ErrIncomplete
-			}
+			chunk.AddRecovered(uint64(input.Downloaded))
 			return nil
 		}
 	}); err != nil {
@@ -181,9 +200,36 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64)
 
 	// This is to reuse persistent implementation.
 	// Chunk inserted previously will be loaded, and no new chunk will be created.
-	ret := s.helper.setWithOption(key, chunkId, chunk.Body, &types.OpWrapper{Persisted: true})
+	if opt == nil {
+		opt = &types.OpWrapper{}
+	}
+	opt.Persisted = true
+	ret := s.helper.setWithOption(key, chunk, opt)
 	chunk.NotifyRecovered()
 	return ret
+}
+
+func (s *PersistentStorage) delWithOption(chunk *types.Chunk, reason string, opt *types.OpWrapper) *types.OpRet {
+	s.Storage.delWithOption(chunk, reason, opt)
+
+	if s.chanOps != nil {
+		op := &types.OpWrapper{
+			LineageOp: types.LineageOp{
+				Op:       types.OP_DEL,
+				Key:      chunk.Key,
+				Id:       chunk.Id,
+				Size:     chunk.Size,
+				Accessed: chunk.Accessed,
+				// Ret: make(chan error, 1),
+				Bucket: chunk.Bucket,
+			},
+			OpRet: types.OpDelayedSuccess(),
+		}
+		s.chanOps <- op
+		return op.OpRet
+	} else {
+		return types.OpSuccess()
+	}
 }
 
 func (s *PersistentStorage) getBucket(key string) string {
@@ -347,6 +393,7 @@ func (s *PersistentStorage) StartTracker() {
 				// Signal tracker if commit initiated.
 				if delayedSignal != nil {
 					s.signalTracker <- delayedSignal
+					delayedSignal = nil
 				}
 			}
 		// The tracker will only be signaled after tracked all existing operations.
@@ -360,9 +407,10 @@ func (s *PersistentStorage) StartTracker() {
 				s.log.Debug("Found more ops to be persisted and persisting, pass and wait for resignal.")
 				delayedSignal = signal
 			} else {
-				// All operations persisted. Clean up and stop.
+				// All operations persisted. Execute signal action
 				s.log.Debug("All persisted, notify who may interest.")
-				if s.persistHelper.onStopTracker(signal) {
+				if s.persistHelper.onSignalTracker(signal) {
+					// Clean up and stop.
 					bufferProvider.Close()
 					bufferProvider = nil
 					s.chanOps = nil
@@ -378,16 +426,16 @@ func (s *PersistentStorage) onPersisted(persisted *types.OpWrapper) {
 	// Default by doing nothing
 }
 
-func (s *PersistentStorage) onStopTracker(signal interface{}) bool {
+func (s *PersistentStorage) onSignalTracker(signal interface{}) bool {
 	s.trackerStopped <- signal
 	return true
 }
 
-func (s *PersistentStorage) StopTracker(signal interface{}) {
+func (s *PersistentStorage) StopTracker() {
 	if s.signalTracker != nil {
 		// Signal tracker to stop and wait
 		s.log.Debug("Signal tracker to stop")
-		s.signalTracker <- signal
+		s.signalTracker <- nil
 		<-s.trackerStopped
 
 		// Clean up

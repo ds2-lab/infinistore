@@ -8,14 +8,18 @@ import (
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
+	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 var (
-	MemLimit = uint64(3096000000)
+	MemLimit = uint64(0)
 )
 
 type StatusView struct {
 	*widgets.Paragraph
+	Meta types.MetaStoreStats
 
 	dash      DashControl
 	memStat   runtime.MemStats
@@ -37,7 +41,9 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	if v.maxMemory < mem {
 		v.maxMemory = mem
 	}
-	v.Text = fmt.Sprintf("Mem: %s, Max: %s", humanize.Bytes(mem), humanize.Bytes(v.maxMemory))
+	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s, Objects: %d, Gets: %d",
+		v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory),
+		util.Ifelse(v.Meta != nil, v.Meta.Len(), 0).(int), global.ReqCoordinator.Len())
 
 	// Draw overwrite
 	v.Block.Draw(buf)
@@ -52,7 +58,7 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 		buf.SetCell(cell, image.Pt(x, v.Inner.Max.Y-v.Inner.Min.Y-1).Add(v.Inner.Min))
 	}
 
-	if v.maxMemory > MemLimit {
+	if MemLimit > 0 && v.maxMemory > MemLimit {
 		go func(dash DashControl) {
 			runtime.Gosched()
 			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))

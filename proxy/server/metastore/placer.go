@@ -2,6 +2,8 @@ package metastore
 
 import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -9,7 +11,7 @@ import (
 
 type ClusterManager interface {
 	// GetActiveInstances Request available instances with minimum number required.
-	GetActiveInstances(int) []*lambdastore.Instance
+	GetActiveInstances(int) lambdastore.InstanceEnumerator
 
 	// GetSlice Get slice implementation if support
 	GetSlice(int) Slice
@@ -29,6 +31,8 @@ type Placer interface {
 	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
 	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
+	Dispatch(*lambdastore.Instance, types.Command) error
+	MetaStats() types.MetaStoreStats
 }
 
 type MetaInitializer func(meta *Meta)
@@ -90,12 +94,12 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
 	for {
 		// Not test is 0 based.
-		if test >= len(instances) {
+		if test >= instances.Len() {
 			// Rotation safe: because rotation will not affect the number of active instances.
 			instances = l.cluster.GetActiveInstances((test/len(meta.Placement) + 1) * len(meta.Placement)) // Force scale to ceil(test/meta.chunks)
 
 			// If failed to get required number of instances, reset "test" and wish luck.
-			if test >= len(instances) {
+			if test >= instances.Len() {
 				test = chunkId
 			}
 
@@ -103,12 +107,23 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			continue
 		}
 
-		ins := instances[test]
+		ins := instances.Instance(test)
 		cmd.GetRequest().InsId = ins.Id()
-		if l.testChunk(ins.NumChunks()+1, ins.Size()+uint64(meta.ChunkSize)) || ins.IsBusy() {
+		if ins.IsReclaimed() {
+			// Only possible in testing.
+			test += len(meta.Placement)
+		} else if l.testChunk(ins, uint64(meta.ChunkSize)) {
+			// Recheck capacity. Capacity can be calibrated and miss post-check.
+			if l.testChunk(ins, 0) {
+				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), ins.Meta.Size(), ins.Meta.EffectiveCapacity())
+				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
+			}
 			// Try next group
 			test += len(meta.Placement)
-		} else if err := ins.DispatchWithOptions(cmd, lambdastore.BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
+		} else if ins.IsBusy(cmd) {
+			// Try next group
+			test += len(meta.Placement)
+		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
 			// Try next group
 			test += len(meta.Placement)
 		} else if err != nil {
@@ -118,13 +133,12 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			key := meta.ChunkKey(chunkId)
 			numChunks, size := ins.AddChunk(key, meta.ChunkSize)
 			l.log.Debug("Lambda %d size updated: %d of %d (key:%s, Δ:%d, chunks:%d).",
-				ins.Id(), size, ins.Meta.Capacity, key, meta.ChunkSize, numChunks)
+				ins.Id(), size, ins.Meta.EffectiveCapacity(), key, meta.ChunkSize, numChunks)
 
 			// Check if scaling is reqired.
 			// NOTE: It is the responsibility of the cluster to handle duplicated events.
-			if numChunks >= global.Options.GetInstanceChunkThreshold() ||
-				size >= global.Options.GetInstanceThreshold() {
-				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.Capacity)
+			if l.testChunk(ins, 0) {
+				l.log.Info("Insuffcient storage reported %d: %d of %d, trigger scaling...", ins.Id(), size, ins.Meta.EffectiveCapacity())
 				l.cluster.Trigger(EventInsufficientStorage, &types.ScaleEvent{BaseInstance: ins, Retire: true, Reason: "capacity watermark exceeded"})
 			}
 
@@ -133,6 +147,65 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	}
 }
 
-func (l *DefaultPlacer) testChunk(num int, size uint64) bool {
-	return num > global.Options.GetInstanceChunkThreshold() || size > global.Options.GetInstanceThreshold()
+func (l *DefaultPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) (err error) {
+	if ins.IsBusy(cmd) {
+		err = lambdastore.ErrInstanceBusy
+	} else {
+		err = ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK)
+	}
+	if err == nil || err != lambdastore.ErrInstanceBusy {
+		return err
+	}
+
+	req := cmd.GetRequest()
+	req.Option |= protocol.REQUEST_GET_OPTION_BUFFER
+	meta := req.GetInfo().(*Meta)
+	// Start from exploring the buffer instances, active instances are for chunk relocation and has been covered by Instance.Dispatch.
+	start := cmd.GetRequest().Id.Chunk() + len(meta.Placement)
+	test := start
+	instances := l.cluster.GetActiveInstances(len(meta.Placement) * 2)
+	for {
+		// Not test is 0 based.
+		if test >= instances.Len() {
+			// Rotation safe: because rotation will not affect the number of active instances.
+			instances = l.cluster.GetActiveInstances((test/len(meta.Placement) + 1) * len(meta.Placement)) // Force scale to ceil(test/meta.chunks)
+
+			// If failed to get required number of instances, reset "test" and wish luck.
+			if test >= instances.Len() {
+				test = start
+			}
+
+			// continue and test agian
+			continue
+		}
+
+		ins := instances.Instance(test)
+		cmd.GetRequest().InsId = ins.Id()
+		if l.testChunk(ins, uint64(meta.ChunkSize)) {
+			// Sizing check failed, try next group
+			test += len(meta.Placement)
+		} else if ins.IsBusy(cmd) {
+			// Try next group
+			test += len(meta.Placement)
+		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK|lambdastore.DISPATCH_OPT_RELOCATED); err == lambdastore.ErrInstanceBusy || lambdastore.IsLambdaTimeout(err) {
+			// Try next group
+			test += len(meta.Placement)
+		} else {
+			return err
+		}
+	}
+}
+
+func (l *DefaultPlacer) MetaStats() types.MetaStoreStats {
+	return l.metaStore
+}
+
+func (l *DefaultPlacer) testChunk(ins *lambdastore.Instance, inc uint64) bool {
+	numChunk := 0
+	threshold := config.Threshold
+	if inc > 0 {
+		numChunk = 1
+		threshold = 1.0
+	}
+	return ins.NumChunks()+numChunk > global.Options.GetInstanceChunkThreshold() || ins.Meta.ModifiedOccupancy(inc) > threshold
 }

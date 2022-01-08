@@ -1,6 +1,7 @@
 package lambdastore
 
 import (
+	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
@@ -55,15 +56,44 @@ type Backups struct {
 	log        logger.ILogger
 }
 
-func (b *Backups) Reset(num int, candidates []*Instance) {
-	if cap(b.backups) < num {
-		backups := make([]Backer, num)
+func NewBackups(ins *Instance, backups []Backer) *Backups {
+	baks := &Backups{
+		instance:   ins,
+		backups:    make([]Backer, len(backups)),
+		required:   len(backups),
+		availables: len(backups),
+		log:        ins.log,
+	}
+	copy(baks.backups, backups)
+	baks.locator.Reset(len(baks.backups))
+	return baks
+}
+
+func NewBackupsFromInstances(ins *Instance, backups []*Instance, adapter BackerGetter) *Backups {
+	baks := &Backups{
+		instance:   ins,
+		backups:    make([]Backer, len(backups)),
+		required:   len(backups),
+		availables: len(backups),
+		adapter:    adapter,
+		log:        ins.log,
+	}
+	for i, ins := range backups {
+		baks.backups[i] = baks.getBacker(ins)
+	}
+	baks.locator.Reset(len(baks.backups))
+	return baks
+}
+
+func (b *Backups) ResetCandidates(required int, candidates []*Instance) {
+	if cap(b.backups) < required {
+		backups := make([]Backer, required)
 		if len(b.backups) > 0 {
 			copy(backups[:len(b.backups)], b.backups)
 		}
 		b.backups = backups
 	}
-	b.required = num
+	b.required = required
 	b.candidates = candidates
 	if b.log == nil {
 		b.log = logger.NilLogger
@@ -82,7 +112,7 @@ func (b *Backups) Iter() *BackupIterator {
 	return &BackupIterator{backend: b, i: -1, len: b.availables, backups: b.backups}
 }
 
-func (b *Backups) Reserve(fallback <-chan *Instance) int {
+func (b *Backups) Reserve(fallback mapreduce.Iterator) int {
 	if b.required == 0 {
 		return 0
 	}
@@ -158,29 +188,25 @@ func (b *Backups) Reserve(fallback <-chan *Instance) int {
 			}
 
 			found := false
-		ForCandidate:
 			for j := 0; j < b.required; j++ { // Only try a limited time
-				select {
-				case candidate := <-fallback:
-					if candidate == nil {
-						// Fallback closed, abandon rest.
-						fallback = nil
-						break ForCandidate
-					} else if candidate.Name() == b.instance.Name() {
-						continue
-					} else if err := candidate.ReserveBacking(); err == nil {
-						b.candidates[i] = candidate
-						b.addToBackups(i, candidate)
-						newFailures = 0
-						failovers++
-						found = true
-						break ForCandidate
-					} // try next
-				default:
+				if !fallback.Next() {
 					// Stucked, stop trying.
-					b.log.Warn("%d failovers found before stuck: attempt %d", failovers, j)
-					break ForCandidate
+					b.log.Warn("%d failovers found before stop trying: attempt %d", failovers, j)
+					break
 				}
+
+				_, cand := fallback.Value()
+				candidate := cand.(*Instance)
+				if candidate.Name() == b.instance.Name() {
+					continue
+				} else if err := candidate.ReserveBacking(); err == nil {
+					b.candidates[i] = candidate
+					b.addToBackups(i, candidate)
+					newFailures = 0
+					failovers++
+					found = true
+					break
+				} // try next
 			}
 
 			if !found {
@@ -245,6 +271,10 @@ func (b *Backups) Stop(target *Instance) {
 	b.Invalidate()
 }
 
+func (b *Backups) Locator() *protocol.BackupLocator {
+	return &b.locator
+}
+
 // This function is thread safe
 func (b *Backups) GetByKey(key string) (*Instance, bool) {
 	loc, required, ok := b.locator.Locate(key)
@@ -252,7 +282,7 @@ func (b *Backups) GetByKey(key string) (*Instance, bool) {
 		return nil, false
 	}
 
-	return b.getByLocation(loc, required)
+	return b.GetByLocation(loc, required)
 }
 
 func (b *Backups) GetByHash(hash uint64) (*Instance, bool) {
@@ -261,10 +291,14 @@ func (b *Backups) GetByHash(hash uint64) (*Instance, bool) {
 		return nil, false
 	}
 
-	return b.getByLocation(loc, required)
+	return b.GetByLocation(loc, required)
 }
 
-func (b *Backups) getByLocation(loc int, required int) (*Instance, bool) {
+func (b *Backups) GetByLocation(loc int, required int) (*Instance, bool) {
+	if loc >= len(b.backups) || loc > required {
+		return nil, false
+	}
+
 	// Copy pointer to ensure the instance will not change
 	backups := b.backups[:required]
 	backup := backups[loc]

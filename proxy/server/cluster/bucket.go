@@ -6,9 +6,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/zhangjyr/hashmap"
 
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -21,7 +24,8 @@ const (
 )
 
 var (
-	ErrNotActiveBucket = errors.New("scale out failed, not in active bucket")
+	ErrNotActiveBucket         = errors.New("scale out failed, not in active bucket")
+	BucketFlushInactiveTimeout = time.Second
 )
 
 // A bucket is a view of a group
@@ -29,11 +33,15 @@ type Bucket struct {
 	id int
 
 	// group management
-	group       *Group
-	instances   []*lambdastore.Instance
-	start       DefaultGroupIndex // Start logic index of backend group
-	end         DefaultGroupIndex // End logic index of backend group
-	activeStart GroupIndex        // Instances end at activeStart - 1 are full.
+	group         *Group
+	instances     []*GroupInstance
+	start         DefaultGroupIndex // Start logic index of backend group
+	end           DefaultGroupIndex // End logic index of backend group
+	activeStart   GroupIndex        // Instances end at activeStart - 1 are full.
+	activeChanged bool
+	disabled      *hashmap.HashMap // Buffer fulled instance
+	flushLimit    int              // The max number stored in buffer.
+	flushedAt     time.Time        // The last time the "disabled" fulled instance was cleared.
 
 	//state
 	state int
@@ -54,16 +62,26 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		return nil, ErrInsufficientDeployments
 	}
 
+	limit := config.NumLambdaClusters
+	if global.Options.GetNumFunctions() > 0 {
+		limit = global.Options.GetNumFunctions()
+	}
+	if limit > num {
+		limit = num
+	}
 	bucket = &Bucket{
-		id:        id,
-		group:     group,
-		log:       global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
-		instances: make([]*lambdastore.Instance, 0, num),
+		id:         id,
+		group:      group,
+		log:        global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
+		instances:  make([]*GroupInstance, 0, num),
+		disabled:   hashmap.New(uintptr(num)),
+		flushLimit: limit,
 	}
 
 	// expand
 	bucket.start = group.EndIndex()
 	bucket.activeStart = &bucket.start
+	bucket.activeChanged = true
 	bucket.end, err = group.Expand(num)
 	if err != nil {
 		return nil, err
@@ -86,28 +104,36 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, er
 		return bucket, 0, err
 	}
 
+	// Clean up inactives
+	b.flushInactiveLocked()
 	// Compose new bucket consists of instances with spare capacity.
 	bucket = &Bucket{
-		id:          nextID,
-		group:       b.group,
-		log:         global.GetLogger(fmt.Sprintf("Bucket %d:", nextID)),
-		instances:   make([]*lambdastore.Instance, b.end.Idx()-b.activeStart.Idx()),
-		start:       DefaultGroupIndex(b.activeStart.Idx()),
-		activeStart: b.activeStart,
-		end:         b.end,
-		state:       BUCKET_ACTIVE,
+		id:            nextID,
+		group:         b.group,
+		log:           global.GetLogger(fmt.Sprintf("Bucket %d:", nextID)),
+		instances:     make([]*GroupInstance, b.end.Idx()-b.activeStart.Idx()),
+		disabled:      b.disabled,
+		flushLimit:    b.flushLimit,
+		start:         DefaultGroupIndex(b.activeStart.Idx()),
+		activeStart:   b.activeStart,
+		activeChanged: true,
+		end:           b.end,
+		state:         BUCKET_ACTIVE,
 	}
 	copy(bucket.instances, b.instances[b.activeStart.Idx()-b.start.Idx():])
+	b.disabled = nil
 
-	// Adjust current bucket
+	// Adjust current bucket, keep old instances array intact because it can be referenced somewhere.
 	b.end = bucket.start
+	newInstances := make([]*GroupInstance, len(b.instances))
+	copy(newInstances[:b.end.Idx()-b.start.Idx()], b.instances[:b.end.Idx()-b.start.Idx()])
 	for i := b.end.Idx() - b.start.Idx(); i < len(b.instances); i++ {
-		b.instances[i] = b.instances[i].GetShadowInstance()
+		newInstances[i] = &GroupInstance{LambdaDeployment: b.instances[i].Instance().GetShadowInstance()}
 	}
+	b.instances = newInstances
 
 	// Update bucketIndex
-	gInstances := b.group.SubGroup(bucket.start, bucket.end)
-	for _, gins := range gInstances {
+	for _, gins := range bucket.instances {
 		gins.idx.(*BucketIndex).BucketId = nextID
 	}
 	return bucket, len(bucket.instances), nil
@@ -115,20 +141,20 @@ func (b *Bucket) createNextBucket(num int) (bucket *Bucket, numInherited int, er
 
 func (b *Bucket) initInstance(from, end DefaultGroupIndex) {
 	for i := from; i < end; i = i.Next() {
-		node := pool.GetForGroup(b.group, &BucketIndex{
+		gins := pool.GetForGroup(b.group, &BucketIndex{
 			DefaultGroupIndex: i,
 			BucketId:          b.id,
 		})
-		b.instances = append(b.instances, node)
+		b.instances = append(b.instances, gins)
 
 		// Begin handle requests
-		go node.HandleRequests()
+		go gins.Instance().HandleRequests()
 
 		// Initialize instance, Bucket is not necessary if the start time of the instance is acceptable.
 		// b.ready.Add(1)
 		//
 		// go func() {
-		// 	node.WarmUp()
+		// 	gins.Instance().WarmUp()
 		// 	b.ready.Done()
 		// }()
 	}
@@ -180,7 +206,7 @@ func (b *Bucket) scale(num int) (gall []*GroupInstance, err error) {
 	if err != nil {
 		return nil, err
 	}
-	scaled := make([]*lambdastore.Instance, len(b.instances), len(b.instances)+num)
+	scaled := make([]*GroupInstance, len(b.instances), len(b.instances)+num)
 	copy(scaled, b.instances)
 	b.instances = scaled
 	b.initInstance(from, b.end)
@@ -192,21 +218,58 @@ func (b *Bucket) flagInactive(gins *GroupInstance) {
 		return
 	}
 
-	b.mu.Lock()
-	if b.activeStart.Idx() <= gins.Idx() {
-		b.activeStart = gins.idx.(*BucketIndex).Next()
+	gins.disabled = true
+	b.disabled.Set(gins.Idx(), gins)
+	if b.disabled.Len() < b.flushLimit && time.Since(b.flushedAt) < BucketFlushInactiveTimeout {
+		return
 	}
+
+	b.mu.Lock()
+	b.flushInactiveLocked()
+	// if b.activeStart.Idx() <= gins.Idx() {
+	// 	b.activeStart = gins.idx.(*BucketIndex).Next()
+	//  b.activeChanged = true
+	// }
 	b.mu.Unlock()
 }
 
-func (b *Bucket) getInstances() []*lambdastore.Instance {
+func (b *Bucket) flushInactiveLocked() {
+	if b.disabled.Len() == 0 {
+		return
+	}
+
+	ginsAll := b.group.SubGroup(b.activeStart, b.end)
+	checked := 0
+	flushed := 0
+	for b.disabled.Len() > 0 {
+		for i := checked; i < len(ginsAll); i++ {
+			if !ginsAll[i].disabled {
+				continue
+			}
+			b.disabled.Del(ginsAll[i].Idx())
+			b.activeStart = ginsAll[flushed].idx.(*BucketIndex).Next()
+			b.activeChanged = true
+			// Pack disabled instance
+			if flushed != i {
+				b.swapLock(ginsAll[flushed], ginsAll[i])
+				flushed++
+			}
+			checked = i + 1
+			break
+		}
+	}
+	b.flushedAt = time.Now()
+}
+
+func (b *Bucket) getInstances() []*GroupInstance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	// Get a copy of the slice, so the len will not change later.
 	return b.instances[:b.end.Idx()-b.start.Idx()]
 }
 
-func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
+func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -215,8 +278,26 @@ func (b *Bucket) activeInstances(activeNum int) []*lambdastore.Instance {
 	return b.instances[b.activeStart.Idx()-b.start.Idx() : b.end.Idx()-b.start.Idx()]
 }
 
+func (b *Bucket) redundantInstances() []*GroupInstance {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	// Return all actives
+	// Force to create a new slice mapping to avoid the length being changed.
+	if b.activeStart.Idx()+b.flushLimit >= b.end.Idx() {
+		return nil
+	}
+	return b.instances[b.activeStart.Idx()+b.flushLimit-b.start.Idx() : b.end.Idx()-b.start.Idx()]
+}
+
 func (b *Bucket) len() int {
 	return b.end.Idx() - b.start.Idx()
+}
+
+func (b *Bucket) swapLock(gins1 *GroupInstance, gins2 *GroupInstance) {
+	b.group.Swap(gins1, gins2)
+	// Swapped, update local copy
+	b.instances[gins2.Idx()-b.start.Idx()], b.instances[gins1.Idx()-b.start.Idx()] = gins2, gins1
 }
 
 // types.ClusterStatus implementation
@@ -225,7 +306,7 @@ func (b *Bucket) InstanceLen() int {
 }
 
 func (b *Bucket) InstanceStats(idx int) types.InstanceStats {
-	return b.instances[idx]
+	return b.instances[idx].Instance()
 }
 
 func (b *Bucket) AllInstancesStats() types.Iterator {
@@ -238,11 +319,15 @@ func (b *Bucket) InstanceStatsFromIterator(iter types.Iterator) (int, types.Inst
 
 	var ins *lambdastore.Instance
 	switch item := val.(type) {
-	case []*lambdastore.Instance:
-		ins = item[i]
-	case *lambdastore.Instance:
-		ins = item
+	case []*GroupInstance:
+		ins = item[i].Instance()
+	case *GroupInstance:
+		ins = item.Instance()
 	}
 
 	return i, ins
+}
+
+func (b *Bucket) MetaStats() types.MetaStoreStats {
+	return nil
 }

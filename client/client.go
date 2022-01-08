@@ -97,7 +97,9 @@ func (c *Client) Close() {
 	// log.Debug("Cleaning up...")
 	for addr, conns := range c.conns {
 		for i, cn := range conns {
-			cn.Close()
+			if cn != nil {
+				cn.Close()
+			}
 			c.conns[addr][i] = nil
 		}
 	}

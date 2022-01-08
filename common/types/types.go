@@ -34,9 +34,11 @@ func (i *InputEvent) IsBackingOnly() bool {
 }
 
 type Status struct {
-	Capacity uint64 `json:"cap"`
-	Mem      uint64 `json:"mem"`
-	Metas    []Meta `json:"metas"`
+	Capacity  uint64 `json:"cap"`
+	Mem       uint64 `json:"mem"`
+	Effective uint64 `json:"effe"`
+	Modified  uint64 `json:"modi"`
+	Metas     []Meta `json:"metas"`
 }
 
 type Meta struct {
@@ -122,10 +124,17 @@ const (
 	CMD_DATA        = "data"        // Control command
 	CMD_BYE         = "bye"         // Control command
 
+	REQUEST_GET_OPTIONAL      = 0x0001 // Flag response is optional. There is a compete fallback will eventually fulfill the request.
+	REQUEST_GET_OPTION_BUFFER = 0x0002 // Flag the chunk should be put in buffer area.
+
 	// TIP_BACKUP_KEY Backup ID.
 	TIP_BACKUP_KEY = "bak"
 	// TIP_BACKUP_TOTAL Total backups available.
 	TIP_BACKUP_TOTAL = "baks"
+	// TIP_DELEGATE_KEY Delegate ID.
+	TIP_DELEGATE_KEY = "dele"
+	// TIP_DELEGATE_TOTAL Total delegates available.
+	TIP_DELEGATE_TOTAL = "deles"
 	// TIP_SERVING_KEY Key should be recovered as the first one.
 	TIP_SERVING_KEY = "key"
 	// TIP_MAX_CHUNK Max chunk size can be backed up.

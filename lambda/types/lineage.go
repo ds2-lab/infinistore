@@ -8,10 +8,31 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
+type LineageMetaType int
+
+const (
+	LineageMetaTypeMain LineageMetaType = iota
+	LineageMetaTypeBackup
+	LineageMetaTypeDelegate
+)
+
+func (t LineageMetaType) String() string {
+	switch t {
+	case LineageMetaTypeMain:
+		return "main"
+	case LineageMetaTypeBackup:
+		return "backup"
+	case LineageMetaTypeDelegate:
+		return "delegate"
+	default:
+		return "unknown"
+	}
+}
+
 type LineageMeta struct {
 	*protocol.Meta
 	Consistent   bool
-	Backup       bool
+	Type         LineageMetaType
 	BackupId     int
 	BackupTotal  int
 	MaxChunkSize uint64
@@ -19,7 +40,7 @@ type LineageMeta struct {
 }
 
 func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
-	lm = &LineageMeta{Meta: meta, Consistent: true}
+	lm = &LineageMeta{Meta: meta, Consistent: true, Type: LineageMetaTypeMain}
 
 	// Parse tips
 	lm.Tips, err = url.ParseQuery(meta.Tip)
@@ -29,9 +50,14 @@ func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
 
 	// Parse backup id
 	if sId := lm.Tips.Get(protocol.TIP_BACKUP_KEY); sId != "" {
-		lm.Backup = true
+		lm.Type = LineageMetaTypeBackup
 		lm.BackupId, _ = strconv.Atoi(sId)
 		lm.BackupTotal, _ = strconv.Atoi(lm.Tips.Get(protocol.TIP_BACKUP_TOTAL))
+		lm.MaxChunkSize, _ = strconv.ParseUint(lm.Tips.Get(protocol.TIP_MAX_CHUNK), 10, 64)
+	} else if sId := lm.Tips.Get(protocol.TIP_DELEGATE_KEY); sId != "" {
+		lm.Type = LineageMetaTypeDelegate
+		lm.BackupId, _ = strconv.Atoi(sId)
+		lm.BackupTotal, _ = strconv.Atoi(lm.Tips.Get(protocol.TIP_DELEGATE_TOTAL))
 		lm.MaxChunkSize, _ = strconv.ParseUint(lm.Tips.Get(protocol.TIP_MAX_CHUNK), 10, 64)
 	}
 
@@ -60,6 +86,7 @@ type LineageTerm struct {
 	RawOps   []byte  // Serialized "Ops"
 	Hash     string  // Hash value for the term.
 	DiffRank float64 // For snapshot only, this is supposed to be a moving value.
+	Buffered int     // For snapshot only, number of buffered objects.
 }
 
 func LineageTermFromMeta(meta *LineageMeta) *LineageTerm {
@@ -80,6 +107,7 @@ type LineageOp struct {
 	Size     uint64 // Size of the object
 	Accessed time.Time
 	Bucket   string
+	BIdx     int // Index in bufferQueue
 }
 
 type OpWrapper struct {
@@ -88,6 +116,8 @@ type OpWrapper struct {
 	Body      []byte // For safety of persistence of the SET operation in the case like DEL after SET.
 	OpIdx     int
 	Persisted bool // Indicate the operation has been persisted.
+	Accessed  bool // Indicate the access time should not be changed.
+	Sized     bool // Indicate the size of storage has been updated.
 }
 
 type CommitOption struct {
@@ -120,22 +150,31 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 type OpRet struct {
 	error
 	delayed chan struct{}
+	msg     string
 }
 
 func OpError(err error) *OpRet {
-	return &OpRet{err, nil}
+	return &OpRet{err, nil, ""}
+}
+
+func OpErrorWithMessage(err error, msg string) *OpRet {
+	return &OpRet{err, nil, msg}
 }
 
 func OpSuccess() *OpRet {
-	return &OpRet{nil, nil}
+	return &OpRet{nil, nil, ""}
 }
 
 func OpDelayedSuccess() *OpRet {
-	return &OpRet{nil, make(chan struct{}, 1)}
+	return &OpRet{nil, make(chan struct{}, 1), ""}
 }
 
 func (ret *OpRet) Error() error {
 	return ret.error
+}
+
+func (ret *OpRet) Message() string {
+	return ret.msg
 }
 
 func (ret *OpRet) IsDelayed() bool {
