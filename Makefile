@@ -16,7 +16,7 @@ build-example: prepare
 start: build build-lambda
 	bin/proxy -enable-dashboard $(PARAMS)
 
-start-local: build build-lambda 
+start-local: build build-lambda
 	bin/proxy -invoker=local -disable-recovery -ip=127.0.0.1 $(PARAMS)
 
 test: build-example
