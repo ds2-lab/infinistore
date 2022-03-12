@@ -35,11 +35,11 @@ func getFromCache(cacheKeyC *C.char) *C.char {
 	reader, ok := cli.Get(cacheKeyGo)
 	dt := time.Since(start)
 	if !ok {
-		panic("Internal error!")
+		return C.CString("NOT_IN")
 	}
 
 	buf, _ := reader.ReadAll()
-	fmt.Printf("GET %s:%s(%v)\n", cacheKeyGo, string(buf), dt)
+	fmt.Printf("GET %s(%v)\n", cacheKeyGo, dt)
 	return C.CString(string(buf))
 }
 

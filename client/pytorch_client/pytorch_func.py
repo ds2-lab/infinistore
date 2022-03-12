@@ -36,6 +36,8 @@ def get_array_from_cache(
 
     clientResultStr = string_at(clientResultPtr)
     go_library.free(clientResultPtr)
+    if clientResultStr.decode("utf-8") == "NOT_IN":
+        raise KeyError("Key is not in cache")
     result_arr = convert_bytes_to_np(clientResultStr, arr_dtype).reshape(arr_shape)
     return result_arr
 
@@ -79,6 +81,13 @@ if __name__ == "__main__":
     random_arr = np.random.randn(50, 50)
     print("Original array shape: ", random_arr.shape)
     print("Original array: ", random_arr)
+
+    random_key = "test_" + str(random.randint(0, 50000))
+    print("key: ", random_key)
+    try:
+        cache_arr = get_array_from_cache(go_lib, random_key, random_arr.dtype, random_arr.shape)
+    except KeyError:
+        print("passing error")
 
     random_key = "test_" + str(random.randint(0, 50000))
     print("key: ", random_key)
