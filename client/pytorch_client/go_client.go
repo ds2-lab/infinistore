@@ -13,7 +13,7 @@ import (
 var (
 	d        = flag.Int("d", 2, "data shard")
 	p        = flag.Int("p", 1, "parity shard")
-	addrList = "127.0.0.1:6378"
+	addrList = "3.239.126.0:6378"
 )
 
 //export getFromCache
@@ -62,7 +62,7 @@ func setInCache(cacheKeyC *C.char, inputDataC *C.char) {
 	cli.Dial(addrArr)
 	ok := cli.Set(cacheKeyGo, valBytes)
 	if !ok {
-		panic("Internal error!")
+		return
 	}
 	fmt.Printf("SET %s\n", cacheKeyGo)
 

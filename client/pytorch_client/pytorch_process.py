@@ -30,7 +30,7 @@ def test_mnist_data():
 
 
 def test_mnist_from_disk(path_to_mnist_images: str):
-    ds = MnistDataset(path_to_mnist_images)
+    ds = MnistDatasetCache(path_to_mnist_images)
     print("Getting sample from disk")
     start_time = time.time()
     ds[1]
@@ -54,13 +54,16 @@ def save_mnist_images(root_path: str, dir_to_save_images: str):
         img.save(f"{dir_to_save_images}/{idx:05d}_{label}.jpg")
 
 
-class MnistDataset(Dataset):
+class MnistDatasetCache(Dataset):
     """Simulates having to load each data point from disk every call."""
 
     def __init__(self, mnist_path: str):
-        self.go_lib = pytorch_func.load_go_lib("./ecClient.so")
+        self.go_lib = pytorch_func.load_go_lib(
+            "/home/ubuntu/LambdaObjectstore/client/pytorch_client/ecClient.so"
+        )
         self.data_shape = (28, 28)
         self.data_type = np.uint8
+        self.keys = set()
 
         mnist_dataset_path = Path(mnist_path)
         filenames = list(mnist_dataset_path.rglob("*.jpg"))
@@ -72,17 +75,47 @@ class MnistDataset(Dataset):
     def __getitem__(self, idx: int):
         label = self.filepaths[idx].stem.split("_")[-1]
         key = f"mnist_{idx:05d}"
-        try:
-            np_arr = pytorch_func.get_array_from_cache(
-                self.go_lib, key, self.data_type, self.data_shape
-            )
-            print("Found in cache")
-            img = torch.tensor(np_arr)
-        except KeyError:
-            print("Loading from disk")
+        if key in self.keys:
+            print("key in self.keys")
+            try:
+                np_arr = pytorch_func.get_array_from_cache(
+                    self.go_lib, key, self.data_type, self.data_shape
+                )
+                print("Found in cache")
+                img = torch.tensor(np_arr)
+                assert img.shape == (1, 28, 28)
+
+            except KeyError:
+                print("Loading from disk")
+                img = torchvision.io.read_image(str(self.filepaths[idx]))
+                assert img.shape == (1, 28, 28)
+                print("SHAPE: ", img.shape)
+                pytorch_func.set_array_in_cache(self.go_lib, key, np.array(img))
+        else:
+            self.keys.add(key)
+            print(f"{key} not in keys. Loading from disk")
             img = torchvision.io.read_image(str(self.filepaths[idx]))
+            assert img.shape == (1, 28, 28)
+            print("SHAPE: ", img.shape)
             pytorch_func.set_array_in_cache(self.go_lib, key, np.array(img))
-        return img, int(label)
+        return img.to(torch.float32), int(label)
+
+
+class MnistDatasetDisk(Dataset):
+    """Simulates having to load each data point from disk every call."""
+
+    def __init__(self, mnist_path: str):
+        mnist_dataset_path = Path(mnist_path)
+        filenames = list(mnist_dataset_path.rglob("*.jpg"))
+        self.filepaths = sorted(filenames, key=lambda filename: int(filename.stem.split("_")[0]))
+
+    def __len__(self):
+        return len(self.filepaths)
+
+    def __getitem__(self, idx: int):
+        label = self.filepaths[idx].stem.split("_")[-1]
+        img = torchvision.io.read_image(str(self.filepaths[idx]))
+        return img.to(torch.float32), int(label)
 
 
 if __name__ == "__main__":

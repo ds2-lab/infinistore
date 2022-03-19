@@ -2,6 +2,8 @@
 Before running, make sure the proxy is running and that the shared go library has been built via
 the command: `go build -o ecClient.so -buildmode=c-shared go_client.go`
 """
+from __future__ import annotations
+
 import argparse
 import random
 from ctypes import CDLL, c_char_p, c_void_p, cdll, string_at
