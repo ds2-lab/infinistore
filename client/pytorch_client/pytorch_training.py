@@ -20,6 +20,7 @@ NUM_CHANNELS = 1  # MNIST images are grayscale
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
 
+
 class Resnet50(nn.Module):
     def __init__(self, num_channels):
         """We need to adjust the input size expected for the ResNet50 Model based on the image
@@ -77,7 +78,7 @@ def training_cycle(
                 )
                 iteration = 0
                 running_loss = 0.0
-            if idx > 1:
+            if idx > 2:
                 break
     end_time = time.time()
     print(f"Time taken: {end_time - start_time}")
@@ -119,10 +120,10 @@ def initialize_model() -> tuple[Resnet50, nn.CrossEntropyLoss, torch.optim.Adam]
 
 if __name__ == "__main__":
 
-    mnist_dataset_cache = pytorch_process.MnistDatasetCache("/home/ubuntu/mnist_images")
-    mnist_dataset_disk = pytorch_process.MnistDatasetDisk("/home/ubuntu/mnist_images")
-    mnist_dataloader_cache = DataLoader(mnist_dataset_cache, batch_size=3)
-    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=20)
+    mnist_dataset_cache = pytorch_process.MnistDatasetCache("/home/ubuntu/mnist_png")
+    mnist_dataset_disk = pytorch_process.MnistDatasetDisk("/home/ubuntu/mnist_png")
+    mnist_dataloader_cache = DataLoader(mnist_dataset_cache, batch_size=50)
+    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=50)
 
     resnet50_model, loss_fn, optim_func = initialize_model()
     print("Running training with the disk dataloader")
