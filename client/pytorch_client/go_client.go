@@ -1,5 +1,8 @@
 package main
 
+/*
+#include <stdlib.h>
+*/
 import "C"
 import (
 	"flag"
@@ -13,23 +16,13 @@ import (
 var (
 	d        = flag.Int("d", 2, "data shard")
 	p        = flag.Int("p", 1, "parity shard")
-	addrList = "3.239.126.0:6378"
+	addrList = "35.175.107.9:6378"
+	cli      *client.Client
 )
 
 //export getFromCache
 func getFromCache(cacheKeyC *C.char) *C.char {
 	cacheKeyGo := C.GoString(cacheKeyC)
-
-	flag.Parse()
-
-	// parse server address
-	addrArr := strings.Split(addrList, ",")
-
-	// initial new ecRedis client
-	cli := client.NewClient(*d, *p, 32)
-
-	// start dial and PUT/GET
-	cli.Dial(addrArr)
 
 	start := time.Now()
 	reader, ok := cli.Get(cacheKeyGo)
@@ -47,25 +40,25 @@ func getFromCache(cacheKeyC *C.char) *C.char {
 func setInCache(cacheKeyC *C.char, inputDataC *C.char) {
 	cacheKeyGo := C.GoString(cacheKeyC)
 
-	flag.Parse()
 	inputGo := C.GoString(inputDataC)
 
 	valBytes := []byte(inputGo)
 
-	// parse server address
-	addrArr := strings.Split(addrList, ",")
-
-	// initial new ecRedis client
-	cli := client.NewClient(*d, *p, 32)
-
-	// start dial and PUT/GET
-	cli.Dial(addrArr)
 	ok := cli.Set(cacheKeyGo, valBytes)
 	if !ok {
 		return
 	}
 	fmt.Printf("SET %s\n", cacheKeyGo)
 
+}
+
+//export initializeVars
+func initializeVars() {
+	flag.Parse()
+
+	cli = client.NewClient(*d, *p, 32)
+	addrArr := strings.Split(addrList, ",")
+	cli.Dial(addrArr)
 }
 
 func main() {}

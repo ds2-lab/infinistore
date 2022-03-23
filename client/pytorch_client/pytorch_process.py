@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 import pytorch_func
 
 GO_LIB = pytorch_func.load_go_lib("./ecClient.so")
+GO_LIB.initializeVars()
 
 
 def test_mnist_data():

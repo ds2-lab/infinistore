@@ -24,29 +24,43 @@ func main() {
 
 	cli.Dial(addrArr)
 
+	runningMap := make(map[string]int)
+
 	// Locks up after iterating for awhile
 	for idx := 0; idx < 10_000; idx++ {
 		fmt.Println("idx: ", idx)
 
 		// Initial object with random value
 		inputRandom := fmt.Sprintf("Hello test %d!", rand.Intn(1_000_000))
+		fmt.Println("inputRandom: ", inputRandom)
+
 		val := []byte(inputRandom)
+		fmt.Println("val: ", val, len(val))
 
 		// Initialize key with random value
 		n := rand.Intn(1_000_000)
 		cacheKeyGo := fmt.Sprintf("foo_%d", n)
 
-		cli.Set(cacheKeyGo, val)
+		_, ok := runningMap[cacheKeyGo]
+		if ok {
+			fmt.Println(cacheKeyGo, " already in cache")
+			time.Sleep(1000 * time.Millisecond)
+		} else {
+			runningMap[cacheKeyGo] = 1
+			cli.Set(cacheKeyGo, val)
 
-		start := time.Now()
-		reader, ok := cli.Get(cacheKeyGo)
+			start := time.Now()
+			reader, ok := cli.Get(cacheKeyGo)
 
-		dt := time.Since(start)
-		if !ok {
-			panic("Internal error!")
+			dt := time.Since(start)
+			if !ok {
+				panic("Internal error!")
+			}
+			buf, _ := reader.ReadAll()
+
+			fmt.Printf("GET %s:%s(%v)\n", cacheKeyGo, string(buf), dt)
+
 		}
-		buf, _ := reader.ReadAll()
 
-		fmt.Printf("GET %s:%s(%v)\n", cacheKeyGo, string(buf), dt)
 	}
 }
