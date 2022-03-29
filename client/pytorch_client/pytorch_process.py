@@ -4,11 +4,14 @@ in the cache, it's loaded from disk and then stored in the cache with its index 
 """
 import random
 import time
+from io import BytesIO
 from pathlib import Path
 
+import boto3
 import numpy as np
 import torch
 import torchvision
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
 import pytorch_func
@@ -94,10 +97,7 @@ class MnistDatasetCache(Dataset):
 
         else:
             self.keys.add(key)
-            print(f"{key} not in keys. Loading from disk: `{str(self.filepaths[idx])}`")
             img = torchvision.io.read_image(str(self.filepaths[idx])).reshape(1, 28, 28)
-            assert img.shape == (1, 28, 28)
-            print("SHAPE: ", img.shape)
             pytorch_func.set_array_in_cache(GO_LIB, key, np.array(img))
         return img.to(torch.float32), int(label)
 
@@ -117,6 +117,32 @@ class MnistDatasetDisk(Dataset):
         label = self.filepaths[idx].stem.split("_")[-1]
         img = torchvision.io.read_image(str(self.filepaths[idx]))
         return img.to(torch.float32), int(label)
+
+
+class MnistDatasetS3(Dataset):
+    """Simulates having to load each data point from S3 every call."""
+
+    def __init__(self, bucket_name: str):
+        self.s3_client = boto3.client("s3")
+        self.bucket_name = bucket_name
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        filenames = []
+        for page in paginator.paginate(Bucket=bucket_name):
+            for content in page.get("Contents"):
+                filenames.append(content["Key"])
+        self.filepaths = sorted(filenames, key=lambda filename: int(filename.split("_")[0]))
+
+    def __len__(self):
+        return len(self.filepaths)
+
+    def __getitem__(self, idx: int):
+        label = Path(self.filepaths[idx]).stem.split("_")[-1]
+        s3_png = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.filepaths[idx])
+        img_bytes = s3_png["Body"].read()
+
+        img = np.array(Image.open(BytesIO(img_bytes)))
+        img_tensor = torch.from_numpy(img)
+        return img_tensor.to(torch.float32), int(label)
 
 
 if __name__ == "__main__":
