@@ -4,8 +4,6 @@ the command: `go build -o ecClient.so -buildmode=c-shared go_client.go`
 """
 from __future__ import annotations
 
-import argparse
-import random
 from ctypes import CDLL, c_char_p, c_void_p, cdll, string_at
 from typing import TypeVar
 
@@ -70,30 +68,3 @@ def convert_bytes_to_np(input_bytes: bytes, data_type: NumpyDtype) -> np.ndarray
     """Decode so that the excessive backslashes are removed."""
     bytes_np_dec = input_bytes.decode("unicode-escape").encode("ISO-8859-1")[2:-1]
     return np.frombuffer(bytes_np_dec, dtype=data_type)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser("Python client for InfiniCache")
-    parser.add_argument(
-        "--go_lib_path", help="Path to the built go library", default="./ecClient.so"
-    )
-    args = parser.parse_args()
-
-    go_lib = load_go_lib(args.go_lib_path)
-    random_arr = np.random.randn(50, 50)
-    print("Original array shape: ", random_arr.shape)
-    print("Original array: ", random_arr)
-
-    random_key = "test_" + str(random.randint(0, 50000))
-    print("key: ", random_key)
-    try:
-        cache_arr = get_array_from_cache(go_lib, random_key, random_arr.dtype, random_arr.shape)
-    except KeyError:
-        print("passing error")
-
-    random_key = "test_" + str(random.randint(0, 50000))
-    print("key: ", random_key)
-    set_array_in_cache(go_lib, random_key, random_arr)
-    cache_arr = get_array_from_cache(go_lib, random_key, random_arr.dtype, random_arr.shape)
-    print("Array from cache shape: ", cache_arr.shape)
-    print("Array from cache: ", cache_arr)

@@ -1,14 +1,14 @@
 package main
 
+// Need to run: go build -o ecClient.so -buildmode=c-shared go_client.go
+
 /*
 #include <stdlib.h>
 */
 import "C"
 import (
 	"flag"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mason-leap-lab/infinicache/client"
 )
@@ -16,7 +16,7 @@ import (
 var (
 	d        = flag.Int("d", 2, "data shard")
 	p        = flag.Int("p", 1, "parity shard")
-	addrList = "35.175.107.9:6378"
+	addrList = "127.0.0.1:6378"
 	cli      *client.Client
 )
 
@@ -24,15 +24,12 @@ var (
 func getFromCache(cacheKeyC *C.char) *C.char {
 	cacheKeyGo := C.GoString(cacheKeyC)
 
-	start := time.Now()
 	reader, ok := cli.Get(cacheKeyGo)
-	dt := time.Since(start)
 	if !ok {
 		return C.CString("NOT_IN")
 	}
 
 	buf, _ := reader.ReadAll()
-	fmt.Printf("GET %s(%v)\n", cacheKeyGo, dt)
 	return C.CString(string(buf))
 }
 
@@ -44,11 +41,7 @@ func setInCache(cacheKeyC *C.char, inputDataC *C.char) {
 
 	valBytes := []byte(inputGo)
 
-	ok := cli.Set(cacheKeyGo, valBytes)
-	if !ok {
-		return
-	}
-	fmt.Printf("SET %s\n", cacheKeyGo)
+	cli.Set(cacheKeyGo, valBytes)
 
 }
 

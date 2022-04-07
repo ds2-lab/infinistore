@@ -4,19 +4,15 @@ in the cache, it's loaded from disk and then stored in the cache with its index 
 """
 import random
 import time
-from io import BytesIO
-from pathlib import Path
 
-import boto3
 import numpy as np
-import torch
 import torchvision
-from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-import pytorch_func
+from infinicache_dataloaders import MnistDatasetCache
+import go_bindings
 
-GO_LIB = pytorch_func.load_go_lib("./ecClient.so")
+GO_LIB = go_bindings.load_go_lib("./ecClient.so")
 GO_LIB.initializeVars()
 
 
@@ -27,8 +23,8 @@ def test_mnist_data():
     key = "mnist_1"
     input_data = np.array(mnist_dataset.data[0])
 
-    pytorch_func.set_array_in_cache(GO_LIB, key, input_data)
-    cache_arr = pytorch_func.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
+    go_bindings.set_array_in_cache(GO_LIB, key, input_data)
+    cache_arr = go_bindings.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
     print("Array from cache shape: ", cache_arr.shape)
     print("Array from cache: ", cache_arr)
     assert np.sum(cache_arr == input_data) == 784
@@ -59,92 +55,6 @@ def save_mnist_images(root_path: str, dir_to_save_images: str):
         img.save(f"{dir_to_save_images}/{idx:05d}_{label}.png")
 
 
-class MnistDatasetCache(Dataset):
-    """Simulates having to load each data point from disk every call."""
-
-    def __init__(self, mnist_path: str):
-        self.data_shape = (28, 28)
-        self.data_type = np.uint8
-        self.keys = set()
-
-        mnist_dataset_path = Path(mnist_path)
-        filenames = list(mnist_dataset_path.rglob("*.png"))
-        self.filepaths = sorted(filenames, key=lambda filename: int(filename.stem.split("_")[0]))
-
-    def __len__(self):
-        return len(self.filepaths)
-
-    def __getitem__(self, idx: int):
-        label = self.filepaths[idx].stem.split("_")[-1]
-        key = f"mnist_{idx:05d}"
-        if key in self.keys:
-            print(f"{key} in self.keys")
-            try:
-                np_arr = pytorch_func.get_array_from_cache(
-                    GO_LIB, key, self.data_type, self.data_shape
-                )
-                print("Found in cache")
-                img = torch.tensor(np_arr).reshape(1, 28, 28)
-                assert img.shape == (1, 28, 28)
-
-            except KeyError:
-                print("Loading from disk")
-                img = torchvision.io.read_image(str(self.filepaths[idx])).reshape(1, 28, 28)
-                assert img.shape == (1, 28, 28)
-                print("SHAPE: ", img.shape)
-                pytorch_func.set_array_in_cache(GO_LIB, key, np.array(img))
-                self.keys.add(key)
-
-        else:
-            self.keys.add(key)
-            img = torchvision.io.read_image(str(self.filepaths[idx])).reshape(1, 28, 28)
-            pytorch_func.set_array_in_cache(GO_LIB, key, np.array(img))
-        return img.to(torch.float32), int(label)
-
-
-class MnistDatasetDisk(Dataset):
-    """Simulates having to load each data point from disk every call."""
-
-    def __init__(self, mnist_path: str):
-        mnist_dataset_path = Path(mnist_path)
-        filenames = list(mnist_dataset_path.rglob("*.png"))
-        self.filepaths = sorted(filenames, key=lambda filename: int(filename.stem.split("_")[0]))
-
-    def __len__(self):
-        return len(self.filepaths)
-
-    def __getitem__(self, idx: int):
-        label = self.filepaths[idx].stem.split("_")[-1]
-        img = torchvision.io.read_image(str(self.filepaths[idx]))
-        return img.to(torch.float32), int(label)
-
-
-class MnistDatasetS3(Dataset):
-    """Simulates having to load each data point from S3 every call."""
-
-    def __init__(self, bucket_name: str):
-        self.s3_client = boto3.client("s3")
-        self.bucket_name = bucket_name
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        filenames = []
-        for page in paginator.paginate(Bucket=bucket_name):
-            for content in page.get("Contents"):
-                filenames.append(content["Key"])
-        self.filepaths = sorted(filenames, key=lambda filename: int(filename.split("_")[0]))
-
-    def __len__(self):
-        return len(self.filepaths)
-
-    def __getitem__(self, idx: int):
-        label = Path(self.filepaths[idx]).stem.split("_")[-1]
-        s3_png = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.filepaths[idx])
-        img_bytes = s3_png["Body"].read()
-
-        img = np.array(Image.open(BytesIO(img_bytes)))
-        img_tensor = torch.from_numpy(img)
-        return img_tensor.to(torch.float32), int(label)
-
-
 if __name__ == "__main__":
     sample_path = "/home/ubuntu/mnist_png/05454_9.png"
     mnist_dataset = torchvision.datasets.MNIST("/home/ubuntu")
@@ -156,8 +66,8 @@ if __name__ == "__main__":
     print("LIBRARY LOADED")
 
     print("READING FROM MNIST_DATASET")
-    pytorch_func.set_array_in_cache(GO_LIB, key, input_data)
-    cache_arr = pytorch_func.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
+    go_bindings.set_array_in_cache(GO_LIB, key, input_data)
+    cache_arr = go_bindings.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
     print("Array from cache shape: ", cache_arr.shape)
     print("Array from cache: ", cache_arr)
     assert np.sum(cache_arr == input_data) == 784
@@ -169,8 +79,8 @@ if __name__ == "__main__":
     img_np = np.array(img.squeeze(0))
     print(img.squeeze(0).shape)
 
-    pytorch_func.set_array_in_cache(GO_LIB, key, np.array(img))
-    cache_arr = pytorch_func.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
+    go_bindings.set_array_in_cache(GO_LIB, key, np.array(img))
+    cache_arr = go_bindings.get_array_from_cache(GO_LIB, key, input_data.dtype, input_data.shape)
     print("Array from cache shape: ", cache_arr.shape)
     print("Array from cache: ", cache_arr)
     assert np.sum(cache_arr == np.array(img)) == 784

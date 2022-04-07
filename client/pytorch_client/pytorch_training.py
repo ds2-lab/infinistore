@@ -1,8 +1,5 @@
 """
-TODO: Change the slow cache checking time if a key isn't present.
-TODO: Look into the set_array_in_cache function. It's too slow to add keys. Async maybe?
 TODO: Change the manual training cycle to an abstraction within PyTorch Lightning.
-TODO: Have a test set holdout.
 """
 from __future__ import annotations
 
@@ -10,39 +7,19 @@ import time
 
 import torch
 import torch.nn as nn
-import pytorch_process
+import infinicache_dataloaders
 from torch.utils.data import DataLoader
-from torchvision import models
+import cnn_models
 
-NUM_EPOCHS = 3
+NUM_EPOCHS = 2
 NUM_CLASSES = 10  # NUM DIGITS
 NUM_CHANNELS = 1  # MNIST images are grayscale
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
 
 
-class Resnet50(nn.Module):
-    def __init__(self, num_channels):
-        """We need to adjust the input size expected for the ResNet50 Model based on the image
-        shapes.
-        """
-        super().__init__()
-        self.resnet_model = models.resnet50(pretrained=True)
-        fc_features = self.resnet_model.fc.in_features
-        self.resnet_model.fc = nn.Linear(fc_features, 10)
-        self.resnet_model.conv1 = nn.Conv2d(
-            num_channels, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
-        )
-        self.classification_layer = nn.Softmax(dim=1)
-
-    def forward(self, data_inputs):
-        logits = self.resnet_model(data_inputs)
-        probs = self.classification_layer(logits)
-        return logits, probs
-
-
 def training_cycle(
-    model: Resnet50,
+    model: nn.Module,
     train_dataloader: DataLoader,
     optim_func: torch.optim.Adam,
     loss_fn: nn.CrossEntropyLoss,
@@ -57,7 +34,6 @@ def training_cycle(
         model.train()
         for idx, (images, labels) in enumerate(train_dataloader):
             images = images.to(device)
-            print(images.shape)
             labels = labels.to(device)
             logits, _ = model(images)
             loss = loss_fn(logits, labels)
@@ -78,7 +54,7 @@ def training_cycle(
                 )
                 iteration = 0
                 running_loss = 0.0
-            if idx > 2:
+            if idx > 200:
                 break
     end_time = time.time()
     print(f"Time taken: {end_time - start_time}")
@@ -94,7 +70,7 @@ def compare_pred_vs_actual(logit_scores: torch.Tensor, labels: torch.Tensor):
 
 
 def run_training_get_results(
-    model: Resnet50,
+    model: nn.Module,
     data_loader: DataLoader,
     optim_func: torch.optim,
     loss_fn: nn.CrossEntropyLoss,
@@ -105,34 +81,69 @@ def run_training_get_results(
     sample_loader = next(iter(data_loader))
     sample_loader_data = sample_loader[0].to(torch.float32).to(device)
     sample_loader_labels = sample_loader[1]
-    resnet_result = model(sample_loader_data)
-    compare_pred_vs_actual(resnet_result[0], sample_loader_labels)
+    model_result = model(sample_loader_data)
+    compare_pred_vs_actual(model_result[0], sample_loader_labels)
 
 
-def initialize_model() -> tuple[Resnet50, nn.CrossEntropyLoss, torch.optim.Adam]:
-    resnet50_model = Resnet50(NUM_CHANNELS)
-    resnet50_model = resnet50_model.to(DEVICE)
-    resnet50_model.train()
+def initialize_model(model_type: str) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
+    if model_type == "resnet":
+        print("Initializing Resnet50 model")
+        model = cnn_models.Resnet50(NUM_CHANNELS)
+    elif model_type == "efficientnet":
+        print("Initializing EfficientNetB4 model")
+        model = cnn_models.EfficientNetB4(NUM_CHANNELS)
+    elif model_type == "densenet":
+        print("Initializing DenseNet161 model")
+        model = cnn_models.DenseNet161(NUM_CHANNELS)
+    else:
+        print("Initializing BasicCNN model")
+        model = cnn_models.BasicCNN(NUM_CHANNELS)
+
+    model = model.to(DEVICE)
+    model.train()
     loss_fn = nn.CrossEntropyLoss()
-    optim_func = torch.optim.Adam(resnet50_model.parameters(), lr=LEARNING_RATE)
-    return resnet50_model, loss_fn, optim_func
+    optim_func = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    return model, loss_fn, optim_func
+
+
+def get_dataloader_times(data_loader: DataLoader):
+    idx = len(data_loader)
+    start_time = time.time()
+    for i, _ in enumerate(data_loader):
+        if not i % 100:
+            print(i)
+        if i > 200:
+            break
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time}.")
+    print(f"Time taken per iter: {(end_time - start_time) / idx}.")
 
 
 if __name__ == "__main__":
 
-    mnist_dataset_cache = pytorch_process.MnistDatasetCache("/home/ubuntu/mnist_png")
-    mnist_dataset_disk = pytorch_process.MnistDatasetDisk("/home/ubuntu/mnist_png")
-    mnist_dataloader_cache = DataLoader(mnist_dataset_cache, batch_size=50)
-    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=50)
+    mnist_dataset_cache = infinicache_dataloaders.MnistDatasetCache("/home/ubuntu/mnist_png")
+    mnist_dataset_disk = infinicache_dataloaders.MnistDatasetDisk("/home/ubuntu/mnist_png")
+    mnist_dataset_s3 = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
 
-    resnet50_model, loss_fn, optim_func = initialize_model()
+    mnist_dataloader_cache = DataLoader(mnist_dataset_cache, batch_size=2, num_workers=0)
+    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=2, num_workers=2)
+    mnist_dataloader_s3 = DataLoader(mnist_dataset_s3, batch_size=2)
+
+    model, loss_fn, optim_func = initialize_model("basic")
     print("Running training with the disk dataloader")
     run_training_get_results(
-        resnet50_model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+        model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
     )
 
-    resnet50_model, loss_fn, optim_func = initialize_model()
+    print("Disk dataset time:")
+    get_dataloader_times(mnist_dataloader_disk)
+    print("S3 dataset time:")
+    get_dataloader_times(mnist_dataloader_s3)
+    print("Cache dataset time:")
+    get_dataloader_times(mnist_dataloader_cache)
+
+    model, loss_fn, optim_func = initialize_model("basic")
     print("Running training with the cache dataloader")
     run_training_get_results(
-        resnet50_model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+        model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
     )
