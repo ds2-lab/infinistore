@@ -11,7 +11,7 @@ import infinicache_dataloaders
 from torch.utils.data import DataLoader
 import cnn_models
 
-NUM_EPOCHS = 2
+NUM_EPOCHS = 10
 NUM_CLASSES = 10  # NUM DIGITS
 NUM_CHANNELS = 1  # MNIST images are grayscale
 DEVICE = "cuda:0"
@@ -54,8 +54,6 @@ def training_cycle(
                 )
                 iteration = 0
                 running_loss = 0.0
-            if idx > 200:
-                break
     end_time = time.time()
     print(f"Time taken: {end_time - start_time}")
 
@@ -121,13 +119,14 @@ def get_dataloader_times(data_loader: DataLoader):
 
 if __name__ == "__main__":
 
-    mnist_dataset_cache = infinicache_dataloaders.MnistDatasetCache("/home/ubuntu/mnist_png")
     mnist_dataset_disk = infinicache_dataloaders.MnistDatasetDisk("/home/ubuntu/mnist_png")
     mnist_dataset_s3 = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
 
-    mnist_dataloader_cache = DataLoader(mnist_dataset_cache, batch_size=2, num_workers=0)
-    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=2, num_workers=2)
-    mnist_dataloader_s3 = DataLoader(mnist_dataset_s3, batch_size=2)
+    mnist_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
+        mnist_dataset_s3, batch_size=64
+    )
+    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=64, num_workers=2)
+    mnist_dataloader_s3 = DataLoader(mnist_dataset_s3, batch_size=64)
 
     model, loss_fn, optim_func = initialize_model("basic")
     print("Running training with the disk dataloader")
