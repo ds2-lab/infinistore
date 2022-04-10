@@ -4,6 +4,9 @@ in the cache, it's loaded from disk and then stored in the cache with its index 
 """
 from __future__ import annotations
 
+import time
+from abc import ABC, abstractmethod
+from ctypes import Union
 from io import BytesIO
 from pathlib import Path
 from typing import Callable
@@ -17,6 +20,9 @@ from torch.utils.data import Dataset
 from torch.utils.data._utils import collate
 
 import go_bindings
+import logging_utils
+
+LOGGER = logging_utils.initialize_logger(add_handler=True)
 
 GO_LIB = go_bindings.load_go_lib("./ecClient.so")
 GO_LIB.initializeVars()
@@ -98,7 +104,109 @@ class MnistDatasetS3(Dataset):
         return img_tensor.to(torch.float32), int(label)
 
 
-class InfiniCacheLoader:
+class BaseDataLoader(ABC):
+    def __init__(
+        self,
+        dataset: Union[MnistDatasetS3, MnistDatasetDisk],
+        img_dims: tuple[int, int, int],
+        image_dtype: go_bindings.NumpyDtype,
+        batch_size: int,
+        collate_fn: Callable,
+    ):
+        self.index = 0
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.collate_fn = collate_fn
+        self.img_dims = img_dims
+        self.data_type = image_dtype
+        self.labels_cache = {}
+        self.load_times = []
+        self.total_samples = 0
+
+    def __iter__(self):
+        self.index = 0
+        return self
+
+    @abstractmethod
+    def __next__(self):
+        pass
+
+    def get(self):
+        item = self.dataset[self.index]
+        self.index += 1
+        return item
+
+    def __len__(self):
+        return len(self.dataset) // self.batch_size
+
+
+class DiskLoader(BaseDataLoader):
+    """DataLoader specific to InfiniCache. Associates each batch of images with a key in the cache,
+    rather than each image.
+    """
+
+    def __init__(
+        self,
+        dataset: Union[MnistDatasetDisk, MnistDatasetS3],
+        img_dims: tuple[int, int, int] = (1, 28, 28),
+        image_dtype: go_bindings.NumpyDtype = np.uint8,
+        batch_size: int = 64,
+        collate_fn: Callable = collate.default_collate,
+    ):
+        super().__init__(dataset, img_dims, image_dtype, batch_size, collate_fn)
+
+    def __next__(self):
+        if self.index >= len(self.dataset):
+            raise StopIteration
+        batch_size = min(len(self.dataset) - self.index, self.batch_size)
+        start_time = time.time()
+        data = self.collate_fn([self.get() for _ in range(batch_size)])
+
+        end_time = time.time()
+        time_taken = end_time - start_time
+        self.total_samples += batch_size
+        self.load_times.append(time_taken)
+        return data
+
+    def __str__(self):
+        return "DiskDataset"
+
+
+class S3Loader(BaseDataLoader):
+    """DataLoader specific to InfiniCache. Associates each batch of images with a key in the cache,
+    rather than each image.
+    """
+
+    def __init__(
+        self,
+        dataset: Union[MnistDatasetDisk, MnistDatasetS3],
+        img_dims: tuple[int, int, int] = (1, 28, 28),
+        image_dtype: go_bindings.NumpyDtype = np.uint8,
+        batch_size: int = 64,
+        collate_fn: Callable = collate.default_collate,
+    ):
+        super().__init__(dataset, img_dims, image_dtype, batch_size, collate_fn)
+
+    def __next__(self):
+        if self.index >= len(self.dataset):
+            raise StopIteration
+        batch_size = min(len(self.dataset) - self.index, self.batch_size)
+        start_time = time.time()
+        images, labels = self.collate_fn([self.get() for _ in range(batch_size)])
+        images = images.reshape(batch_size, *self.img_dims)
+        data = (images, labels)
+
+        end_time = time.time()
+        time_taken = end_time - start_time
+        self.total_samples += batch_size
+        self.load_times.append(time_taken)
+        return data
+
+    def __str__(self):
+        return "S3Dataset"
+
+
+class InfiniCacheLoader(BaseDataLoader):
     """DataLoader specific to InfiniCache. Associates each batch of images with a key in the cache,
     rather than each image.
     """
@@ -111,22 +219,13 @@ class InfiniCacheLoader:
         batch_size: int = 64,
         collate_fn: Callable = collate.default_collate,
     ):
-        self.index = 0
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.collate_fn = collate_fn
-        self.img_dims = img_dims
-        self.data_type = image_dtype
-        self.labels_cache = {}
-
-    def __iter__(self):
-        self.index = 0
-        return self
+        super().__init__(dataset, img_dims, image_dtype, batch_size, collate_fn)
 
     def __next__(self):
         if self.index >= len(self.dataset):
             raise StopIteration
-        key = f"mnist_batch_{self.batch_size}_{self.index:05d}"
+        start_time = time.time()
+        key = f"mnist_batch_test2{self.batch_size}_{self.index:05d}"
         batch_size = min(len(self.dataset) - self.index, self.batch_size)
         self.data_shape = (batch_size, *self.img_dims)
 
@@ -146,13 +245,12 @@ class InfiniCacheLoader:
             go_bindings.set_array_in_cache(GO_LIB, key, np.array(images).astype(self.data_type))
             images = images.to(torch.float32).reshape(self.data_shape)
             data = (images, labels)
+        end_time = time.time()
+        time_taken = end_time - start_time
+        self.total_samples += batch_size
+        self.load_times.append(time_taken)
 
         return data
 
-    def get(self):
-        item = self.dataset[self.index]
-        self.index += 1
-        return item
-
-    def __len__(self):
-        return len(self.dataset) // self.batch_size
+    def __str__(self):
+        return "InfiniCacheDataset"

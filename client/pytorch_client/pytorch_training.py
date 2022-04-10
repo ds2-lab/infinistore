@@ -4,12 +4,17 @@ TODO: Change the manual training cycle to an abstraction within PyTorch Lightnin
 from __future__ import annotations
 
 import time
+from ctypes import Union
 
 import torch
 import torch.nn as nn
-import infinicache_dataloaders
 from torch.utils.data import DataLoader
+
 import cnn_models
+import infinicache_dataloaders
+import logging_utils
+
+LOGGER = logging_utils.initialize_logger()
 
 NUM_EPOCHS = 10
 NUM_CLASSES = 10  # NUM DIGITS
@@ -20,7 +25,11 @@ LEARNING_RATE = 1e-3
 
 def training_cycle(
     model: nn.Module,
-    train_dataloader: DataLoader,
+    train_dataloader: Union[
+        infinicache_dataloaders.InfiniCacheLoader,
+        infinicache_dataloaders.S3Loader,
+        infinicache_dataloaders.DiskLoader,
+    ],
     optim_func: torch.optim.Adam,
     loss_fn: nn.CrossEntropyLoss,
     num_epochs: int = 1,
@@ -54,6 +63,16 @@ def training_cycle(
                 )
                 iteration = 0
                 running_loss = 0.0
+
+        total_time_taken = sum(train_dataloader.load_times)
+        LOGGER.info(
+            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec.",
+            epoch + 1,
+            str(train_dataloader),
+            train_dataloader.total_samples,
+            total_time_taken,
+        )
+
     end_time = time.time()
     print(f"Time taken: {end_time - start_time}")
 
@@ -118,31 +137,37 @@ def get_dataloader_times(data_loader: DataLoader):
 
 
 if __name__ == "__main__":
+    LOGGER.info("TRAINING STARTED")
 
     mnist_dataset_disk = infinicache_dataloaders.MnistDatasetDisk("/home/ubuntu/mnist_png")
     mnist_dataset_s3 = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
+    mnist_dataset_cache = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
 
     mnist_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
-        mnist_dataset_s3, batch_size=64
+        mnist_dataset_cache, batch_size=64
     )
-    mnist_dataloader_disk = DataLoader(mnist_dataset_disk, batch_size=64, num_workers=2)
-    mnist_dataloader_s3 = DataLoader(mnist_dataset_s3, batch_size=64)
+    mnist_dataloader_disk = infinicache_dataloaders.DiskLoader(mnist_dataset_disk, batch_size=64)
+    mnist_dataloader_s3 = infinicache_dataloaders.S3Loader(mnist_dataset_s3, batch_size=64)
+
+    # model, loss_fn, optim_func = initialize_model("basic")
+    # print("Running training with the disk dataloader")
+    # run_training_get_results(
+    #     model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    # )
+
+    # # print("Disk dataset time:")
+    # # get_dataloader_times(mnist_dataloader_disk)
+    # # print("S3 dataset time:")
+    # # get_dataloader_times(mnist_dataloader_s3)
+    # # print("Cache dataset time:")
+    # # get_dataloader_times(mnist_dataloader_cache)
+
+    # model, loss_fn, optim_func = initialize_model("basic")
+    # print("Running training with the cache dataloader")
+    # run_training_get_results(
+    #     model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    # )
 
     model, loss_fn, optim_func = initialize_model("basic")
-    print("Running training with the disk dataloader")
-    run_training_get_results(
-        model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
-    )
-
-    print("Disk dataset time:")
-    get_dataloader_times(mnist_dataloader_disk)
-    print("S3 dataset time:")
-    get_dataloader_times(mnist_dataloader_s3)
-    print("Cache dataset time:")
-    get_dataloader_times(mnist_dataloader_cache)
-
-    model, loss_fn, optim_func = initialize_model("basic")
-    print("Running training with the cache dataloader")
-    run_training_get_results(
-        model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
-    )
+    print("Running training with the S3 dataloader")
+    run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
