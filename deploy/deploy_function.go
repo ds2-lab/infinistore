@@ -16,7 +16,7 @@ import (
 const (
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
+	ROLE = "arn:aws:iam::[aws account id]:role/[role name]"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
@@ -33,15 +33,14 @@ var (
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
 	batch   = flag.Int64("batch", 5, "batch Number, no need to modify")
 	mem     = flag.Int64("mem", 256, "the memory of lambda")
-	bucket  = flag.String("S3", "ao.lambda.code", "S3 bucket for lambda code")
+	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-eeb536c0"),
-		//aws.String("subnet-f94739f6"),
-		aws.String("subnet-f432faca"),
+		aws.String("sb-your-subnet-1"),
+		aws.String("sb-your-subnet-2"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
+		aws.String("sg-your-security-group"),
 	}
 )
 
@@ -91,7 +90,6 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	}
 	fmt.Println(name, "\n", result)
 	wg.Done()
-	return
 }
 
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
@@ -128,7 +126,6 @@ func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	}
 	fmt.Println(name, "\n", result)
 	wg.Done()
-	return
 }
 
 func createFunction(name string, svc *lambda.Lambda) {

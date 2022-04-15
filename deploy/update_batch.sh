@@ -6,7 +6,7 @@ KEY="lambda"
 group=9
 # try -code
 
-S3="tianium.default"
+S3="mason-leap-lab.infinicache"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 
