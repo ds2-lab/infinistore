@@ -17,8 +17,6 @@ import logging_utils
 LOGGER = logging_utils.initialize_logger()
 
 NUM_EPOCHS = 10
-NUM_CLASSES = 10  # NUM DIGITS
-NUM_CHANNELS = 1  # MNIST images are grayscale
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
 
@@ -102,19 +100,21 @@ def run_training_get_results(
     compare_pred_vs_actual(model_result[0], sample_loader_labels)
 
 
-def initialize_model(model_type: str) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
+def initialize_model(
+    model_type: str, num_channels: int
+) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
     if model_type == "resnet":
         print("Initializing Resnet50 model")
-        model = cnn_models.Resnet50(NUM_CHANNELS)
+        model = cnn_models.Resnet50(num_channels)
     elif model_type == "efficientnet":
         print("Initializing EfficientNetB4 model")
-        model = cnn_models.EfficientNetB4(NUM_CHANNELS)
+        model = cnn_models.EfficientNetB4(num_channels)
     elif model_type == "densenet":
         print("Initializing DenseNet161 model")
-        model = cnn_models.DenseNet161(NUM_CHANNELS)
+        model = cnn_models.DenseNet161(num_channels)
     else:
         print("Initializing BasicCNN model")
-        model = cnn_models.BasicCNN(NUM_CHANNELS)
+        model = cnn_models.BasicCNN(num_channels)
 
     model = model.to(DEVICE)
     model.train()
@@ -139,35 +139,72 @@ def get_dataloader_times(data_loader: DataLoader):
 if __name__ == "__main__":
     LOGGER.info("TRAINING STARTED")
 
-    mnist_dataset_disk = infinicache_dataloaders.MnistDatasetDisk("/home/ubuntu/mnist_png")
-    mnist_dataset_s3 = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
-    mnist_dataset_cache = infinicache_dataloaders.MnistDatasetS3("mnist-infinicache")
+    mnist_dataset_disk = infinicache_dataloaders.DatasetDisk("/home/ubuntu/mnist_png", label_idx=-1)
+    mnist_dataset_s3 = infinicache_dataloaders.DatasetS3(
+        "mnist-infinicache", label_idx=-1, channels=False
+    )
+    mnist_dataset_cache = infinicache_dataloaders.DatasetS3(
+        "mnist-infinicache", label_idx=-1, channels=False
+    )
 
     mnist_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
-        mnist_dataset_cache, batch_size=64
+        mnist_dataset_cache, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
     )
-    mnist_dataloader_disk = infinicache_dataloaders.DiskLoader(mnist_dataset_disk, batch_size=64)
-    mnist_dataloader_s3 = infinicache_dataloaders.S3Loader(mnist_dataset_s3, batch_size=64)
+    mnist_dataloader_disk = infinicache_dataloaders.DiskLoader(
+        mnist_dataset_disk, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
+    )
+    mnist_dataloader_s3 = infinicache_dataloaders.S3Loader(
+        mnist_dataset_s3, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
+    )
 
-    # model, loss_fn, optim_func = initialize_model("basic")
-    # print("Running training with the disk dataloader")
-    # run_training_get_results(
-    #     model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
-    # )
+    model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
+    print("Running training with the disk dataloader")
+    run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
-    # # print("Disk dataset time:")
-    # # get_dataloader_times(mnist_dataloader_disk)
-    # # print("S3 dataset time:")
-    # # get_dataloader_times(mnist_dataloader_s3)
-    # # print("Cache dataset time:")
-    # # get_dataloader_times(mnist_dataloader_cache)
+    print("Disk dataset time:")
+    get_dataloader_times(mnist_dataloader_disk)
+    print("S3 dataset time:")
+    get_dataloader_times(mnist_dataloader_s3)
+    print("Cache dataset time:")
+    get_dataloader_times(mnist_dataloader_cache)
 
-    # model, loss_fn, optim_func = initialize_model("basic")
-    # print("Running training with the cache dataloader")
-    # run_training_get_results(
-    #     model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
-    # )
+    model, loss_fn, optim_func = initialize_model("basic")
+    print("Running training with the cache dataloader")
+    run_training_get_results(model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
     model, loss_fn, optim_func = initialize_model("basic")
     print("Running training with the S3 dataloader")
     run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
+
+    imagenet_dataset_disk = infinicache_dataloaders.DatasetDisk(
+        "/home/ubuntu/imagenet_images", label_idx=0
+    )
+    imagenet_dataset_s3 = infinicache_dataloaders.DatasetS3(
+        "imagenet-infinicache", label_idx=0, channels=True
+    )
+    imagenet_dataset_cache = infinicache_dataloaders.DatasetS3(
+        "imagenet-infinicache", label_idx=0, channels=True
+    )
+
+    imagenet_dataloader_disk = infinicache_dataloaders.DiskLoader(
+        imagenet_dataset_disk, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
+    )
+    imagenet_dataloader_s3 = infinicache_dataloaders.S3Loader(
+        imagenet_dataset_s3, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
+    )
+    imagenet_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
+        imagenet_dataset_cache, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
+    )
+
+    print("Disk dataset time:")
+    get_dataloader_times(imagenet_dataset_disk)
+    print("S3 dataset time:")
+    get_dataloader_times(imagenet_dataloader_s3)
+    print("Cache dataset time:")
+    get_dataloader_times(imagenet_dataloader_cache)
+
+    model, loss_fn, optim_func = initialize_model("densenet", 3)
+    print("Running training with the Disk dataloader")
+    run_training_get_results(
+        model, imagenet_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )

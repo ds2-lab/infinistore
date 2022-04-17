@@ -2,18 +2,36 @@
 Working with the MNIST dataset. Testing out using a PyTorch Dataset/DataLoader. If an image isn't
 in the cache, it's loaded from disk and then stored in the cache with its index as the key.
 """
+import pickle
 import random
 import time
+from pathlib import Path
 
 import numpy as np
 import torchvision
+from PIL import Image
 from torch.utils.data import DataLoader
 
-from infinicache_dataloaders import MnistDatasetCache
 import go_bindings
+from infinicache_dataloaders import MnistDatasetCache
 
 GO_LIB = go_bindings.load_go_lib("./ecClient.so")
 GO_LIB.initializeVars()
+
+
+def save_imagenet(imagenet_base: Path, out_dir: Path):
+    for idx, subdir in enumerate(imagenet_base.iterdir()):
+        print(subdir.name)
+        for f in subdir.iterdir():
+            if "val" not in f.name:
+                print(f)
+                fname = f.with_suffix(".jpeg")
+                fname = fname.name
+                fname = fname.replace(subdir.name, str(idx))
+                outpath = out_dir / fname
+                img = Image.open(f)
+                img = img.resize(size=(256, 256))
+                img.save(outpath)
 
 
 def test_mnist_data():
@@ -53,6 +71,27 @@ def save_mnist_images(root_path: str, dir_to_save_images: str):
     mnist_dataset = torchvision.datasets.MNIST(root_path, download=True)
     for idx, (img, label) in enumerate(mnist_dataset):
         img.save(f"{dir_to_save_images}/{idx:05d}_{label}.png")
+
+
+def load_pickle(pkl_path: Path) -> dict:
+    with open(pkl_path, "rb") as pkl_f:
+        data = pickle.load(pkl_f, encoding="bytes")
+    return data
+
+
+def save_cifar_data(cifar_input_dir: Path, cifar_output_dir: Path):
+    for data_path in Path(cifar_input_dir).rglob("*_batch*"):
+        print(data_path)
+        data_batch = load_pickle(data_path)
+        for idx, arr in enumerate(data_batch[b"data"]):
+            output_arr = arr.reshape(3, 32, 32)
+            output_arr = output_arr.transpose(1, 2, 0)
+            output_img = Image.fromarray(output_arr)
+            filename = (
+                f"{data_batch[b'labels'][idx]}_{data_batch[b'filenames'][idx].decode('utf-8')}"
+            )
+            output_path = cifar_output_dir / filename
+            output_img.save(output_path)
 
 
 if __name__ == "__main__":

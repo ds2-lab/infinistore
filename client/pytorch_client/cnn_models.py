@@ -10,6 +10,7 @@ class Resnet50(nn.Module):
         """
         super().__init__()
         self.resnet_model = models.resnet50(pretrained=True)
+        self.adapt_pool = nn.AdaptiveAvgPool2d((28, 28))
         fc_features = self.resnet_model.fc.in_features
         self.resnet_model.fc = nn.Linear(fc_features, 10)
         self.resnet_model.conv1 = nn.Conv2d(
@@ -18,7 +19,8 @@ class Resnet50(nn.Module):
         self.classification_layer = nn.Softmax(dim=1)
 
     def forward(self, data_inputs):
-        logits = self.resnet_model(data_inputs)
+        x = self.adapt_pool(data_inputs)
+        logits = self.resnet_model(x)
         probs = self.classification_layer(logits)
         return logits, probs
 
@@ -26,6 +28,7 @@ class Resnet50(nn.Module):
 class BasicCNN(nn.Module):
     def __init__(self, num_channels):
         super().__init__()
+        self.adapt_pool = nn.AdaptiveAvgPool2d((28, 28))
         self.first_layer = nn.Conv2d(num_channels, 32, 3)
         self.second_layer = nn.Conv2d(32, 16, 3)
         self.fc_layer = nn.Linear(5 * 5 * 16, 10)
@@ -36,7 +39,8 @@ class BasicCNN(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, data_inputs):
-        x = self.first_layer(data_inputs)
+        x = self.adapt_pool(data_inputs)
+        x = self.first_layer(x)
         x = self.max_pool(x)
         x = self.relu(x)
 
@@ -46,7 +50,7 @@ class BasicCNN(nn.Module):
         x = torch.flatten(x, 1)
 
         logits = self.fc_layer(x)
-        probs = self.classification_layer(x)
+        probs = self.classification_layer(logits)
         return logits, probs
 
 
@@ -59,6 +63,7 @@ class EfficientNetB4(nn.Module):
         self.efficientnet = torch.hub.load(
             "NVIDIA/DeepLearningExamples:torchhub", "nvidia_efficientnet_widese_b4", pretrained=True
         )
+        self.adapt_pool = nn.AdaptiveAvgPool2d((28, 28))
         fc_features = self.efficientnet.classifier.fc.in_features
         self.efficientnet.classifier.fc = nn.Linear(fc_features, 10)
         self.efficientnet.stem.conv = nn.Conv2d(
@@ -67,7 +72,8 @@ class EfficientNetB4(nn.Module):
         self.classification_layer = nn.Softmax(dim=1)
 
     def forward(self, data_inputs):
-        logits = self.efficientnet(data_inputs)
+        x = self.adapt_pool(data_inputs)
+        logits = self.efficientnet(x)
         probs = self.classification_layer(logits)
         return logits, probs
 
@@ -79,6 +85,7 @@ class DenseNet161(nn.Module):
         """
         super().__init__()
         self.densenet = torch.hub.load("pytorch/vision:v0.10.0", "densenet161", pretrained=True)
+        self.adapt_pool = nn.AdaptiveAvgPool2d((28, 28))
         fc_features = self.densenet.classifier.in_features
         self.densenet.classifier = nn.Linear(fc_features, 10)
         self.densenet.features.conv0 = nn.Conv2d(
@@ -87,6 +94,7 @@ class DenseNet161(nn.Module):
         self.classification_layer = nn.Softmax(dim=1)
 
     def forward(self, data_inputs):
-        logits = self.densenet(data_inputs)
+        x = self.adapt_pool(data_inputs)
+        logits = self.densenet(x)
         probs = self.classification_layer(logits)
         return logits, probs
