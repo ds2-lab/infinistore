@@ -4,7 +4,7 @@ This has been adjusted so that it works for images of any shape. MNIST has image
 
 The CIFAR-10 images are only slightly larger than the MNIST images 32x32x3 (3072 bytes)
 vs 28x28x1 (784 bytes), respectively. After running some tests, the load times were similar,
-so we decided to use a subset of the ImageNet dataset instead. We selected 10 classes of images
+so we decided to use a subset of the ImageNet dataset also. We selected 10 classes of images
 from the dataset (tench, English springer, cassette player, chain saw, church, French horn,
 garbage truck, gas pump, golf ball, parachute.
 This amounted to about 900 examples each for 8,937 total images we and resized each image to
@@ -12,6 +12,7 @@ This amounted to about 900 examples each for 8,937 total images we and resized e
 """
 from __future__ import annotations
 
+import random
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -45,6 +46,7 @@ class DatasetDisk(Dataset):
         filenames = list(dataset_path.rglob("*.png"))
         filenames.extend(list(dataset_path.rglob("*.jpeg")))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
+        random.shuffle(self.filepaths)
         self.label_idx = label_idx
 
     def __len__(self):
@@ -70,6 +72,7 @@ class DatasetS3(Dataset):
             for content in page.get("Contents"):
                 filenames.append(Path(content["Key"]))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
+        random.shuffle(self.filepaths)
         if channels:
             self.transform_array = self.transform_image_channels
         else:
@@ -184,7 +187,6 @@ class S3Loader(BaseDataLoader):
 
         results = self.get_batch_threaded(batch_size)
         images, labels = self.collate_fn(results)
-        images = images.reshape(batch_size, *self.img_dims)
         data = (images, labels)
 
         end_time = time.time()
@@ -219,12 +221,14 @@ class InfiniCacheLoader(BaseDataLoader):
         collate_fn: Callable = collate.default_collate,
     ):
         super().__init__(dataset, dataset_name, img_dims, image_dtype, batch_size, collate_fn)
+        self.base_keyname = f"{self.dataset_name}_{self.batch_size}_"
+        self.initial_set_all_data()
 
     def __next__(self):
         if self.index >= len(self.dataset):
             raise StopIteration
         start_time = time.time()
-        key = f"{self.dataset_name}_batch_test600{self.batch_size}_{self.index:05d}"
+        key = f"{self.base_keyname}_{self.index:05d}"
         batch_size = min(len(self.dataset) - self.index, self.batch_size)
         self.data_shape = (batch_size, *self.img_dims)
 
@@ -259,3 +263,33 @@ class InfiniCacheLoader(BaseDataLoader):
             futures = [executor.submit(self.get) for _ in range(batch_size)]
             results = [future.result() for future in as_completed(futures)]
         return results
+
+    def set_in_cache(self, batch_size: int, idx: int):
+        idx *= batch_size
+        key = f"{self.base_keyname}_{idx:05d}"
+        results = self.get_batch_threaded(batch_size)
+        images, labels = self.collate_fn(results)
+        self.labels_cache[key] = labels
+        go_bindings.set_array_in_cache(GO_LIB, key, np.array(images).astype(self.data_type))
+
+    def initial_set_all_data(self):
+        LOGGER.info("Loading data into InfiniCache in parallel")
+        batch_sizes = [
+            b_size
+            for idx in range((len(self.dataset.filepaths) // self.batch_size) + 1)
+            if (b_size := len(self.dataset.filepaths[idx * self.batch_size: idx * self.batch_size + self.batch_size]))
+            > 0
+        ]
+        start_time = time.time()
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.set_in_cache, b_size, idx) for idx, b_size in enumerate(batch_sizes)]
+            _ = [future.result() for future in as_completed(futures)]
+            LOGGER.info("DONE with initial SET into InfiniCache")
+        end_time = time.time()
+        time_taken = end_time - start_time
+        self.load_times.append(time_taken)
+        LOGGER.info(
+            "Finished Setting Data in InfiniCache. Total load time for %d samples is %.3f sec.",
+            self.total_samples,
+            time_taken,
+        )

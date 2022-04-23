@@ -9,6 +9,7 @@ import "C"
 import (
 	"flag"
 	"strings"
+	"unsafe"
 
 	"github.com/mason-leap-lab/infinicache/client"
 )
@@ -26,7 +27,7 @@ func getFromCache(cacheKeyC *C.char) *C.char {
 
 	reader, ok := cli.Get(cacheKeyGo)
 	if !ok {
-		return C.CString("NOT_IN")
+		return C.CString("-1")
 	}
 
 	buf, _ := reader.ReadAll()
@@ -34,15 +35,11 @@ func getFromCache(cacheKeyC *C.char) *C.char {
 }
 
 //export setInCache
-func setInCache(cacheKeyC *C.char, inputDataC *C.char) {
+func setInCache(cacheKeyC *C.char, inputDataC *C.char, arrayLen C.int) {
 	cacheKeyGo := C.GoString(cacheKeyC)
-
-	inputGo := C.GoString(inputDataC)
-
-	valBytes := []byte(inputGo)
+	valBytes := C.GoBytes(unsafe.Pointer(inputDataC), arrayLen)
 
 	cli.Set(cacheKeyGo, valBytes)
-
 }
 
 //export initializeVars

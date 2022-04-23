@@ -1,5 +1,5 @@
 """
-TODO: Change the manual training cycle to an abstraction within PyTorch Lightning.
+Deep learning training cycle.
 """
 from __future__ import annotations
 
@@ -139,6 +139,7 @@ def get_dataloader_times(data_loader: DataLoader):
 if __name__ == "__main__":
     LOGGER.info("TRAINING STARTED")
 
+    #  MNIST ####################################################
     mnist_dataset_disk = infinicache_dataloaders.DatasetDisk("/home/ubuntu/mnist_png", label_idx=-1)
     mnist_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "mnist-infinicache", label_idx=-1, channels=False
@@ -159,31 +160,25 @@ if __name__ == "__main__":
 
     model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
     print("Running training with the disk dataloader")
-    run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
+    run_training_get_results(model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
-    print("Disk dataset time:")
-    get_dataloader_times(mnist_dataloader_disk)
-    print("S3 dataset time:")
-    get_dataloader_times(mnist_dataloader_s3)
-    print("Cache dataset time:")
-    get_dataloader_times(mnist_dataloader_cache)
-
-    model, loss_fn, optim_func = initialize_model("basic")
+    model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
     print("Running training with the cache dataloader")
     run_training_get_results(model, mnist_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
-    model, loss_fn, optim_func = initialize_model("basic")
+    model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
     print("Running training with the S3 dataloader")
     run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
+    #  IMAGENET ####################################################
     imagenet_dataset_disk = infinicache_dataloaders.DatasetDisk(
         "/home/ubuntu/imagenet_images", label_idx=0
     )
     imagenet_dataset_s3 = infinicache_dataloaders.DatasetS3(
-        "imagenet-infinicache", label_idx=0, channels=True
+        "imagenet-infinicache-png", label_idx=0, channels=True
     )
     imagenet_dataset_cache = infinicache_dataloaders.DatasetS3(
-        "imagenet-infinicache", label_idx=0, channels=True
+        "imagenet-infinicache-png", label_idx=0, channels=True
     )
 
     imagenet_dataloader_disk = infinicache_dataloaders.DiskLoader(
@@ -196,15 +191,59 @@ if __name__ == "__main__":
         imagenet_dataset_cache, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
     )
 
-    print("Disk dataset time:")
-    get_dataloader_times(imagenet_dataset_disk)
-    print("S3 dataset time:")
-    get_dataloader_times(imagenet_dataloader_s3)
-    print("Cache dataset time:")
-    get_dataloader_times(imagenet_dataloader_cache)
-
-    model, loss_fn, optim_func = initialize_model("densenet", 3)
+    model, loss_fn, optim_func = initialize_model("basic", 3)
     print("Running training with the Disk dataloader")
     run_training_get_results(
         model, imagenet_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the Cache dataloader")
+    run_training_get_results(
+        model, imagenet_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the S3 dataloader")
+    run_training_get_results(
+        model, imagenet_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    #  CIFAR ####################################################
+    cifar_dataset_disk = infinicache_dataloaders.DatasetDisk(
+        "/home/ubuntu/cifar_images", label_idx=0
+    )
+    cifar_dataset_s3 = infinicache_dataloaders.DatasetS3(
+        "cifar10-infinicache", label_idx=0, channels=True
+    )
+    cifar_dataset_cache = infinicache_dataloaders.DatasetS3(
+        "cifar10-infinicache", label_idx=0, channels=True
+    )
+
+    cifar_dataloader_disk = infinicache_dataloaders.DiskLoader(
+        cifar_dataset_disk, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
+    )
+    cifar_dataloader_s3 = infinicache_dataloaders.S3Loader(
+        cifar_dataset_s3, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
+    )
+    cifar_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
+        cifar_dataset_cache, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
+    )
+
+    model, loss_fn, optim_func = initialize_model("resnet", 3)
+    print("Running training with the Disk dataloader")
+    run_training_get_results(
+        model, cifar_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the Cache dataloader")
+    run_training_get_results(
+        model, cifar_dataloader_cache, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the S3 dataloader")
+    run_training_get_results(
+        model, cifar_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE
     )
