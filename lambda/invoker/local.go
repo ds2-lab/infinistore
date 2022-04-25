@@ -55,7 +55,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	}
 	// log.Printf("args: %v\n", args)
 
-	cmd := exec.CommandContext(ctx, "lambda", args...)
+	cmd := exec.CommandContext(ctx, "bin/lambda", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

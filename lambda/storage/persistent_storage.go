@@ -23,6 +23,9 @@ import (
 
 const (
 	CHUNK_KEY = "%schunks/%s"
+
+	// StorageSignalFlagForceCommit Indicate a PersistentStorage to commit regardless of any queued operations.
+	StorageSignalFlagForceCommit = 0x0001
 )
 
 var (
@@ -32,12 +35,25 @@ var (
 	ErrTrackerNotStarted = errors.New("tracker not started")
 )
 
+type PersistentStorageSignal uint32
+
+func (sig PersistentStorageSignal) Flags() uint32 {
+	return 0
+}
+
 type PersistHelper interface {
+	// onPersisted can be implemented to do something after a chunk is persisted.
 	onPersisted(*types.OpWrapper)
 
-	// onSignalTracker can be overwritten to execution signal action.
+	// signal returns true if tracker has started
+	signal(StorageSignal) bool
+
+	// getSignalTracker returns a readonly channel that tracks the signal for this storage.
+	getSignalTracker() <-chan StorageSignal
+
+	// onSignalTracker can be implemented to execution signal action.
 	// Returns true to stop the tracker
-	onSignalTracker(interface{}) bool
+	onSignalTracker(StorageSignal) bool
 }
 
 // PersistentStorage Storage with S3 as persistent layer
@@ -45,8 +61,8 @@ type PersistentStorage struct {
 	*Storage
 
 	chanOps        chan *types.OpWrapper // NOTE: implement an unbounded channel if neccessary.
-	signalTracker  chan interface{}
-	trackerStopped chan interface{}
+	signalTracker  chan StorageSignal
+	trackerStopped chan StorageSignal
 	persistHelper  PersistHelper
 
 	// Persistency backpack
@@ -256,8 +272,8 @@ func (s *PersistentStorage) ConfigS3(bucket string, prefix string) {
 func (s *PersistentStorage) StartTracker() {
 	if s.chanOps == nil {
 		s.chanOps = make(chan *types.OpWrapper, 10)
-		s.signalTracker = make(chan interface{}, 1)
-		s.trackerStopped = make(chan interface{})
+		s.signalTracker = make(chan StorageSignal, 1)
+		s.trackerStopped = make(chan StorageSignal)
 		go s.StartTracker()
 		return
 	}
@@ -281,7 +297,7 @@ func (s *PersistentStorage) StartTracker() {
 	// Token is used as concurrency throttler as well as to accept upload result and keep total ordering.
 	freeToken := types.UploadConcurrency
 	token := make(chan *types.OpWrapper, freeToken)
-	var delayedSignal interface{}
+	var delayedSignal StorageSignal
 
 	var trackDuration time.Duration
 	var trackStart time.Time
@@ -392,16 +408,16 @@ func (s *PersistentStorage) StartTracker() {
 
 				// Signal tracker if commit initiated.
 				if delayedSignal != nil {
-					s.signalTracker <- delayedSignal
+					s.persistHelper.signal(delayedSignal)
 					delayedSignal = nil
 				}
 			}
 		// The tracker will only be signaled after tracked all existing operations.
-		case signal := <-s.signalTracker:
-			if len(s.chanOps) > 0 {
+		case signal := <-s.persistHelper.getSignalTracker():
+			if len(s.chanOps) > 0 && signal.Flags()&StorageSignalFlagForceCommit == 0 {
 				// We wait for chanOps get drained.
 				s.log.Debug("Found more ops to be persisted, pass and wait for resignal.")
-				s.signalTracker <- signal
+				s.persistHelper.signal(signal)
 			} else if persisted < len(persistedOps) {
 				// Wait for being persisted and signalTracker get refilled.
 				s.log.Debug("Found more ops to be persisted and persisting, pass and wait for resignal.")
@@ -422,31 +438,58 @@ func (s *PersistentStorage) StartTracker() {
 	}
 }
 
+// PersistHelper implementations
+
 func (s *PersistentStorage) onPersisted(persisted *types.OpWrapper) {
 	// Default by doing nothing
 }
 
-func (s *PersistentStorage) onSignalTracker(signal interface{}) bool {
-	s.trackerStopped <- signal
+func (s *PersistentStorage) signal(sig StorageSignal) bool {
+	if s.signalTracker == nil {
+		return false
+	}
+
+	select {
+	case s.signalTracker <- sig:
+		return true
+	default:
+		<-s.signalTracker // Evict older signal
+		s.signalTracker <- sig
+		return true
+	}
+}
+
+func (s *PersistentStorage) getSignalTracker() <-chan StorageSignal {
+	return s.signalTracker
+}
+
+func (s *PersistentStorage) onSignalTracker(signal StorageSignal) bool {
+	select {
+	case <-s.trackerStopped:
+	default:
+		close(s.trackerStopped)
+	}
 	return true
 }
 
-func (s *PersistentStorage) StopTracker() {
-	if s.signalTracker != nil {
-		// Signal tracker to stop and wait
+func (s *PersistentStorage) StopTracker() error {
+	// Signal tracker to stop and wait
+	if s.persistHelper.signal(PersistentStorageSignal(0)) {
 		s.log.Debug("Signal tracker to stop")
-		s.signalTracker <- nil
 		<-s.trackerStopped
 
 		// Clean up
-		s.signalTracker = nil
 		s.trackerStopped = nil
+		s.signalTracker = nil
 		if s.s3Downloader != nil {
 			s.s3Downloader.Close()
 			s.s3Downloader = nil
 		}
 		s.log.Debug("Operation tracking stopped.")
+		return nil
 	}
+
+	return ErrTrackerNotStarted
 }
 
 func (s *PersistentStorage) getS3Downloader() *mys3.Downloader {

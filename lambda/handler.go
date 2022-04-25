@@ -164,7 +164,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status.Metas) == 0 {
-			return Lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
+			return Lineage.Status(false).ProtocolStatus(), errors.New("no node status found in the input")
 		}
 
 		// Preprocess protocol meta and check consistency
@@ -174,12 +174,12 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		for i := 0; i < len(metas); i++ {
 			metas[i], err = types.LineageMetaFromProtocol(&input.Status.Metas[i])
 			if err != nil {
-				return Lineage.Status().ProtocolStatus(), err
+				return Lineage.Status(false).ProtocolStatus(), err
 			}
 
-			consistent, err := Lineage.IsConsistent(metas[i])
+			consistent, err := Lineage.Validate(metas[i])
 			if err != nil {
-				return Lineage.Status().ProtocolStatus(), err
+				return Lineage.Status(false).ProtocolStatus(), err
 			} else if !consistent {
 				if input.IsBackingOnly() && i == 0 {
 					// if i == 0 {
@@ -315,7 +315,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		// On system closing, the lineage should have been unset.
 		if Lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			status = Lineage.Status()
+			status = Lineage.Status(false)
 		}
 		return
 	case <-session.Timeout.C():
@@ -350,7 +350,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			Persist.StopTracker()
 		}
 		if Lineage != nil {
-			status = Lineage.Status()
+			status = Lineage.Status(false)
 		}
 		byeHandler(session, status)
 		session.Done()
@@ -408,7 +408,7 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 			// For now, only backup request supported.
 			if meta, err := types.LineageMetaFromProtocol(&pmeta); err != nil {
 				log.Warn("Error on get meta: %v", err)
-			} else if consistent, err := Lineage.IsConsistent(meta); err != nil {
+			} else if consistent, err := Lineage.Validate(meta); err != nil {
 				log.Warn("Error on check consistency: %v", err)
 			} else {
 				if meta.ServingKey() != "" {

@@ -157,6 +157,17 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
   2020/03/08 05:05:19 EcRedis Got foo 3551124 ( 2677371 865495 )
   ```
 
+- Stand-alone local simulation
+
+  Enable local function execution by editing `lambda/config.go`:
+  ```go
+  DRY_RUN = true
+  ```
+
+  Run `make start-local` to start a stand-alone local proxy server, which will invoke functions locally to simulation Lambda execution.
+
+  Run `make test` to put/get a toy object.
+
 ## Related repo
 
 Client Library [ecRedis](https://github.com/mason-leap-lab/infinicache/tree/master/client)  

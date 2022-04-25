@@ -252,6 +252,10 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		Extension:    extension,
 	}
 
+	if !session.Input.IsWaitForCOSDisabled() {
+		ret.Wait()
+	}
+
 	t2 := time.Now()
 	Server.AddResponses(response, client)
 	if err := response.Flush(); err != nil {

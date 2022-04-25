@@ -29,6 +29,11 @@ var (
 	ErrOOStorage = errors.New("out of storage")
 )
 
+type StorageSignal interface {
+	// Flags flags of signal to customize behavior.
+	Flags() uint32
+}
+
 type StorageHelper interface {
 	get(string) (*types.Chunk, bool)
 	getWithOption(string, *types.OpWrapper) (*types.Chunk, *types.OpRet)

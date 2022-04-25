@@ -90,7 +90,6 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	}
 	fmt.Println(name, "\n", result)
 	wg.Done()
-	return
 }
 
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
@@ -127,7 +126,6 @@ func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	}
 	fmt.Println(name, "\n", result)
 	wg.Done()
-	return
 }
 
 func createFunction(name string, svc *lambda.Lambda) {

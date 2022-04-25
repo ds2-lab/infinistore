@@ -13,3 +13,5 @@ evaluation/data
 log
 *.clog
 evaluation/bin
+bin
+.vscode
