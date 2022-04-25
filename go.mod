@@ -22,8 +22,9 @@ require (
 	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d
 	github.com/nsf/termbox-go v1.1.1 // indirect
-	github.com/onsi/ginkgo v1.16.2
-	github.com/onsi/gomega v1.12.0
+	github.com/onsi/ginkgo v1.16.4
+	github.com/onsi/gomega v1.16.0
+	github.com/wangaoone/redbench v0.0.0-20211025005852-02403613bfc5 // indirect
 	github.com/zhangjyr/hashmap v1.0.2
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 )

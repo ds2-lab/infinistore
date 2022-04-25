@@ -144,10 +144,10 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	}
 
 	s.setSafe.Wait()
-	// s.log.Debug("ready to set key %v", key)
-	// Lock lineage, ensure operation get processed in the term.
-	s.lineageMu.Lock()
-	defer s.lineageMu.Unlock()
+	// Commented by Tianium: No lock required any more, chunk.Term is assigned initially, and decided after persisted.
+	// // Lock lineage, ensure operation get processed in the term.
+	// s.lineageMu.Lock()
+	// defer s.lineageMu.Unlock()
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
@@ -210,9 +210,10 @@ func (s *LineageStorage) Del(key string, reason string) *types.OpRet {
 
 	s.setSafe.Wait()
 
-	// Lock lineage
-	s.lineageMu.Lock()
-	defer s.lineageMu.Unlock()
+	// Commented by Tianium: No lock required any more, chunk.Term is assigned initially, and decided after persisted.
+	// // Lock lineage
+	// s.lineageMu.Lock()
+	// defer s.lineageMu.Unlock()
 
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
 	return s.helper.delWithOption(chunk, reason, nil)
@@ -321,18 +322,24 @@ func (s *LineageStorage) StartTracker() {
 	s.log.Error("You should not have seen this error for here is unreachable.")
 }
 
-func (s *LineageStorage) resetDelay(reset bool) {
+func (s *LineageStorage) resetDelay(stopped bool) {
 	if s.delayed == nil {
 		s.delayed = time.NewTimer(MaximumCommitDelay)
 		return
 	}
 
-	if !s.delayed.Stop() {
-		<-s.delayed.C
-		s.delayed.Reset(MaximumCommitDelay) // Extend timer if timeout is not triggered.
-	} else if reset {
-		s.delayed.Reset(MaximumCommitDelay) // Restart timer if reset is true.
-	} // else avoid extending timer if timeout triggered ourside.
+	if stopped || s.delayed.Stop() {
+		s.delayed.Reset(MaximumCommitDelay) // Extend timer if timer is stopped or being stopped here.
+	} // else avoid extending timer if timeout triggered outside, the routine that stops the timer will extend it.
+}
+
+func (s *LineageStorage) stopTimer(timer *time.Timer) {
+	if timer != nil && !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 func (s *LineageStorage) generatePersistSignal(timer *time.Timer, input <-chan StorageSignal) {
@@ -352,9 +359,15 @@ func (s *LineageStorage) generatePersistSignal(timer *time.Timer, input <-chan S
 }
 
 func (s *LineageStorage) onPersisted(persisted *types.OpWrapper) {
+	// No lock required, onPersisted and doCommitTerm will not be called concurrently.
+	// Noted: the chunk.Term is initialized with a proper value that the fixing here will conflict with recovery process.
+
 	// The appended lineage may has newer term than the chunk term if StorageFlagForceCommit is enabled.
-	// TODO: Fix the term of chunk if possible. However, we really don't use chunk.Term for anything.
 	s.lineage.Ops = append(s.lineage.Ops, persisted.LineageOp)
+	// Fix term
+	if persisted.Chunk != nil {
+		persisted.Chunk.Term = s.lineage.Term + 1
+	}
 
 	// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
 	if !s.getSafe.IsWaiting() {
@@ -375,10 +388,7 @@ func (s *LineageStorage) onSignalTracker(signal StorageSignal) bool {
 	switch option := signal.(type) {
 	case *types.CommitOption:
 		// Stop timer (if not stopped) before commit.
-		timer := s.delayed
-		if timer != nil && !timer.Stop() {
-			<-timer.C
-		}
+		s.stopTimer(s.delayed)
 		return s.doCommit(option)
 	default:
 		return s.PersistentStorage.onSignalTracker(signal)
@@ -391,7 +401,7 @@ func (s *LineageStorage) commit(option *types.CommitOption) (*types.CommitOption
 	s.signal(option)
 	option = (<-s.commited).(*types.CommitOption)
 
-	// Reset timer after committed.
+	// Reset timer after committed, the timer must have been stopped before.
 	s.resetDelay(true)
 
 	// Flag checked
@@ -424,9 +434,7 @@ func (s *LineageStorage) Commit() (*types.CommitOption, error) {
 func (s *LineageStorage) StopTracker() error {
 	err := s.PersistentStorage.StopTracker()
 	if err == nil {
-		if !s.delayed.Stop() {
-			<-s.delayed.C
-		}
+		s.stopTimer(s.delayed)
 		s.delayed = nil
 		s.lsSignalTracker = nil
 		s.commited = nil

@@ -127,6 +127,7 @@ type OpWrapper struct {
 	LineageOp
 	*OpRet
 	Body      []byte // For safety of persistence of the SET operation in the case like DEL after SET.
+	Chunk     *Chunk
 	OpIdx     int
 	Persisted bool // Indicate the operation has been persisted.
 	Accessed  bool // Indicate the access time should not be changed.
