@@ -33,6 +33,10 @@ func (i *InputEvent) IsBackingOnly() bool {
 	return (i.Flags & FLAG_BACKING_ONLY) > 0
 }
 
+func (i *InputEvent) IsWaitForCOSDisabled() bool {
+	return (i.Flags & FLAG_DISABLE_WAIT_FOR_COS) > 0
+}
+
 type Status struct {
 	Capacity  uint64 `json:"cap"`
 	Mem       uint64 `json:"mem"`
@@ -84,16 +88,21 @@ const (
 	FLAG_ENABLE_WARMUP = 0x0001
 	// FLAG_FIXED_INTERVAL_WARMUP Warming up with fixed interval regardless workload.
 	FLAG_FIXED_INTERVAL_WARMUP = 0x0002
+
 	// FLAG_ENABLE_REPLICA Enable replication.
 	FLAG_ENABLE_REPLICA = 0x0010
 	// FLAG_WARMUP_REPLICA Replication will be triggered on warming up.
 	FLAG_WARMUP_REPLICA = 0x0020
+
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
 	// FLAG_DISABLE_RECOVERY Disable recovery on reclaimation.
 	FLAG_DISABLE_RECOVERY = 0x0200
+
 	// FLAG_BACKING_ONLY Disable recovery for main repository
 	FLAG_BACKING_ONLY = 0x1000
+	// FLAG_DISABLE_WAIT_FOR_COS Disable waiting for COS on PUT chunks.
+	FLAG_DISABLE_WAIT_FOR_COS = 0x2000
 
 	// PONG_FOR_DATA Pong for data link
 	PONG_FOR_DATA = int64(0x0000)

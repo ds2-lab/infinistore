@@ -69,11 +69,24 @@ func (meta *LineageMeta) ServingKey() string {
 }
 
 type Lineage interface {
+	// Validate validates the lineage, it will call the IsConsistent to check if the lineage is consistent.
+	Validate(*LineageMeta) (bool, error)
+
+	// IsConsistent checks if the lineage is consistent.
 	IsConsistent(*LineageMeta) (bool, error)
+
+	// ClearBackup clears the backup data.
 	ClearBackup()
+
+	// Commit commits the lineage to the COS.
 	Commit() (*CommitOption, error)
+
+	// Recover recovers data from the COS by the given lineage.
 	Recover(*LineageMeta) (bool, <-chan error)
-	Status() LineageStatus
+
+	// Status returns the status of the lineage.
+	// Parameter short: returns simplified status if passes true.
+	Status(bool) LineageStatus
 }
 
 type LineageTerm struct {
@@ -121,10 +134,15 @@ type OpWrapper struct {
 }
 
 type CommitOption struct {
-	Full          bool
-	Snapshotted   bool
-	BytesUploaded uint64
-	Checked       bool
+	Full               bool
+	Snapshotted        bool
+	BytesUploaded      uint64
+	Checked            bool
+	StorageSignalFlags uint32
+}
+
+func (opts *CommitOption) Flags() uint32 {
+	return opts.StorageSignalFlags
 }
 
 type LineageStatus []*protocol.Meta
