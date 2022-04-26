@@ -129,6 +129,7 @@ func (s *PersistentStorage) setWithOption(key string, chunk *types.Chunk, opt *t
 				Accessed: chunk.Accessed,
 			},
 			OpRet: types.OpDelayedSuccess(),
+			Chunk: chunk,
 			Body:  chunk.Body,
 		}
 		if chunk.BuffIdx > 0 {
@@ -240,6 +241,7 @@ func (s *PersistentStorage) delWithOption(chunk *types.Chunk, reason string, opt
 				Bucket: chunk.Bucket,
 			},
 			OpRet: types.OpDelayedSuccess(),
+			Chunk: chunk,
 		}
 		s.chanOps <- op
 		return op.OpRet
@@ -282,6 +284,7 @@ func (s *PersistentStorage) StartTracker() {
 
 	// This is essential to minimize download memory consumption.
 	bufferProvider := mys3.NewBufferedReadSeekerWriteToPool(0)
+
 	// Initialize s3 uploader
 	smallUploader := s3manager.NewUploader(types.AWSSession(), func(u *s3manager.Uploader) {
 		u.Concurrency = 1
@@ -291,12 +294,29 @@ func (s *PersistentStorage) StartTracker() {
 		u.Concurrency = types.UploadConcurrency
 		u.BufferProvider = bufferProvider
 	})
+
+	// Initialize result collector of parallel uploads
 	attemps := 3
 	persistedOps := make([]*types.OpWrapper, 0, 10)
 	persisted := 0
+	collectPersisted := func(op *types.OpWrapper) {
+		// Fill in the allocated slot.
+		persistedOps[op.OpIdx] = op
+		// Check persisted yet has not been processed operations.
+		for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
+			persistedOp := persistedOps[persisted]
+			// Abandon failed uploads.
+			if persistedOp.OpRet.Error() == nil {
+				s.persistHelper.onPersisted(persistedOp)
+			}
+		}
+	}
+
 	// Token is used as concurrency throttler as well as to accept upload result and keep total ordering.
 	freeToken := types.UploadConcurrency
 	token := make(chan *types.OpWrapper, freeToken)
+
+	// Signal seen but not processed until all opertions are persisted.
 	var delayedSignal StorageSignal
 
 	var trackDuration time.Duration
@@ -311,7 +331,7 @@ func (s *PersistentStorage) StartTracker() {
 			// }
 
 			// Count duration
-			if persisted == len(persistedOps) {
+			if trackStart == (time.Time{}) {
 				trackStart = time.Now()
 			}
 
@@ -324,20 +344,12 @@ func (s *PersistentStorage) StartTracker() {
 			// Try to get token to continue, if a previously operation persisted, handle that first.
 			persistedOp := <-token
 			if persistedOp != nil {
-				// Accept result
-				persistedOps[persistedOp.OpIdx] = persistedOp
-				for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
-					persistedOp = persistedOps[persisted]
-					if persistedOp.OpRet.Wait() == nil {
-						s.persistHelper.onPersisted(persistedOp)
-					}
-				}
+				collectPersisted(persistedOp)
 			}
 
 			s.log.Debug("Tracking incoming op: %v", op.LineageOp)
-
 			op.OpIdx = len(persistedOps)
-			persistedOps = append(persistedOps, nil)
+			persistedOps = append(persistedOps, nil) // Expand the array and reserve a slot.
 
 			// Upload to s3
 			var failure error
@@ -386,45 +398,39 @@ func (s *PersistentStorage) StartTracker() {
 		case persistedOp := <-token:
 			// A operation has been persisted.
 			if persistedOp != nil {
-				// Fill in the allocated slot.
-				persistedOps[persistedOp.OpIdx] = persistedOp
-
-				// Check persisted yet has not been processed operations.
-				for ; persisted < len(persistedOps) && persistedOps[persisted] != nil; persisted++ {
-					persistedOp = persistedOps[persisted]
-					if persistedOp.OpRet.IsDone() {
-						s.persistHelper.onPersisted(persistedOp)
-					} else {
-						break
-					}
-				}
+				collectPersisted(persistedOp)
 			}
 			// Refill freeToken
 			freeToken++
-			// All persisted?
-			if persisted == len(persistedOps) {
-				// Count duration
-				trackDuration += time.Since(trackStart)
-
-				// Signal tracker if commit initiated.
-				if delayedSignal != nil {
-					s.persistHelper.signal(delayedSignal)
-					delayedSignal = nil
-				}
+			// Got enough persisted?
+			if delayedSignal != nil && persisted == len(persistedOps) {
+				// Retry signal
+				s.persistHelper.signal(delayedSignal)
+				delayedSignal = nil
 			}
-		// The tracker will only be signaled after tracked all existing operations.
 		case signal := <-s.persistHelper.getSignalTracker():
-			if len(s.chanOps) > 0 && signal.Flags()&StorageSignalFlagForceCommit == 0 {
+			// The tracker will only process after tracked all existing operations.
+			// If StorageSignalFlagForceCommit is set, it will be processed immediately.
+			forceCommit := signal.Flags()&StorageSignalFlagForceCommit > 0
+			if len(s.chanOps) > 0 && !forceCommit {
 				// We wait for chanOps get drained.
 				s.log.Debug("Found more ops to be persisted, pass and wait for resignal.")
 				s.persistHelper.signal(signal)
-			} else if persisted < len(persistedOps) {
+			} else if persisted < len(persistedOps) && !forceCommit {
 				// Wait for being persisted and signalTracker get refilled.
-				s.log.Debug("Found more ops to be persisted and persisting, pass and wait for resignal.")
+				s.log.Debug("Found ops are persisting, pass and wait for resignal.")
 				delayedSignal = signal
 			} else {
-				// All operations persisted. Execute signal action
-				s.log.Debug("All persisted, notify who may interest.")
+				if forceCommit {
+					s.log.Debug("Force commit after delay, notify who may interest.")
+				} else {
+					// All operations persisted. Execute signal action
+					s.log.Debug("All persisted, notify who may interest.")
+				}
+				// Count track duration and invalid trackStart
+				trackDuration += time.Since(trackStart)
+				trackStart = time.Time{}
+				// Notify subclasses
 				if s.persistHelper.onSignalTracker(signal) {
 					// Clean up and stop.
 					bufferProvider.Close()

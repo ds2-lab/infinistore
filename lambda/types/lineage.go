@@ -16,6 +16,25 @@ const (
 	LineageMetaTypeDelegate
 )
 
+type LineageValidationResult int
+
+const (
+	LineageValidationInconsistent LineageValidationResult = iota
+	LineageValidationConsistent
+	LineageValidationConsistentWithHistoryTerm
+)
+
+func LineageValidationResultFromConsistent(consistent bool) LineageValidationResult {
+	if consistent {
+		return LineageValidationConsistent
+	}
+	return LineageValidationInconsistent
+}
+
+func (ret LineageValidationResult) IsConsistent() bool {
+	return ret > LineageValidationInconsistent
+}
+
 func (t LineageMetaType) String() string {
 	switch t {
 	case LineageMetaTypeMain:
@@ -70,7 +89,7 @@ func (meta *LineageMeta) ServingKey() string {
 
 type Lineage interface {
 	// Validate validates the lineage, it will call the IsConsistent to check if the lineage is consistent.
-	Validate(*LineageMeta) (bool, error)
+	Validate(*LineageMeta) (LineageValidationResult, error)
 
 	// IsConsistent checks if the lineage is consistent.
 	IsConsistent(*LineageMeta) (bool, error)
@@ -127,6 +146,7 @@ type OpWrapper struct {
 	LineageOp
 	*OpRet
 	Body      []byte // For safety of persistence of the SET operation in the case like DEL after SET.
+	Chunk     *Chunk
 	OpIdx     int
 	Persisted bool // Indicate the operation has been persisted.
 	Accessed  bool // Indicate the access time should not be changed.
@@ -162,6 +182,22 @@ func (s LineageStatus) ProtocolStatus() protocol.Status {
 			metas[i] = *s[i]
 		}
 		return protocol.Status{Metas: metas}
+	}
+}
+
+func (s LineageStatus) ShortStatus() *protocol.ShortMeta {
+	// For efficiency, we hard code usual cases: len 1 and len 2.
+	switch len(s) {
+	case 0:
+		return nil
+	default:
+		return &protocol.ShortMeta{
+			Id:       s[0].Id,
+			Term:     s[0].Term,
+			Updates:  s[0].Updates,
+			DiffRank: s[0].DiffRank,
+			Hash:     s[0].Hash,
+		}
 	}
 }
 

@@ -25,7 +25,7 @@ var (
 	errPongTimeout = errors.New("pong timeout")
 )
 
-type pong func(*worker.Link, int64) error
+type pong func(*worker.Link, int64, []byte) error
 
 type fail func(*worker.Link, error)
 
@@ -68,12 +68,12 @@ func (p *PongHandler) Issue(retry bool) bool {
 
 // Send Send ack(pong) on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
 func (p *PongHandler) Send() error {
-	return p.sendImpl(protocol.PONG_FOR_CTRL, nil, false)
+	return p.sendImpl(protocol.PONG_FOR_CTRL, nil, nil, false)
 }
 
 // Send Send ack(pong) with flags on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
-func (p *PongHandler) SendWithFlags(flags int64) error {
-	return p.sendImpl(flags, nil, false)
+func (p *PongHandler) SendWithFlags(flags int64, paylaod []byte) error {
+	return p.sendImpl(flags, paylaod, nil, false)
 }
 
 // Send Send heartbeat on specified link.
@@ -83,7 +83,7 @@ func (p *PongHandler) SendToLink(link *worker.Link, flags int64) error {
 	// } else {
 	// 	return p.sendImpl(protocol.PONG_FOR_DATA, link, false)
 	// }
-	return p.sendImpl(flags, link, false)
+	return p.sendImpl(flags, nil, link, false)
 }
 
 // Cancel Flag expected request is received and cancel pong retrial.
@@ -104,7 +104,7 @@ func (p *PongHandler) IsCancelled() bool {
 	return p.requested.IsResolved()
 }
 
-func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) error {
+func (p *PongHandler) sendImpl(flags int64, payload []byte, link *worker.Link, retrial bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -135,7 +135,7 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 
 	// Do send
 	pongLog(flags, link)
-	if err := p.pong(link, flags); err != nil {
+	if err := p.pong(link, flags, payload); err != nil {
 		log.Error("Error on PONG flush: %v", err)
 		return err
 	}
@@ -153,7 +153,7 @@ func (p *PongHandler) sendImpl(flags int64, link *worker.Link, retrial bool) err
 		go func() {
 			if p.requested.Timeout() != nil {
 				log.Warn("PONG timeout, retry")
-				p.sendImpl(flags, link, true)
+				p.sendImpl(flags, payload, link, true)
 			}
 		}()
 	} else {
@@ -187,7 +187,7 @@ func pongLog(flags int64, link *worker.Link) {
 	log.Debug("PONG%s", claim)
 }
 
-func sendPong(link *worker.Link, flags int64) error {
+func sendPong(link *worker.Link, flags int64, payload []byte) error {
 	store.Server.AddResponsesWithPreparer(protocol.CMD_PONG, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
 		rsp.Attempts = 1
 		// CMD
@@ -199,6 +199,11 @@ func sendPong(link *worker.Link, flags int64) error {
 		w.AppendBulkString(lambdaLife.GetSession().Sid)
 		// Flags
 		w.AppendInt(flags)
+		// Piggyback payload
+		if flags&protocol.PONG_WITH_PAYLOAD > 0 {
+			// Payload
+			w.AppendBulk(payload)
+		}
 	}, link)
 	// return rsp.Flush()
 	return nil
