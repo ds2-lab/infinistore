@@ -11,6 +11,7 @@ This amounted to about 900 examples each for 8,937 total images we and resized e
 256x256x3 (196,608 bytes).
 """
 from __future__ import annotations
+from threading import Lock
 
 import random
 import time
@@ -28,6 +29,7 @@ import torchvision
 from PIL import Image
 from torch.utils.data import Dataset
 from torch.utils.data._utils import collate
+from torchvision.transforms import functional as F
 
 import go_bindings
 import logging_utils
@@ -47,6 +49,8 @@ class DatasetDisk(Dataset):
         filenames.extend(list(dataset_path.rglob("*.jpeg")))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
+        self.validation = self.filepaths[-100:]
+        self.filepaths = self.filepaths[:-100]
         self.label_idx = label_idx
 
     def __len__(self):
@@ -54,8 +58,9 @@ class DatasetDisk(Dataset):
 
     def __getitem__(self, idx: int):
         label = self.filepaths[idx].stem.split("_")[self.label_idx]
-        img = torchvision.io.read_image(str(self.filepaths[idx]))
-        return img.to(torch.float32), int(label)
+        pil_img = Image.open(self.filepaths[idx])
+        img_tensor = F.pil_to_tensor(pil_img)
+        return img_tensor, int(label)
 
 
 class DatasetS3(Dataset):
@@ -73,10 +78,6 @@ class DatasetS3(Dataset):
                 filenames.append(Path(content["Key"]))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
-        if channels:
-            self.transform_array = self.transform_image_channels
-        else:
-            self.transform_array = self.transform_image_no_chan
 
     def __len__(self):
         return len(self.filepaths)
@@ -86,18 +87,9 @@ class DatasetS3(Dataset):
         s3_png = self.s3_client.get_object(Bucket=self.bucket_name, Key=str(self.filepaths[idx]))
         img_bytes = s3_png["Body"].read()
 
-        img_tensor = self.transform_array(img_bytes)
-        return img_tensor.to(torch.float32), int(label)
-
-    @staticmethod
-    def transform_image_no_chan(img_bytes: bytes) -> torch.Tensor:
-        img = np.array(Image.open(BytesIO(img_bytes)))
-        return torch.from_numpy(img)
-
-    @staticmethod
-    def transform_image_channels(img_bytes: bytes) -> torch.Tensor:
-        img = np.array(Image.open(BytesIO(img_bytes))).transpose(2, 0, 1)  # Need channels first
-        return torch.from_numpy(img)
+        pil_img = Image.open(BytesIO(img_bytes))
+        img_tensor = F.pil_to_tensor(pil_img)
+        return img_tensor, int(label)
 
 
 class BaseDataLoader(ABC):
@@ -120,6 +112,15 @@ class BaseDataLoader(ABC):
         self.load_times = []
         self.total_samples = 0
         self.dataset_name = dataset_name
+        self.lock = Lock()
+        if img_dims[0] == 1:
+            self.transform = torchvision.transforms.Compose([
+                torchvision.transforms.Normalize((0.485), (0.229)),
+            ])
+        else:
+            self.transform = torchvision.transforms.Compose([
+                torchvision.transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+            ])
 
     def __iter__(self):
         self.index = 0
@@ -130,12 +131,18 @@ class BaseDataLoader(ABC):
         pass
 
     def get(self):
-        item = self.dataset[self.index]
-        self.index += 1
+        curr_idx = self.increment_get()
+        item = self.dataset[curr_idx]
         return item
 
+    def increment_get(self) -> int:
+        with self.lock:
+            old_idx = self.index
+            self.index += 1
+            return old_idx
+
     def __len__(self):
-        return len(self.dataset) // self.batch_size
+        return len(self.dataset) // self.batch_size + 1
 
 
 class DiskLoader(BaseDataLoader):
@@ -155,13 +162,14 @@ class DiskLoader(BaseDataLoader):
             raise StopIteration
         batch_size = min(len(self.dataset) - self.index, self.batch_size)
         start_time = time.time()
-        data = self.collate_fn([self.get() for _ in range(batch_size)])
+        images, labels = self.collate_fn([self.get() for _ in range(batch_size)])
+        images = self.transform(images.to(torch.float32).div(255))
 
         end_time = time.time()
         time_taken = end_time - start_time
         self.total_samples += batch_size
         self.load_times.append(time_taken)
-        return data
+        return images, labels
 
     def __str__(self):
         return "DiskDataset"
@@ -187,13 +195,13 @@ class S3Loader(BaseDataLoader):
 
         results = self.get_batch_threaded(batch_size)
         images, labels = self.collate_fn(results)
-        data = (images, labels)
+        images = self.transform(images.to(torch.float32).div(255))
 
         end_time = time.time()
         time_taken = end_time - start_time
         self.total_samples += batch_size
         self.load_times.append(time_taken)
-        return data
+        return images, labels
 
     def __str__(self):
         return "S3Dataset"

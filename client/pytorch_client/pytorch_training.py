@@ -2,9 +2,11 @@
 Deep learning training cycle.
 """
 from __future__ import annotations
+import random
 
 import time
-from ctypes import Union
+from typing import Union
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -16,9 +18,15 @@ import logging_utils
 
 LOGGER = logging_utils.initialize_logger()
 
+SEED = 1234
 NUM_EPOCHS = 10
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
+
+random.seed(SEED)
+torch.manual_seed(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 
 
 def training_cycle(
@@ -101,7 +109,7 @@ def run_training_get_results(
 
 
 def initialize_model(
-    model_type: str, num_channels: int
+    model_type: str, num_channels: int, device: str = "cuda:0"
 ) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
     if model_type == "resnet":
         print("Initializing Resnet50 model")
@@ -116,7 +124,7 @@ def initialize_model(
         print("Initializing BasicCNN model")
         model = cnn_models.BasicCNN(num_channels)
 
-    model = model.to(DEVICE)
+    model = model.to(device)
     model.train()
     loss_fn = nn.CrossEntropyLoss()
     optim_func = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -172,7 +180,7 @@ if __name__ == "__main__":
 
     #  IMAGENET ####################################################
     imagenet_dataset_disk = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/imagenet_images", label_idx=0
+        "/home/ubuntu/imagenet_png", label_idx=0
     )
     imagenet_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "imagenet-infinicache-png", label_idx=0, channels=True
