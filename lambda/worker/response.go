@@ -240,11 +240,13 @@ func (r *BadResponse) flush(writer resp.ResponseWriter) error {
 type ObjectResponse struct {
 	BaseResponse
 
-	ReqId     string
-	ChunkId   string
-	Val       string
-	Recovered int64
-	Extension time.Duration
+	ReqId        string
+	ChunkId      string
+	Val          string
+	Recovered    int64
+	Extension    time.Duration
+	PiggyFlags   int64
+	PiggyPayload []byte
 }
 
 func (r *ObjectResponse) String() string {
@@ -289,6 +291,10 @@ func (r *ObjectResponse) flush(writer resp.ResponseWriter) error {
 
 	if r.Extension > time.Duration(0) {
 		writer.AppendInt(lifetime.GetSession().Timeout.GetEstimateDue(r.Extension).UnixNano())
+		writer.AppendInt(r.PiggyFlags)
+		if r.PiggyFlags&protocol.PONG_WITH_PAYLOAD > 0 {
+			writer.AppendBulk(r.PiggyPayload)
+		}
 		if err = writer.Flush(); err != nil {
 			// link.acked.Resolve()
 			return err
