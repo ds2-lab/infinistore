@@ -177,9 +177,10 @@ type Instance struct {
 	lambdaCanceller context.CancelFunc
 
 	// Connection management
-	lm       *LinkManager
-	sessions *hashmap.HashMap
-	due      int64
+	lm              *LinkManager
+	sessions        *hashmap.HashMap
+	due             int64
+	reconcilingConn *Connection
 
 	// Backup fields
 	backups          Backups
@@ -821,8 +822,14 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			ctrl := ins.lm.GetControl() // Make a reference copy of ctrlLink to avoid it being changed.
 			if ctrl != nil {
 				if opt.Command != nil && opt.Command.Name() == protocol.CMD_PING {
+					// Extra ping request for time critical immediate ping.
 					ins.log.Debug("Ping with payload")
 					ctrl.SendPing(opt.Command.(*types.Control).Payload) // Ignore err, see comments below.
+				} else if ins.reconcilingConn == ctrl {
+					// Confirm reconciling.
+					payload, _ := ins.Meta.ToPayload(ins.id)
+					ctrl.SendPing(payload) // Ignore err, see comments below.
+					ins.reconcilingConn = nil
 				} else {
 					ctrl.SendPing(DefaultPingPayload) // Ignore err, see comments below.
 				}
@@ -1589,4 +1596,10 @@ func (ins *Instance) getRerouteThreshold() uint64 {
 		ins.rerouteThreshold = ins.Meta.EffectiveCapacity() / uint64(ins.backups.Len()) / 2
 	}
 	return ins.rerouteThreshold
+}
+
+func (ins *Instance) reconcileStatus(conn *Connection, meta *protocol.ShortMeta) {
+	ins.log.Debug("Reconciling meta: %v", meta)
+	ins.Meta.Reconcile(meta)
+	ins.reconcilingConn = conn
 }

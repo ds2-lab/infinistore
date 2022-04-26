@@ -239,17 +239,19 @@ func (s *LineageStorage) ConfigS3(bucket string, prefix string) {
 	s.delaySet()
 }
 
-func (s *LineageStorage) Validate(meta *types.LineageMeta) (bool, error) {
+func (s *LineageStorage) Validate(meta *types.LineageMeta) (types.LineageValidationResult, error) {
 	consistent, err := s.IsConsistent(meta)
 	if meta.Type != types.LineageMetaTypeMain {
-		return consistent, err
+		return types.LineageValidationResultFromConsistent(consistent), err
 	}
 
 	if consistent {
-		// No further check required, confirm all terms.
 		if s.unconfirmedEnd > s.unconfirmedStart {
+			// We will update unconfirmedStart to unconfirmedEnd now.
+			// Using a loop start s.unconfirmedEnd - 1 in case new term just committed.
 			s.lineageMu.Lock()
 			for i := s.unconfirmedEnd - 1; i >= s.unconfirmedStart; i-- {
+				// The validated term must be one of the unconfirmed terms.
 				if meta.Term == s.unconfirmed[i].Term {
 					s.unconfirmedStart = i + 1
 					break
@@ -257,8 +259,9 @@ func (s *LineageStorage) Validate(meta *types.LineageMeta) (bool, error) {
 			}
 			s.lineageMu.Unlock()
 		}
-		return true, nil
+		return types.LineageValidationConsistent, nil
 	} else if err != nil {
+		// Check if the term is consistent with an unconfirmed history term.
 		s.lineageMu.Lock()
 		defer s.lineageMu.Unlock()
 
@@ -266,17 +269,17 @@ func (s *LineageStorage) Validate(meta *types.LineageMeta) (bool, error) {
 			if meta.Term < s.unconfirmed[i].Term {
 				continue
 			} else if s.isConsistent(meta, s.unconfirmed[i]) {
-				// Meta is a legacy meta, pass.
+				// Meta is a legacy meta, confirm it and pass.
 				s.unconfirmedStart = i + 1
-				return true, nil
+				return types.LineageValidationConsistentWithHistoryTerm, nil
 			} else {
+				// Hash not match or the validated term is not found in unconfirmed terms. stop.
 				break
 			}
 		}
-		return false, err
-	} else {
-		return false, nil
 	}
+
+	return types.LineageValidationInconsistent, err
 }
 
 func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {

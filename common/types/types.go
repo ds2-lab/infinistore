@@ -74,6 +74,23 @@ type Meta struct {
 	Tip string `json:"tip"`
 }
 
+type ShortMeta struct {
+	// Lambda ID
+	Id uint64 `json:"id"`
+
+	// Sequence of the last confirmed log. Logs store by sequence.
+	Term uint64 `json:"term"`
+
+	// Total transmission size for restoring all confirmed logs.
+	Updates uint64 `json:"updates"`
+
+	// Rank for lambda to decide if a fast recovery is required.
+	DiffRank float64 `json:"diffrank"`
+
+	// Hash of the last confirmed log.
+	Hash string `json:"hash"`
+}
+
 type OutputError struct {
 	Message string `json:"errorMessage"`
 	Type    string `json:"errorType"`
@@ -108,12 +125,18 @@ const (
 	PONG_FOR_DATA = int64(0x0000)
 	// PONG_FOR_CTRL Pong for ctrl link
 	PONG_FOR_CTRL = int64(0x0001)
+
 	// PONG_ON_INVOKING Pong issued on invoking
 	PONG_ON_INVOKING = int64(0x0010)
 	// PONG_RECOVERY Pong with parallel recovery requested
 	PONG_RECOVERY = int64(0x0020)
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
 	PONG_RECLAIMED = int64(0x0040)
+	// PONG_WITH_PAYLOAD Pong with piggyback payload.
+	PONG_WITH_PAYLOAD = int64(0x0080)
+
+	// PONG_RECONCILE Pong with reconcile meta included.
+	PONG_RECONCILE = int64(0x0100)
 
 	CMD_TEST        = "test"
 	CMD_ACK         = "ack"         // Control command

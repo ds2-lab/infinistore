@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
@@ -676,6 +677,18 @@ func (conn *Connection) pongHandler() {
 	}
 	conn.control = flags&protocol.PONG_FOR_CTRL > 0
 
+	var payload []byte
+	if flags&protocol.PONG_WITH_PAYLOAD > 0 {
+		reader, err := conn.r.StreamBulk()
+		if conn.closeIfError("Failed to read payload: %v.", err) {
+			return
+		}
+		payload, err = reader.ReadAll()
+		if conn.closeIfError("Failed to read payload: %v.", err) {
+			return
+		}
+	}
+
 	conn.log.Debug("PONG from lambda(%d,flag:%d).", storeId, flags)
 	instance := conn.instance
 	if instance == nil {
@@ -688,12 +701,20 @@ func (conn *Connection) pongHandler() {
 	}
 
 	validated, err := instance.TryFlagValidated(conn, sid, flags)
-	if err == nil || err == ErrNotCtrlLink || err == ErrInstanceValidated {
-		conn.log.Debug("PONG from lambda confirmed.")
-	} else {
+	if err != nil && err != ErrNotCtrlLink && err != ErrInstanceValidated {
 		conn.log.Warn("Discard rouge PONG(%v) for %d, current %v", conn, storeId, validated)
 		conn.Conn.Close() // Close connection normally, so lambda will close itself.
 		conn.Close()
+	}
+
+	conn.log.Debug("PONG from lambda confirmed.")
+	if flags&protocol.PONG_RECONCILE > 0 {
+		var shortMeta protocol.ShortMeta
+		if err := binary.Unmarshal(payload, &shortMeta); err != nil {
+			conn.log.Warn("Invalid meta on reconciling: %v", err)
+		} else {
+			instance.reconcileStatus(conn, &shortMeta)
+		}
 	}
 }
 

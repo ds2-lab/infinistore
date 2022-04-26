@@ -3,6 +3,7 @@ package lambdastore
 import (
 	"net/url"
 	"strconv"
+	"sync"
 	"sync/atomic"
 
 	"github.com/kelindar/binary"
@@ -59,6 +60,7 @@ type Meta struct {
 	// head ChuckMeta
 	// anchor *ChuckMeta
 	numChunks int32
+	mu        sync.RWMutex
 }
 
 func (m *Meta) ResetCapacity(capacity uint64, effective uint64) {
@@ -111,6 +113,9 @@ func (m *Meta) RemoveChunk(key string, sz int64) (num int, size uint64) {
 }
 
 func (m *Meta) FromProtocolMeta(meta *protocol.Meta) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if meta.Term < m.Term {
 		if meta.Term == 1 {
 			return false, ErrInstanceReclaimed
@@ -129,7 +134,24 @@ func (m *Meta) FromProtocolMeta(meta *protocol.Meta) (bool, error) {
 	return true, nil
 }
 
+func (m *Meta) Reconcile(meta *protocol.ShortMeta) {
+	if meta.Term <= m.Term {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Term = meta.Term
+	m.Updates = meta.Updates
+	m.DiffRank = meta.DiffRank
+	m.Hash = meta.Hash
+}
+
 func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	return &protocol.Meta{
 		Id:              id,
 		Term:            m.Term,
@@ -140,6 +162,10 @@ func (m *Meta) ToProtocolMeta(id uint64) *protocol.Meta {
 		SnapshotUpdates: m.SnapshotUpdates,
 		SnapshotSize:    m.SnapshotSize,
 	}
+}
+
+func (m *Meta) ToPayload(id uint64) ([]byte, error) {
+	return binary.Marshal(m.ToProtocolMeta(id))
 }
 
 func (m *Meta) ToBackupPayload(id uint64, key int, total int, maxChunkSize uint64) ([]byte, error) {
