@@ -441,8 +441,10 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 							waitForRecovery(chanErr)
 						}()
 					}
+				} else if meta.Id != Store.Id() {
+					log.Debug("Backup node(%d) consistent, skip.", meta.Id)
 				} else {
-					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
+					log.Debug("Term confirmed: %d", meta.Term)
 				}
 			}
 		}

@@ -8,6 +8,8 @@ import (
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
+
+	"github.com/kelindar/binary"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
@@ -21,6 +23,16 @@ import (
 var (
 	log = Log
 )
+
+func BuildPiggyback(response *worker.ObjectResponse) {
+	if Lineage != nil {
+		status := Lineage.Status(true)
+		if status != nil {
+			response.PiggyFlags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
+			response.PiggyPayload, _ = binary.Marshal(status.ShortStatus())
+		}
+	}
+}
 
 func TestHandler(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
@@ -141,6 +153,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			Recovered: recovered,
 			Extension: extension,
 		}
+		BuildPiggyback(response)
 
 		t2 := time.Now()
 		Server.AddResponses(response, client)
@@ -251,6 +264,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		ChunkId:      chunkId,
 		Extension:    extension,
 	}
+	BuildPiggyback(response)
 
 	if !session.Input.IsWaitForCOSDisabled() {
 		ret.Wait()
@@ -365,6 +379,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 		Recovered: 1,
 		Extension: extension,
 	}
+	BuildPiggyback(response)
 
 	t2 := time.Now()
 	Server.AddResponses(response, client)
@@ -422,6 +437,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 			ChunkId:      chunkId,
 			Extension:    extension,
 		}
+		BuildPiggyback(response)
 		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
 			log.Error("Error on del::flush(set key %s): %v", key, err)
