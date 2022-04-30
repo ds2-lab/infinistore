@@ -1115,6 +1115,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		} else {
 			ins.log.Debug("Got staled instance lineage: %v", &outputStatus)
 		}
+		// Reset reconciling request after lambda returned.
+		ins.reconcilingWorker = 0
 	}
 	return nil
 }
