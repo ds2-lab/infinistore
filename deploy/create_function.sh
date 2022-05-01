@@ -1,18 +1,29 @@
 #!/bin/bash
 
 BASE=`pwd`/`dirname $0`
-PREFIX="CacheNode"
+DEPLOY_PREFIX="CacheNode"
 KEY="lambda"
-cluster=400
-mem=1024
+DEPLOY_FROM=0
+DEPLOY_CLUSTER=400
+DEPLOY_TO=$((DEPLOY_CLUSTER-1))
+DEPLOY_MEM=1024
+ARG_PROMPT="timeout"
+EXPECTING_ARGS=1
 
 S3="mason-leap-lab.infinicache"
+EMPH="\033[1;33m"
+RESET="\033[0m"
 
-if [ "$2" != "" ] ; then
-  PREFIX="$2"
+# Parse arguments
+source $BASE/arg_parser.sh
+
+TIMEOUT=$1
+if [ -z "$TIMEOUT" ]; then
+  echo "No timeout specified, please specify a timeout in seconds."
+  exit 1
 fi
 
-echo "Creating Lambda deployments ${PREFIX}0 to ${PREFIX}$((cluster-1)) of $mem MB, $1s timeout..."
+echo -e "Creating Lambda "$EMPH"deployments"$RESET" ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} of $DEPLOY_MEM MB, ${TIMEOUT}s timeout..."
 read -p "Press any key to confirm, or ctrl-C to stop."
 
 cd $BASE/../lambda
@@ -24,5 +35,5 @@ echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Creating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
+go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -to=$cluster -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 rm $KEY*

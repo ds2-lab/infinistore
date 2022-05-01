@@ -1,6 +1,7 @@
 #!/bin/bash
 
-NATID=`aws ec2 describe-nat-gateways --filter 'Name=tag:Name,Values=nat-lambda' --filter 'Name=state,Values=available' | grep NatGatewayId | awk -F \" '{ print $4 }'`
+NAT_NAME="nat-lambda"
+NATID=`aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=$NAT_NAME" --filter 'Name=state,Values=available' | grep NatGatewayId | awk -F \" '{ print $4 }'`
 
 if [ "$NATID" == "" ]; then
   echo "No qualified nat gateway found."
