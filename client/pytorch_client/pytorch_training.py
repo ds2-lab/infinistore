@@ -148,7 +148,10 @@ if __name__ == "__main__":
     LOGGER.info("TRAINING STARTED")
 
     #  MNIST ####################################################
-    mnist_dataset_disk = infinicache_dataloaders.DatasetDisk("/home/ubuntu/mnist_png", label_idx=-1)
+    mnist_dataset_ebs = infinicache_dataloaders.DatasetDisk("/home/ubuntu/mnist_png", label_idx=-1)
+    mnist_dataset_efs = infinicache_dataloaders.DatasetDisk(
+        "/home/ubuntu/efs/mnist_png", label_idx=-1
+    )
     mnist_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "mnist-infinicache", label_idx=-1, channels=False
     )
@@ -159,16 +162,23 @@ if __name__ == "__main__":
     mnist_dataloader_cache = infinicache_dataloaders.InfiniCacheLoader(
         mnist_dataset_cache, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
     )
-    mnist_dataloader_disk = infinicache_dataloaders.DiskLoader(
-        mnist_dataset_disk, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
+    mnist_dataloader_ebs = infinicache_dataloaders.DiskLoader(
+        mnist_dataset_ebs, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
+    )
+    mnist_dataloader_efs = infinicache_dataloaders.DiskLoader(
+        mnist_dataset_efs, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
     )
     mnist_dataloader_s3 = infinicache_dataloaders.S3Loader(
         mnist_dataset_s3, dataset_name="mnist", img_dims=(1, 28, 28), batch_size=64
     )
 
     model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
-    print("Running training with the disk dataloader")
-    run_training_get_results(model, mnist_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
+    print("Running training with the EBS dataloader")
+    run_training_get_results(model, mnist_dataloader_ebs, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
+
+    model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
+    print("Running training with the EFS dataloader")
+    run_training_get_results(model, mnist_dataloader_efs, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
     model, loss_fn, optim_func = initialize_model("basic", num_channels=1)
     print("Running training with the cache dataloader")
@@ -179,8 +189,11 @@ if __name__ == "__main__":
     run_training_get_results(model, mnist_dataloader_s3, optim_func, loss_fn, NUM_EPOCHS, DEVICE)
 
     #  IMAGENET ####################################################
-    imagenet_dataset_disk = infinicache_dataloaders.DatasetDisk(
+    imagenet_dataset_ebs = infinicache_dataloaders.DatasetDisk(
         "/home/ubuntu/imagenet_png", label_idx=0
+    )
+    imagenet_dataset_efs = infinicache_dataloaders.DatasetDisk(
+        "/home/ubuntu/efs/imagenet_png", label_idx=0
     )
     imagenet_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "imagenet-infinicache-png", label_idx=0, channels=True
@@ -189,8 +202,11 @@ if __name__ == "__main__":
         "imagenet-infinicache-png", label_idx=0, channels=True
     )
 
-    imagenet_dataloader_disk = infinicache_dataloaders.DiskLoader(
-        imagenet_dataset_disk, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
+    imagenet_dataloader_ebs = infinicache_dataloaders.DiskLoader(
+        imagenet_dataset_ebs, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
+    )
+    imagenet_dataloader_efs = infinicache_dataloaders.DiskLoader(
+        imagenet_dataset_efs, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
     )
     imagenet_dataloader_s3 = infinicache_dataloaders.S3Loader(
         imagenet_dataset_s3, dataset_name="imagenet", img_dims=(3, 256, 256), batch_size=64
@@ -200,9 +216,15 @@ if __name__ == "__main__":
     )
 
     model, loss_fn, optim_func = initialize_model("basic", 3)
-    print("Running training with the Disk dataloader")
+    print("Running training with the EBS dataloader")
     run_training_get_results(
-        model, imagenet_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+        model, imagenet_dataloader_ebs, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the EFS dataloader")
+    run_training_get_results(
+        model, imagenet_dataloader_efs, optim_func, loss_fn, NUM_EPOCHS, DEVICE
     )
 
     model, loss_fn, optim_func = initialize_model("basic", 3)
@@ -218,8 +240,11 @@ if __name__ == "__main__":
     )
 
     #  CIFAR ####################################################
-    cifar_dataset_disk = infinicache_dataloaders.DatasetDisk(
+    cifar_dataset_ebs = infinicache_dataloaders.DatasetDisk(
         "/home/ubuntu/cifar_images", label_idx=0
+    )
+    cifar_dataset_efs = infinicache_dataloaders.DatasetDisk(
+        "/home/ubuntu/efs/cifar_images", label_idx=0
     )
     cifar_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "cifar10-infinicache", label_idx=0, channels=True
@@ -228,8 +253,11 @@ if __name__ == "__main__":
         "cifar10-infinicache", label_idx=0, channels=True
     )
 
-    cifar_dataloader_disk = infinicache_dataloaders.DiskLoader(
-        cifar_dataset_disk, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
+    cifar_dataloader_ebs = infinicache_dataloaders.DiskLoader(
+        cifar_dataset_ebs, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
+    )
+    cifar_dataloader_efs = infinicache_dataloaders.DiskLoader(
+        cifar_dataset_efs, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
     )
     cifar_dataloader_s3 = infinicache_dataloaders.S3Loader(
         cifar_dataset_s3, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
@@ -238,10 +266,16 @@ if __name__ == "__main__":
         cifar_dataset_cache, dataset_name="cifar", img_dims=(3, 32, 32), batch_size=64
     )
 
-    model, loss_fn, optim_func = initialize_model("resnet", 3)
-    print("Running training with the Disk dataloader")
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the EBS dataloader")
     run_training_get_results(
-        model, cifar_dataloader_disk, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+        model, cifar_dataloader_ebs, optim_func, loss_fn, NUM_EPOCHS, DEVICE
+    )
+
+    model, loss_fn, optim_func = initialize_model("basic", 3)
+    print("Running training with the EFS dataloader")
+    run_training_get_results(
+        model, cifar_dataloader_efs, optim_func, loss_fn, NUM_EPOCHS, DEVICE
     )
 
     model, loss_fn, optim_func = initialize_model("basic", 3)
