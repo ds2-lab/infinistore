@@ -33,6 +33,10 @@ func (i *InputEvent) IsBackingOnly() bool {
 	return (i.Flags & FLAG_BACKING_ONLY) > 0
 }
 
+func (i *InputEvent) IsWaitForCOSDisabled() bool {
+	return (i.Flags & FLAG_DISABLE_WAIT_FOR_COS) > 0
+}
+
 type Status struct {
 	Capacity  uint64 `json:"cap"`
 	Mem       uint64 `json:"mem"`
@@ -70,6 +74,23 @@ type Meta struct {
 	Tip string `json:"tip"`
 }
 
+type ShortMeta struct {
+	// Lambda ID
+	Id uint64 `json:"id"`
+
+	// Sequence of the last confirmed log. Logs store by sequence.
+	Term uint64 `json:"term"`
+
+	// Total transmission size for restoring all confirmed logs.
+	Updates uint64 `json:"updates"`
+
+	// Rank for lambda to decide if a fast recovery is required.
+	DiffRank float64 `json:"diffrank"`
+
+	// Hash of the last confirmed log.
+	Hash string `json:"hash"`
+}
+
 type OutputError struct {
 	Message string `json:"errorMessage"`
 	Type    string `json:"errorType"`
@@ -84,27 +105,38 @@ const (
 	FLAG_ENABLE_WARMUP = 0x0001
 	// FLAG_FIXED_INTERVAL_WARMUP Warming up with fixed interval regardless workload.
 	FLAG_FIXED_INTERVAL_WARMUP = 0x0002
+
 	// FLAG_ENABLE_REPLICA Enable replication.
 	FLAG_ENABLE_REPLICA = 0x0010
 	// FLAG_WARMUP_REPLICA Replication will be triggered on warming up.
 	FLAG_WARMUP_REPLICA = 0x0020
+
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
 	// FLAG_DISABLE_RECOVERY Disable recovery on reclaimation.
 	FLAG_DISABLE_RECOVERY = 0x0200
+
 	// FLAG_BACKING_ONLY Disable recovery for main repository
 	FLAG_BACKING_ONLY = 0x1000
+	// FLAG_DISABLE_WAIT_FOR_COS Disable waiting for COS on PUT chunks.
+	FLAG_DISABLE_WAIT_FOR_COS = 0x2000
 
 	// PONG_FOR_DATA Pong for data link
 	PONG_FOR_DATA = int64(0x0000)
 	// PONG_FOR_CTRL Pong for ctrl link
 	PONG_FOR_CTRL = int64(0x0001)
+
 	// PONG_ON_INVOKING Pong issued on invoking
 	PONG_ON_INVOKING = int64(0x0010)
 	// PONG_RECOVERY Pong with parallel recovery requested
 	PONG_RECOVERY = int64(0x0020)
 	// PONG_RECLAIMED Pong with claiming the node has experienced reclaimation (backing mode only).
 	PONG_RECLAIMED = int64(0x0040)
+	// PONG_WITH_PAYLOAD Pong with piggyback payload.
+	PONG_WITH_PAYLOAD = int64(0x0080)
+
+	// PONG_RECONCILE Pong with reconcile meta included.
+	PONG_RECONCILE = int64(0x0100)
 
 	CMD_TEST        = "test"
 	CMD_ACK         = "ack"         // Control command

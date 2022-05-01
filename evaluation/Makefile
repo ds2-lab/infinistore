@@ -15,7 +15,7 @@ build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
-	GO111MODULE=off go build -o bin/redbench github.com/wangaoone/redbench/
+	go build -o bin/redbench github.com/wangaoone/redbench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &

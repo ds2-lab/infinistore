@@ -24,13 +24,13 @@ func newTestPongHandler(override pong) *TestPongHandler {
 	return handler
 }
 
-func succeedPong(link *worker.Link, flags int64) error {
+func succeedPong(link *worker.Link, flags int64, payload []byte) error {
 	return nil
 }
 
 func getTimeoutPong(handler *TestPongHandler, failure int) pong {
 	attempt := 0
-	return func(link *worker.Link, flags int64) error {
+	return func(link *worker.Link, flags int64, payload []byte) error {
 		fail := attempt < failure
 		attempt++
 		if !fail {

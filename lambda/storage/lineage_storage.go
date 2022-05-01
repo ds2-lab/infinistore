@@ -38,6 +38,7 @@ const (
 
 	LineageStorageOverhead    = StorageOverhead // Reuse StorageOverhead
 	BackupStoreageReservation = 0.1             // 1/N * 2, N = 20, backups per lambda.
+	MaximumCommitDelay        = 1 * time.Second // 1 second
 )
 
 var (
@@ -61,15 +62,20 @@ type LineageStorage struct {
 	*PersistentStorage
 
 	// Lineage
-	lineage   *types.LineageTerm // The lineage of current/recent term. The lineage is updated to recent term while recovering.
-	recovered *types.LineageTerm // Stores recovered lineage if it is not fully recovered, and will replace lineage on returning.
-	snapshot  *types.LineageTerm // The latest snapshot of the lineage.
-	diffrank  LineageDifferenceRank
-	getSafe   csync.WaitGroup
-	setSafe   csync.WaitGroup
-	safenote  uint32       // Flag what's going on
-	lineageMu sync.RWMutex // Mutex for lienage commit.
-	commited  chan interface{}
+	unconfirmed      []*types.LineageTerm // The terms that are not confirmed yet.
+	unconfirmedStart int                  // The start index of unconfirmed.
+	unconfirmedEnd   int                  // The end index of unconfirmed.
+	lineage          *types.LineageTerm   // The lineage of current/recent term. The lineage is updated to recent term while recovering.
+	recovered        *types.LineageTerm   // Stores recovered lineage if it is not fully recovered, and will replace lineage on returning.
+	snapshot         *types.LineageTerm   // The latest snapshot of the lineage.
+	diffrank         LineageDifferenceRank
+	getSafe          csync.WaitGroup
+	setSafe          csync.WaitGroup
+	safenote         uint32       // Flag what's going on
+	lineageMu        sync.RWMutex // Mutex for lienage commit.
+	commited         chan interface{}
+	delayed          *time.Timer // Timer for delayed commit.
+	lsSignalTracker  chan StorageSignal
 
 	// backup
 	backup                  *hashmap.HashMap   // Just a index, all will be available to repo
@@ -85,6 +91,7 @@ type LineageStorage struct {
 func NewLineageStorage(id uint64, cap uint64) *LineageStorage {
 	storage := &LineageStorage{
 		PersistentStorage: NewPersistentStorage(id, cap),
+		unconfirmed:       make([]*types.LineageTerm, 0, 10), // Just initialize unconfirmed with 10 elements.
 		lineage: &types.LineageTerm{
 			Term: 1,                             // Term start with 1 to avoid uninitialized term ambigulous.
 			Ops:  make([]types.LineageOp, 0, 1), // We expect 1 "write" maximum for each term for sparse workload.
@@ -137,10 +144,10 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	}
 
 	s.setSafe.Wait()
-	// s.log.Debug("ready to set key %v", key)
-	// Lock lineage, ensure operation get processed in the term.
-	s.lineageMu.Lock()
-	defer s.lineageMu.Unlock()
+	// Commented by Tianium: No lock required any more, chunk.Term is assigned initially, and decided after persisted.
+	// // Lock lineage, ensure operation get processed in the term.
+	// s.lineageMu.Lock()
+	// defer s.lineageMu.Unlock()
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
@@ -203,9 +210,10 @@ func (s *LineageStorage) Del(key string, reason string) *types.OpRet {
 
 	s.setSafe.Wait()
 
-	// Lock lineage
-	s.lineageMu.Lock()
-	defer s.lineageMu.Unlock()
+	// Commented by Tianium: No lock required any more, chunk.Term is assigned initially, and decided after persisted.
+	// // Lock lineage
+	// s.lineageMu.Lock()
+	// defer s.lineageMu.Unlock()
 
 	chunk.Term = s.lineage.Term + 1 // Add one to reflect real term.
 	return s.helper.delWithOption(chunk, reason, nil)
@@ -231,6 +239,49 @@ func (s *LineageStorage) ConfigS3(bucket string, prefix string) {
 	s.delaySet()
 }
 
+func (s *LineageStorage) Validate(meta *types.LineageMeta) (types.LineageValidationResult, error) {
+	consistent, err := s.IsConsistent(meta)
+	if meta.Type != types.LineageMetaTypeMain {
+		return types.LineageValidationResultFromConsistent(consistent), err
+	}
+
+	if consistent {
+		if s.unconfirmedEnd > s.unconfirmedStart {
+			// We will update unconfirmedStart to unconfirmedEnd now.
+			// Using a loop start s.unconfirmedEnd - 1 in case new term just committed.
+			s.lineageMu.Lock()
+			for i := s.unconfirmedEnd - 1; i >= s.unconfirmedStart; i-- {
+				// The validated term must be one of the unconfirmed terms.
+				if meta.Term == s.unconfirmed[i].Term {
+					s.unconfirmedStart = i + 1
+					break
+				}
+			}
+			s.lineageMu.Unlock()
+		}
+		return types.LineageValidationConsistent, nil
+	} else if err != nil {
+		// Check if the term is consistent with an unconfirmed history term.
+		s.lineageMu.Lock()
+		defer s.lineageMu.Unlock()
+
+		for i := s.unconfirmedEnd - 1; i >= s.unconfirmedStart; i-- {
+			if meta.Term < s.unconfirmed[i].Term {
+				continue
+			} else if s.isConsistent(meta, s.unconfirmed[i]) {
+				// Meta is a legacy meta, confirm it and pass.
+				s.unconfirmedStart = i + 1
+				return types.LineageValidationConsistentWithHistoryTerm, nil
+			} else {
+				// Hash not match or the validated term is not found in unconfirmed terms. stop.
+				break
+			}
+		}
+	}
+
+	return types.LineageValidationInconsistent, err
+}
+
 func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 	lineage := s.lineage
 	switch meta.Type {
@@ -251,8 +302,12 @@ func (s *LineageStorage) IsConsistent(meta *types.LineageMeta) (bool, error) {
 		return meta.Consistent, fmt.Errorf("detected staled term of lambda %d, expected at least %d, have %d", meta.Id, lineage.Term, meta.Term)
 	}
 	// Don't check hash if term is the start term(1).
-	meta.Consistent = lineage.Term == meta.Term && (meta.Term == 1 || lineage.Hash == meta.Hash)
+	meta.Consistent = s.isConsistent(meta, lineage)
 	return meta.Consistent, nil
+}
+
+func (s *LineageStorage) isConsistent(meta *types.LineageMeta, term *types.LineageTerm) bool {
+	return meta.Term == term.Term && (meta.Term == 1 || meta.Hash == term.Hash)
 }
 
 func (s *LineageStorage) StartTracker() {
@@ -260,15 +315,62 @@ func (s *LineageStorage) StartTracker() {
 		s.lineage.Ops = s.lineage.Ops[:0] // Reset metalogs
 		s.resetSet()
 		s.commited = make(chan interface{})
+		s.resetDelay(false)
+		s.lsSignalTracker = make(chan StorageSignal, 1)
 		s.PersistentStorage.StartTracker()
+		go s.generatePersistSignal(s.delayed, s.lsSignalTracker)
 		return
 	}
 
 	s.log.Error("You should not have seen this error for here is unreachable.")
 }
 
+func (s *LineageStorage) resetDelay(stopped bool) {
+	if s.delayed == nil {
+		s.delayed = time.NewTimer(MaximumCommitDelay)
+		return
+	}
+
+	if stopped || s.delayed.Stop() {
+		s.delayed.Reset(MaximumCommitDelay) // Extend timer if timer is stopped or being stopped here.
+	} // else avoid extending timer if timeout triggered outside, the routine that stops the timer will extend it.
+}
+
+func (s *LineageStorage) stopTimer(timer *time.Timer) {
+	if timer != nil && !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
+func (s *LineageStorage) generatePersistSignal(timer *time.Timer, input <-chan StorageSignal) {
+	for {
+		select {
+		case <-timer.C:
+			if s.getSafe.IsWaiting() {
+				// Skip commit delay if data is being recovered.
+				s.resetDelay(true)
+			} else {
+				go s.commit(&types.CommitOption{StorageSignalFlags: StorageSignalFlagForceCommit})
+			}
+		case signal := <-input:
+			s.PersistentStorage.signal(signal)
+		}
+	}
+}
+
 func (s *LineageStorage) onPersisted(persisted *types.OpWrapper) {
+	// No lock required, onPersisted and doCommitTerm will not be called concurrently.
+	// Noted: the chunk.Term is initialized with a proper value that the fixing here will conflict with recovery process.
+
+	// The appended lineage may has newer term than the chunk term if StorageFlagForceCommit is enabled.
 	s.lineage.Ops = append(s.lineage.Ops, persisted.LineageOp)
+	// Fix term
+	if persisted.Chunk != nil {
+		persisted.Chunk.Term = s.lineage.Term + 1
+	}
 
 	// If lineage is not recovered (get unsafe), skip diffrank, it will be replay when lineage is recovered.
 	if !s.getSafe.IsWaiting() {
@@ -276,13 +378,37 @@ func (s *LineageStorage) onPersisted(persisted *types.OpWrapper) {
 	} // else: Skip
 }
 
-func (s *LineageStorage) onSignalTracker(signal interface{}) bool {
+func (s *LineageStorage) signal(signal StorageSignal) bool {
+	if s.lsSignalTracker != nil {
+		s.lsSignalTracker <- signal
+		return true
+	} else {
+		return false
+	}
+}
+
+func (s *LineageStorage) onSignalTracker(signal StorageSignal) bool {
 	switch option := signal.(type) {
 	case *types.CommitOption:
+		// Stop timer (if not stopped) before commit.
+		s.stopTimer(s.delayed)
 		return s.doCommit(option)
 	default:
 		return s.PersistentStorage.onSignalTracker(signal)
 	}
+}
+
+func (s *LineageStorage) commit(option *types.CommitOption) (*types.CommitOption, error) {
+	// Signal and wait for committed.
+	s.log.Debug("Signal tracker to commit")
+	s.signal(option)
+	option = (<-s.commited).(*types.CommitOption)
+
+	// Reset timer after committed, the timer must have been stopped before.
+	s.resetDelay(true)
+
+	// Flag checked
+	return option, nil
 }
 
 func (s *LineageStorage) Commit() (*types.CommitOption, error) {
@@ -291,8 +417,6 @@ func (s *LineageStorage) Commit() (*types.CommitOption, error) {
 	}
 
 	s.log.Debug("Commiting lineage...")
-
-	// Initialize option for committing.
 	option := &types.CommitOption{}
 
 	// Are we goint to do the snapshot?
@@ -307,18 +431,15 @@ func (s *LineageStorage) Commit() (*types.CommitOption, error) {
 	// So snapshot every 5 - 10 terms will be appropriate.
 	option.Full = s.recovered == nil && s.lineage.Term-snapshotTerm >= SnapshotInterval-1
 
-	// Signal and wait for committed.
-	s.log.Debug("Signal tracker to commit")
-	s.signalTracker <- option
-	option = (<-s.commited).(*types.CommitOption)
-
-	// Flag checked
-	return option, nil
+	return s.commit(option)
 }
 
-func (s *LineageStorage) StopTracker() {
-	if s.signalTracker != nil {
-		s.PersistentStorage.StopTracker()
+func (s *LineageStorage) StopTracker() error {
+	err := s.PersistentStorage.StopTracker()
+	if err == nil {
+		s.stopTimer(s.delayed)
+		s.delayed = nil
+		s.lsSignalTracker = nil
 		s.commited = nil
 		if s.recovered != nil {
 			// The recovery is not complete, discard current term and replaced with whatever recovered.
@@ -326,9 +447,17 @@ func (s *LineageStorage) StopTracker() {
 			s.lineage = s.recovered
 		}
 	}
+
+	return err
 }
 
-func (s *LineageStorage) Status() types.LineageStatus {
+// Status returns the status of the storage.
+// If short is specified, returns nil if all terms confirmed, or returns the meta of main storage only.
+func (s *LineageStorage) Status(short bool) types.LineageStatus {
+	if short && s.unconfirmedEnd == s.unconfirmedStart {
+		return nil
+	}
+
 	meta := &protocol.Meta{
 		Id:       s.id,
 		Term:     s.lineage.Term,
@@ -341,7 +470,7 @@ func (s *LineageStorage) Status() types.LineageStatus {
 		meta.SnapshotUpdates = s.snapshot.Updates
 		meta.SnapshotSize = s.snapshot.Size
 	}
-	if s.backupLineage != nil {
+	if s.backupLineage != nil && !short {
 		return types.LineageStatus{meta, s.backupLineage.Meta}
 	} else {
 		return types.LineageStatus{meta}
@@ -476,7 +605,17 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 			stop1.Sub(start), end.Sub(stop1), end.Sub(start), termBytes, ssBytes)
 		opt.BytesUploaded += uint64(termBytes + ssBytes)
 		opt.Checked = true
-		s.signalTracker <- opt
+
+		if opt.Flags()&StorageSignalFlagForceCommit > 0 {
+			// Done delayed commit.
+			s.commited <- opt
+		} else {
+			// Trigger double check for final commit.
+			s.persistHelper.signal(opt)
+		}
+	} else if opt.Flags()&StorageSignalFlagForceCommit > 0 {
+		// Done delayed commit.
+		s.commited <- opt
 	} else {
 		// No operation since last signal.This will be quick and we are ready to exit lambda.
 		// DO NOT close "committed", since there will be a double check on stoping the tracker.
@@ -485,6 +624,7 @@ func (s *LineageStorage) doCommit(opt *types.CommitOption) bool {
 		} else {
 			s.log.Info("Checked: no term to commit, signal committed.")
 		}
+		// Done final commit.
 		s.commited <- opt
 	}
 	return false
@@ -527,6 +667,15 @@ func (s *LineageStorage) doCommitTerm(lineage *types.LineageTerm, uploader *s3ma
 		return lineage, term.Term, err
 	}
 
+	// Compact unconfirmed terms
+	if s.unconfirmedEnd >= cap(s.unconfirmed) && s.unconfirmedStart > 0 {
+		copy(s.unconfirmed[:s.unconfirmedEnd-s.unconfirmedStart], s.unconfirmed[s.unconfirmedStart:s.unconfirmedEnd])
+		s.unconfirmedEnd -= s.unconfirmedStart
+		s.unconfirmedStart = 0
+	}
+	// Append unconfirmed term
+	s.unconfirmed = append(s.unconfirmed, term)
+	s.unconfirmedEnd++
 	// Update local lineage. Size must be updated before used for uploading.
 	lineage.Size = uint64(buf.Len())
 	lineage.Ops = lineage.Ops[:0]
