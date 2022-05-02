@@ -16,6 +16,7 @@ import (
 
 	"github.com/cespare/xxhash"
 	"github.com/google/uuid"
+	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/redeo/client"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -34,6 +35,7 @@ var (
 	ErrMaxPreflightsReached    = errors.New("max preflight attemps reached")
 	ErrAbandonRequest          = errors.New("abandon request")
 	ErrKeyNotFound             = errors.New("key not found")
+	ErrUnknown                 = errors.New("unknown error")
 	RequestAttempts            = 3
 
 	OccupantReadAllCloser = &JoinReader{}
@@ -59,12 +61,12 @@ func (h *hasher) PartitionID(key []byte) int {
 // Set New set API
 // Internal error if result is false.
 func (c *Client) Set(key string, val []byte) bool {
-	_, ok := c.EcSet(key, val)
-	return ok
+	_, err := c.EcSet(key, val)
+	return err == nil
 }
 
 // EcSet Internal API
-func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, bool) {
+func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, error) {
 	// Debuging options
 	var dryrun int
 	var placements []int
@@ -94,7 +96,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 		if !reset {
 			copy(placements, index)
 		}
-		return reqId, true
+		return reqId, nil
 	}
 
 	stats := &c.logEntry
@@ -116,8 +118,12 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	stats.ReqLatency = stats.Since()
 	stats.Duration = stats.ReqLatency
 
-	if ret == nil || ret.Err != nil {
-		return reqId, false
+	if ret == nil {
+		log.Warn("Failed to set %s,%s: %v", key, reqId, ErrUnknown)
+		return reqId, ErrClient
+	} else if ret.Err != nil {
+		log.Warn("Failed to set %s,%s: %v", key, reqId, ret.Err)
+		return reqId, ErrClient
 	}
 
 	nanoLog(logClient, "set", stats.ReqId, stats.Start.UnixNano(),
@@ -131,19 +137,19 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 		}
 	}
 
-	return stats.ReqId, true
+	return stats.ReqId, nil
 }
 
 // Get New get API. No size is required.
 // Internal error if the bool is set to false
 func (c *Client) Get(key string) (ReadAllCloser, bool) {
-	_, reader, ok := c.EcGet(key, 0)
-	return reader, ok
+	_, reader, err := c.EcGet(key, 0)
+	return reader, err != nil
 }
 
 // EcGet Internal API
 // returns reqId, reader, and a bool indicate error. If not found, the reader will be nil.
-func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, bool) {
+func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, error) {
 	var dryrun int
 	if len(args) > 0 {
 		dryrun, _ = args[0].(int)
@@ -152,7 +158,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	reqId := uuid.New().String()
 
 	if dryrun > 0 {
-		return reqId, nil, true
+		return reqId, nil, nil
 	}
 
 	//addr, ok := c.getHost(key)
@@ -165,7 +171,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	ret := allRets[0]
 	if ret.Err != nil {
 		log.Warn("Failed to get %s,%s: %v", key, reqId, ret.Err)
-		return reqId, nil, false
+		return reqId, nil, utils.Ifelse(ret.Err == ErrNotFound, ret.Err, ErrClient).(error)
 	}
 
 	nanoLog(logClient, "get", reqId, ret.Stats.Start.UnixNano(),
@@ -173,7 +179,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 		ret.Stats.AllGood, ret.Stats.Corrupted, ret.Meta.Size)
 	log.Info("Got %s %d %d ( %d %d )", key, ret.Meta.Size, int64(ret.Stats.Duration), int64(ret.Stats.RecLatency), int64(ret.Stats.CodingLatency))
 
-	return reqId, reader, true
+	return reqId, reader, nil
 }
 
 func (c *Client) ReadResponse(req client.Request) error {

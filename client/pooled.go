@@ -53,26 +53,16 @@ func (c *PooledClient) Get(key string) (ReadAllCloser, error) {
 	cli := c.pool.Get().(*Client)
 	defer c.pool.Put(cli)
 
-	reader, ok := cli.Get(key)
-	if !ok {
-		return nil, ErrClient
-	} else if reader == nil {
-		return nil, ErrNotFound
-	} else {
-		return reader, nil
-	}
+	_, reader, err := cli.EcGet(key)
+	return reader, err
 }
 
 func (c *PooledClient) Set(key string, val []byte) error {
 	cli := c.pool.Get().(*Client)
 	defer c.pool.Put(cli)
 
-	ok := cli.Set(key, val)
-	if ok {
-		return nil
-	} else {
-		return ErrClient
-	}
+	_, err := cli.EcSet(key, val)
+	return err
 }
 
 func (c *PooledClient) Close() {
