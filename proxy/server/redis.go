@@ -90,16 +90,16 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	t := time.Now()
-	_, ok := client.EcSet(key, body)
+	_, err = client.EcSet(key, body)
 	dt := time.Since(t)
-	if !ok {
-		w.AppendErrorf("failed to set %s", key)
+	if err != nil {
+		w.AppendError(err.Error())
 		w.Flush()
 	} else {
 		w.AppendInlineString("OK")
 		w.Flush()
 	}
-	collector.Collect(collector.LogEndtoEnd, protocol.CMD_SET, util.Ifelse(ok, "200", "500"),
+	collector.Collect(collector.LogEndtoEnd, protocol.CMD_SET, util.Ifelse(err == nil, "200", "500"),
 		int64(len(body)), t.UnixNano(), int64(dt))
 }
 
@@ -109,21 +109,20 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	key := c.Arg(0).String()
 
 	t := time.Now()
-	_, reader, ok := client.EcGet(key)
+	_, reader, err := client.EcGet(key)
 	dt := time.Since(t)
 	code := "500"
 	size := 0
-	if !ok {
-		w.AppendErrorf("failed to get %s", key)
-		w.Flush()
-	} else if reader == nil {
+	if err == infinicache.ErrNotFound {
 		w.AppendNil()
 		w.Flush()
 		code = "404"
+	} else if err != nil {
+		w.AppendError(err.Error())
+		w.Flush()
 	} else {
 		size = reader.Len()
 		if err := w.CopyBulk(reader, int64(size)); err != nil {
-			ok = false
 			a.log.Warn("Error on sending %s: %v", key, err)
 		}
 		reader.Close()
