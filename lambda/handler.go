@@ -158,13 +158,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	// Check lineage consistency and recovery if necessary
 	var recoverErrs []<-chan error
 	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
+	var payload []byte
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
-		handlers.Pong.SendWithFlags(flags)
+		handlers.Pong.SendWithFlags(flags, payload)
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status.Metas) == 0 {
-			return Lineage.Status().ProtocolStatus(), errors.New("no node status found in the input")
+			return Lineage.Status(false).ProtocolStatus(), errors.New("no node status found in the input")
 		}
 
 		// Preprocess protocol meta and check consistency
@@ -174,13 +175,13 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		for i := 0; i < len(metas); i++ {
 			metas[i], err = types.LineageMetaFromProtocol(&input.Status.Metas[i])
 			if err != nil {
-				return Lineage.Status().ProtocolStatus(), err
+				return Lineage.Status(false).ProtocolStatus(), err
 			}
 
-			consistent, err := Lineage.IsConsistent(metas[i])
+			ret, err := Lineage.Validate(metas[i])
 			if err != nil {
-				return Lineage.Status().ProtocolStatus(), err
-			} else if !consistent {
+				return Lineage.Status(false).ProtocolStatus(), err
+			} else if !ret.IsConsistent() {
 				if input.IsBackingOnly() && i == 0 {
 					// if i == 0 {
 					// In backing only mode, we will not try to recover main repository.
@@ -193,13 +194,16 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				} else {
 					inconsistency++
 				}
+			} else if ret == types.LineageValidationConsistentWithHistoryTerm {
+				flags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
+				payload, _ = binary.Marshal(Lineage.Status(true).ShortStatus())
 			}
 		}
 
 		// Recover if inconsistent
 		if inconsistency == 0 {
 			// PONG represents the node is ready to serve, no fast recovery required.
-			handlers.Pong.SendWithFlags(flags)
+			handlers.Pong.SendWithFlags(flags, payload)
 		} else {
 			session.Timeout.Busy("fast recover")
 			recoverErrs = make([]<-chan error, 0, inconsistency)
@@ -211,10 +215,10 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				if fast {
 					flags |= protocol.PONG_RECOVERY
 				}
-				handlers.Pong.SendWithFlags(flags)
+				handlers.Pong.SendWithFlags(flags, payload)
 				recoverErrs = append(recoverErrs, chanErr)
 			} else {
-				handlers.Pong.SendWithFlags(flags)
+				handlers.Pong.SendWithFlags(flags, payload)
 			}
 
 			// Recovery backup
@@ -315,7 +319,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		// On system closing, the lineage should have been unset.
 		if Lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			status = Lineage.Status()
+			status = Lineage.Status(false)
 		}
 		return
 	case <-session.Timeout.C():
@@ -350,7 +354,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			Persist.StopTracker()
 		}
 		if Lineage != nil {
-			status = Lineage.Status()
+			status = Lineage.Status(false)
 		}
 		byeHandler(session, status)
 		session.Done()
@@ -389,14 +393,20 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 
 	log.Debug("PING")
 	Server.VerifyDataLinks(int(datalinks), time.Unix(0, reportedAt))
-	handlers.Pong.SendWithFlags(protocol.PONG_FOR_CTRL)
+	cancelPong := false
 
 	// Deal with payload
 	if len(payload) > 0 {
 		session.Timeout.Busy(c.Name)
 		skip := true
-		cancelPong := true // For ping with payload, no immediate incoming request expected except certain tips has been set.
+		cancelPong = true // For ping with payload, no immediate incoming request expected except certain tips has been set.
 
+		// For now, we expecting one meta per ping only.
+		// Possible reasons for the meta are:
+		// 1. A node is reclaimed and triggers backup.
+		// 2. The lineage of current node need to be reconciled and we receive the reconcile confirmation.
+		// Priority gives to the reason with smaller number, and we deal with one reason at a time.
+		// TODO: If neccessary, support multiple metas per ping.
 		var pmeta protocol.Meta
 		if err := binary.Unmarshal(payload, &pmeta); err != nil {
 			log.Warn("Error on parse payload of the ping: %v", err)
@@ -408,13 +418,15 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 			// For now, only backup request supported.
 			if meta, err := types.LineageMetaFromProtocol(&pmeta); err != nil {
 				log.Warn("Error on get meta: %v", err)
-			} else if consistent, err := Lineage.IsConsistent(meta); err != nil {
+			} else if ret, err := Lineage.Validate(meta); err != nil {
 				log.Warn("Error on check consistency: %v", err)
 			} else {
-				if meta.ServingKey() != "" {
-					cancelPong = false // Serving key is set and immediate incoming request is expected.
+				if meta.ServingKey() != "" || meta.Id == Store.Id() {
+					// 1. Serving key is set and immediate incoming request is expected.
+					// 2. This is normal ping with piggybacked reconcile confirmation.
+					cancelPong = false
 				}
-				if !consistent {
+				if !ret.IsConsistent() {
 					_, chanErr := Lineage.Recover(meta)
 					// Check for immediate error.
 					select {
@@ -429,15 +441,14 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 							waitForRecovery(chanErr)
 						}()
 					}
+				} else if meta.Id != Store.Id() {
+					log.Debug("Backup node(%d) consistent, skip.", meta.Id)
 				} else {
-					log.Debug("Backup node(%d) consistent, skip.", meta.Meta.Id)
+					log.Debug("Term confirmed: %d", meta.Term)
 				}
 			}
 		}
 
-		if cancelPong {
-			handlers.Pong.Cancel()
-		}
 		if skip {
 			if cancelPong {
 				// No more request expected for a ping with payload (backup ping).
@@ -446,6 +457,20 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 				session.Timeout.DoneBusy(c.Name)
 			}
 		}
+	}
+
+	// Finally we can send pong.
+	flags := protocol.PONG_FOR_CTRL
+	if Lineage != nil {
+		status := Lineage.Status(true)
+		if status != nil {
+			flags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
+			payload, _ = binary.Marshal(status.ShortStatus())
+		}
+	}
+	handlers.Pong.SendWithFlags(flags, payload)
+	if cancelPong {
+		handlers.Pong.Cancel() // Not really cancel the sending of a pong, notify no request is expected.
 	}
 }
 
