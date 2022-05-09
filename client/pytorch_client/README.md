@@ -2,6 +2,8 @@
 ### This section serves the purpose of using InfiniCache as a data store during ML training
 
 ## Training Steps
+* Make sure to first compile the go client so that it can be loaded as a DLL
+    * Need to run: go build -o ecClient.so -buildmode=c-shared go_client.go
 * Code for training is listed in the `pytorch_training.py` file.
 * For the EFS and EBS datasets, use the `DatasetDisk`
     * Make sure the directory path is the path to the data in your EBS/EFS storage
