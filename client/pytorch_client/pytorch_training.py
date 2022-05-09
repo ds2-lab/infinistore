@@ -148,9 +148,11 @@ if __name__ == "__main__":
     LOGGER.info("TRAINING STARTED")
 
     #  MNIST ####################################################
-    mnist_dataset_ebs = infinicache_dataloaders.DatasetDisk("/home/ubuntu/mnist_png", label_idx=-1)
+    mnist_dataset_ebs = infinicache_dataloaders.DatasetDisk(
+        data_path="/home/ubuntu/mnist_png", s3_bucket="mnist-infinicache", label_idx=-1
+    )
     mnist_dataset_efs = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/efs/mnist_png", label_idx=-1
+        data_path="/home/ubuntu/efs/mnist_png", s3_bucket="mnist-infinicache", label_idx=-1
     )
     mnist_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "mnist-infinicache", label_idx=-1, channels=False
@@ -190,10 +192,10 @@ if __name__ == "__main__":
 
     #  IMAGENET ####################################################
     imagenet_dataset_ebs = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/imagenet_png", label_idx=0
+        data_path="/home/ubuntu/imagenet_png", s3_bucket="imagenet-infinicache-png", label_idx=0
     )
     imagenet_dataset_efs = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/efs/imagenet_png", label_idx=0
+        data_path="/home/ubuntu/efs/imagenet_png", s3_bucket="imagenet-infinicache-png", label_idx=0
     )
     imagenet_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "imagenet-infinicache-png", label_idx=0, channels=True
@@ -241,10 +243,10 @@ if __name__ == "__main__":
 
     #  CIFAR ####################################################
     cifar_dataset_ebs = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/cifar_images", label_idx=0
+        data_path="/home/ubuntu/cifar_images", s3_bucket="cifar10-infinicache", label_idx=0
     )
     cifar_dataset_efs = infinicache_dataloaders.DatasetDisk(
-        "/home/ubuntu/efs/cifar_images", label_idx=0
+        data_path="/home/ubuntu/efs/cifar_images", s3_bucket="cifar10-infinicache", label_idx=0
     )
     cifar_dataset_s3 = infinicache_dataloaders.DatasetS3(
         "cifar10-infinicache", label_idx=0, channels=True

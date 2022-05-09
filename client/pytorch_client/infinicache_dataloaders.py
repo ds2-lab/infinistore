@@ -21,6 +21,7 @@ from ctypes import Union
 from io import BytesIO
 from pathlib import Path
 from typing import Callable
+from functools import partial
 
 import boto3
 import numpy as np
@@ -43,14 +44,14 @@ GO_LIB.initializeVars()
 class DatasetDisk(Dataset):
     """Simulates having to load each data point from disk every call."""
 
-    def __init__(self, data_path: str, label_idx: int):
-        dataset_path = Path(data_path)
+    def __init__(self, data_path: str, s3_bucket: str, label_idx: int):
+        self.s3_client = boto3.client("s3")
+        self.download_from_s3(s3_bucket, data_path)
+        dataset_path = Path(data_path)  # path to where the data should be stored on Disk
         filenames = list(dataset_path.rglob("*.png"))
-        filenames.extend(list(dataset_path.rglob("*.jpeg")))
+        filenames.extend(list(dataset_path.rglob("*.jpg")))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
-        self.validation = self.filepaths[-100:]
-        self.filepaths = self.filepaths[:-100]
         self.label_idx = label_idx
 
     def __len__(self):
@@ -61,6 +62,26 @@ class DatasetDisk(Dataset):
         pil_img = Image.open(self.filepaths[idx])
         img_tensor = F.pil_to_tensor(pil_img)
         return img_tensor, int(label)
+
+    def download_from_s3(self, s3_path: str, local_path: str):
+        """
+        First need to download all images from S3 to Disk to use for training.
+        """
+        s3_client = boto3.client("s3")
+        paginator = s3_client.get_paginator("list_objects_v2")
+        filenames = []
+        for page in paginator.paginate(Bucket=s3_path):
+            for content in page.get("Contents"):
+                filenames.append(content["Key"])
+        partial_dl = partial(self.download_file, local_path, s3_path)
+        LOGGER.info("Downloading data from S3 to Disk")
+        with ThreadPoolExecutor(max_workers=64) as executor:
+            futures = [executor.submit(partial_dl, fname) for fname in filenames]
+            _ = [future.result() for future in as_completed(futures)]
+        LOGGER.info("Download is complete")
+
+    def download_file(self, output_dir: str, bucket_name: str, file_name: str):
+        self.s3_client.download_file(bucket_name, file_name, f"{output_dir}/{file_name}")
 
 
 class DatasetS3(Dataset):
@@ -162,7 +183,8 @@ class DiskLoader(BaseDataLoader):
             raise StopIteration
         batch_size = min(len(self.dataset) - self.index, self.batch_size)
         start_time = time.time()
-        images, labels = self.collate_fn([self.get() for _ in range(batch_size)])
+        results = self.get_batch_threaded(batch_size)
+        images, labels = self.collate_fn(results)
         images = self.transform(images.to(torch.float32).div(255))
 
         end_time = time.time()
@@ -173,6 +195,16 @@ class DiskLoader(BaseDataLoader):
 
     def __str__(self):
         return "DiskDataset"
+
+    def get_batch_threaded(self, batch_size: int):
+        """
+        This has been added so that all loading methods are done in parallel for comparison.
+        """
+        results = []
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            futures = [executor.submit(self.get) for _ in range(batch_size)]
+            results = [future.result() for future in as_completed(futures)]
+        return results
 
 
 class S3Loader(BaseDataLoader):
