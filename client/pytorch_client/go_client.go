@@ -37,7 +37,8 @@ func getFromCache(cacheKeyC *C.char) *C.char {
 //export setInCache
 func setInCache(cacheKeyC *C.char, inputDataC *C.char, arrayLen C.int) {
 	cacheKeyGo := C.GoString(cacheKeyC)
-	valBytes := C.GoBytes(unsafe.Pointer(inputDataC), arrayLen)
+	// valBytes := C.GoBytes(unsafe.Pointer(inputDataC), arrayLen)
+	valBytes := unsafe.Slice((*byte)(unsafe.Pointer(inputDataC)), int(arrayLen))
 
 	cli.Set(cacheKeyGo, valBytes)
 }
