@@ -40,9 +40,16 @@ def training_cycle(
     loss_fn: nn.CrossEntropyLoss,
     num_epochs: int = 1,
     device: str = "cuda:0",
+    accuracy: float = 1.0,
 ):
     start_time = time.time()
     num_batches = len(train_dataloader)
+
+    benchmarking = num_epochs == 0
+    if benchmarking:
+        num_epochs = 1 
+
+    history = None
     for epoch in range(num_epochs):
         iteration = 0
         running_loss = 0.0
@@ -50,14 +57,17 @@ def training_cycle(
         for idx, (images, labels) in enumerate(train_dataloader):
             images = images.to(device)
             labels = labels.to(device)
-            logits, _ = model(images)
-            loss = loss_fn(logits, labels)
+            logits = model(images)
+
+            if not benchmarking:
+                loss = loss_fn(logits, labels)
+                optim_func.zero_grad()
+                loss.backward()
+                optim_func.step()
+                running_loss += float(loss.item())
 
             iteration += 1
-            optim_func.zero_grad()
-            loss.backward()
-            optim_func.step()
-            running_loss += float(loss.item())
+            history = count_top_k_preds(logits, labels, history)
 
             if not idx % 100:
                 print(
@@ -71,25 +81,53 @@ def training_cycle(
                 running_loss = 0.0
 
         total_time_taken = sum(train_dataloader.load_times)
+        top1, top5, total = history
         LOGGER.info(
-            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec.",
+            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec (%.3f, %.3f).",
             epoch + 1,
             str(train_dataloader),
             train_dataloader.total_samples,
             total_time_taken,
+            top1 / total * 100,
+            top5 / total * 100,
         )
+        if top1 / total >= accuracy:
+            LOGGER.info("Accuracy reached.")
+            break
 
     end_time = time.time()
     print(f"Time taken: {end_time - start_time}")
 
-
-def compare_pred_vs_actual(logit_scores: torch.Tensor, labels: torch.Tensor):
-    logit_scores = logit_scores.to("cpu")
+def compare_pred_vs_actual(logit_scores: torch.Tensor, labels: torch.Tensor, silent: bool = False):
+    logit_scores = logit_scores[0].to("cpu")
     labels = labels.to("cpu")
     logit_preds = torch.argmax(logit_scores, axis=1)
     num_correct = torch.sum(logit_preds == labels)
     perc_correct = num_correct / labels.shape[0] * 100
-    print(f"Num correct is: {num_correct}/{labels.shape[0]} ({perc_correct}%)")
+    if not silent:
+        print(f"Num correct is: {num_correct}/{labels.shape[0]} ({perc_correct}%)")
+    return perc_correct
+
+def count_top_k_preds(logit_scores: torch.Tensor, labels: torch.Tensor, history = None):
+    top1, top5, total = 0.0, 0.0, 0.0
+    if history is not None:
+        top1, top5, total = history
+
+    predictions = logit_scores.topk(5)[1].data.cpu().numpy()
+    labels = labels.data.cpu().numpy()
+    total += len(labels)
+    for i in range(len(labels)):
+        if labels[i] == predictions[i, 0]:
+            top1 += 1
+            top5 += 1
+            continue
+        
+        for j in range(1, 4):
+            if labels[i] == predictions[i, j]:
+                top5 += 1
+                break
+
+    return top1, top5, total
 
 
 def run_training_get_results(
@@ -99,14 +137,14 @@ def run_training_get_results(
     loss_fn: nn.CrossEntropyLoss,
     num_epochs: int,
     device: str,
+    accuracy: float = 1.0,
 ):
-    training_cycle(model, data_loader, optim_func, loss_fn, num_epochs, device)
+    training_cycle(model, data_loader, optim_func, loss_fn, num_epochs, device, accuracy)
     sample_loader = next(iter(data_loader))
     sample_loader_data = sample_loader[0].to(torch.float32).to(device)
     sample_loader_labels = sample_loader[1]
     model_result = model(sample_loader_data)
-    compare_pred_vs_actual(model_result[0], sample_loader_labels)
-
+    compare_pred_vs_actual(model_result, sample_loader_labels)
 
 def initialize_model(
     model_type: str, num_channels: int, device: str = "cuda:0"
