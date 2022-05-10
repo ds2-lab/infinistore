@@ -99,7 +99,7 @@ def training_cycle(
     print(f"Time taken: {end_time - start_time}")
 
 def compare_pred_vs_actual(logit_scores: torch.Tensor, labels: torch.Tensor, silent: bool = False):
-    logit_scores = logit_scores[0].to("cpu")
+    logit_scores = logit_scores.to("cpu")
     labels = labels.to("cpu")
     logit_preds = torch.argmax(logit_scores, axis=1)
     num_correct = torch.sum(logit_preds == labels)
