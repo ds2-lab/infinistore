@@ -23,9 +23,9 @@ def set_std_handler() -> logging.StreamHandler:
     handler = logging.StreamHandler(sys.stdout)
     return handler
 
-def get_logger(module_name: str, handler: Optional[logging.FileHandler]) -> logging.Logger:
+def get_logger(module_name: str, handler: Optional[logging.FileHandler] = None) -> logging.Logger:
     logger = logging.getLogger(module_name)
     logger.setLevel(logging.INFO)
-    if handler:
+    if handler is not None:
         logger.addHandler(handler)
     return logger
