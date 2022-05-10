@@ -36,8 +36,6 @@ from torchvision.transforms import functional as F
 import go_bindings
 import logging_utils
 
-LOGGER = logging_utils.initialize_logger(add_handler=True)
-
 GO_LIB = go_bindings.load_go_lib(os.path.join(os.path.dirname(__file__), "ecClient.so"))
 
 class DatasetDisk(Dataset):
