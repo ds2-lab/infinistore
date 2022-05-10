@@ -39,8 +39,6 @@ import logging_utils
 LOGGER = logging_utils.initialize_logger(add_handler=True)
 
 GO_LIB = go_bindings.load_go_lib(os.path.join(os.path.dirname(__file__), "ecClient.so"))
-GO_LIB.initializeVars()
-
 
 class DatasetDisk(Dataset):
     """Simulates having to load each data point from disk every call."""
@@ -275,6 +273,7 @@ class InfiniCacheLoader(BaseDataLoader):
     ):
         super().__init__(dataset, dataset_name, img_dims, image_dtype, batch_size, collate_fn)
         self.base_keyname = f"{self.dataset_name}_{self.batch_size}_"
+        GO_LIB.initializeVars()
         self.initial_set_all_data()
 
     def __next__(self):
