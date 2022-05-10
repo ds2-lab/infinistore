@@ -1,8 +1,8 @@
 import argparse
 import torch
 
-from .pytorch_training import initialize_model, run_training_get_results
-from .infinicache_dataloaders import DatasetDisk, DatasetS3, DiskLoader, S3Loader, InfiniCacheLoader
+from pytorch_training import initialize_model, run_training_get_results
+from infinicache_dataloaders import DatasetDisk, DatasetS3, DiskLoader, S3Loader, InfiniCacheLoader
 
 class SmartFormatter(argparse.HelpFormatter):
   """Add option to split lines in help messages"""
@@ -33,7 +33,6 @@ def main():
   parser.add_argument("--s3_source", action='store', type=str, help="Load dataset from S3 and specifiy the bucket.", default="cifar10-infinicache")
   parser.add_argument("--loader", action='store', type=str, help="Dataloader used, choosing from disk, s3, or infinicache.", default="disk")
   parser.add_argument("--model", action='store', type=str, help="Pretrained model, choosing from resnet, efficientnet or densenet.", default="")
-  parser.add_argument("--replica", action=argparse.BooleanOptionalAction, help="Add 1 replica.")
   parser.add_argument("--batch", action='store', type=int, help="The batch size.", default=64)
   parser.add_argument("--epochs", action='store', type=int, help="Max epochs.", default=100)
   parser.add_argument("--accuracy", action='store', type=float, help="Target accuracy.", default=1.0)

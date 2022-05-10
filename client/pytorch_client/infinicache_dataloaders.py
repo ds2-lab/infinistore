@@ -15,6 +15,7 @@ from threading import Lock
 
 import random
 import time
+import os
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import Union
@@ -37,7 +38,7 @@ import logging_utils
 
 LOGGER = logging_utils.initialize_logger(add_handler=True)
 
-GO_LIB = go_bindings.load_go_lib("./ecClient.so")
+GO_LIB = go_bindings.load_go_lib(os.path.join(os.path.dirname(__file__), "ecClient.so"))
 GO_LIB.initializeVars()
 
 
