@@ -57,14 +57,18 @@ def training_cycle(
         for idx, (images, labels) in enumerate(train_dataloader):
             images = images.to(device)
             labels = labels.to(device)
-            logits, _ = model(images)
-
+        
             if not benchmarking:
+                logits, _ = model(images)
+
                 loss = loss_fn(logits, labels)
                 optim_func.zero_grad()
                 loss.backward()
                 optim_func.step()
                 running_loss += float(loss.item())
+            else:
+                with torch.no_grad():
+                    logits, _ = model(images)
 
             iteration += 1
             history = count_top_k_preds(logits, labels, history)
@@ -143,7 +147,8 @@ def run_training_get_results(
     sample_loader = next(iter(data_loader))
     sample_loader_data = sample_loader[0].to(torch.float32).to(device)
     sample_loader_labels = sample_loader[1]
-    model_result = model(sample_loader_data)
+    if torch.no_grad():
+        model_result = model(sample_loader_data)
     compare_pred_vs_actual(model_result[0], sample_loader_labels)
 
 def initialize_model(
