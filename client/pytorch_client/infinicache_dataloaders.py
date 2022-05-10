@@ -88,7 +88,7 @@ class DatasetDisk(Dataset):
 class DatasetS3(Dataset):
     """Simulates having to load each data point from S3 every call."""
 
-    def __init__(self, bucket_name: str, label_idx: int, channels: bool):
+    def __init__(self, bucket_name: str, label_idx: int, channels: bool, testing: bool = False):
         self.label_idx = label_idx
         self.channels = channels
         self.s3_client = boto3.client("s3")
@@ -98,8 +98,20 @@ class DatasetS3(Dataset):
         for page in paginator.paginate(Bucket=bucket_name):
             for content in page.get("Contents"):
                 filenames.append(Path(content["Key"]))
+        if "cifar" in bucket_name:
+            test_fnames = self.get_test_fnames()
+            if testing:
+                filenames = list(test_fnames)
+            else:
+                filenames = list(set(filenames).difference(test_fnames))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
+
+    @staticmethod
+    def get_test_fnames():
+        with open("cifar_test_fnames.txt") as f:
+            test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
+        return test_fnames
 
     def __len__(self):
         return len(self.filepaths)

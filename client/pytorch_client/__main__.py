@@ -47,7 +47,7 @@ def main():
     )
   else:
     dataset = DatasetS3(
-        args.s3_source, label_idx=0, channels=True
+        args.s3_source, label_idx=0, channels=True, testing=args.benchmark
     )
 
   # Define the dataloader
