@@ -57,7 +57,7 @@ def training_cycle(
         for idx, (images, labels) in enumerate(train_dataloader):
             images = images.to(device)
             labels = labels.to(device)
-            logits = model(images)
+            logits, _ = model(images)
 
             if not benchmarking:
                 loss = loss_fn(logits, labels)
@@ -144,7 +144,7 @@ def run_training_get_results(
     sample_loader_data = sample_loader[0].to(torch.float32).to(device)
     sample_loader_labels = sample_loader[1]
     model_result = model(sample_loader_data)
-    compare_pred_vs_actual(model_result, sample_loader_labels)
+    compare_pred_vs_actual(model_result[0], sample_loader_labels)
 
 def initialize_model(
     model_type: str, num_channels: int, device: str = "cuda:0"

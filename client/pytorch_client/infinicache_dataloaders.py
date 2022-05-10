@@ -107,7 +107,7 @@ class DatasetS3(Dataset):
 
     @staticmethod
     def get_test_fnames():
-        with open("cifar_test_fnames.txt") as f:
+        with open(os.path.join(os.path.dirname(__file__), "cifar_test_fnames.txt")) as f:
             test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
         return test_fnames
 

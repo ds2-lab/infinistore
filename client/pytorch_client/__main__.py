@@ -23,6 +23,7 @@ class SmartFormatter(argparse.HelpFormatter):
 #         setattr(namespace, self.dest, values[0])
 #         setattr(namespace, "argv", values) 
 
+  
 def main():
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=SmartFormatter)
   parser.add_argument("-v", "--version", action="version",
@@ -83,3 +84,5 @@ def main():
   run_training_get_results(
       model, dataloader, optim_func, loss_fn, args.epochs, device, accuracy = args.accuracy
   )
+
+main()
