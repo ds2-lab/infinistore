@@ -25,8 +25,8 @@ var (
 func getFromCache(cacheKeyC *C.char) *C.char {
 	cacheKeyGo := C.GoString(cacheKeyC)
 
-	reader, ok := cli.Get(cacheKeyGo)
-	if !ok {
+	reader, issue := cli.Get(cacheKeyGo)
+	if issue {
 		return C.CString("-1")
 	}
 

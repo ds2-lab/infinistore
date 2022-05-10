@@ -11,7 +11,7 @@ def initialize_logger(add_handler: bool = False) -> logging.Logger:
     formatter = logging.Formatter("%(asctime)s — %(name)s — %(levelname)s — %(message)s")
     handler.setFormatter(formatter)
     handler.setLevel(logging.INFO)
-    logger = get_logger("infinicache_logger", handler)
+    logger = get_logger("default", handler)
     return logger
 
 

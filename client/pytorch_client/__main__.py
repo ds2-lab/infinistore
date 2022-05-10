@@ -44,7 +44,7 @@ def main():
   # Define the dataset
   if args.disk_source != "":
     dataset = DatasetDisk(
-        data_path = args.disk_sourc, s3_bucket = args.s3_source, label_idx=0
+        data_path = args.disk_source, s3_bucket = args.s3_source, label_idx=0, testing=args.benchmark
     )
   else:
     dataset = DatasetS3(
@@ -70,7 +70,7 @@ def main():
     )
   else:
     dataloader = DiskLoader(
-      dataset, dataset_name=args.dataset, img_dims=img_dims, batch_size=args.batch
+      dataset, dataset_name=args.dataset, img_dims=img_dims, batch_size=args.batch, shuffle=True
     )
 
   # Define the model
