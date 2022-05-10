@@ -41,15 +41,28 @@ GO_LIB = go_bindings.load_go_lib("./ecClient.so")
 GO_LIB.initializeVars()
 
 
+def get_test_fnames():
+    with open("cifar_test_fnames.txt") as f:
+        test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
+    return test_fnames
+
+
 class DatasetDisk(Dataset):
     """Simulates having to load each data point from disk every call."""
 
-    def __init__(self, data_path: str, s3_bucket: str, label_idx: int):
+    def __init__(self, data_path: str, s3_bucket: str, label_idx: int, testing: bool = False):
         self.s3_client = boto3.client("s3")
-        self.download_from_s3(s3_bucket, data_path)
+        self.download_from_s3(s3_bucket, data_path)  # We probably don't need this since the AWS CLI is faster
         dataset_path = Path(data_path)  # path to where the data should be stored on Disk
         filenames = list(dataset_path.rglob("*.png"))
         filenames.extend(list(dataset_path.rglob("*.jpg")))
+        if "cifar" in data_path:
+            filestubs = set(map(lambda x: x.name, filenames))
+            test_fnames = get_test_fnames()
+            if testing:
+                filenames = list(test_fnames)
+            else:
+                filenames = list(filestubs.difference(test_fnames))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
         self.label_idx = label_idx
@@ -98,19 +111,13 @@ class DatasetS3(Dataset):
             for content in page.get("Contents"):
                 filenames.append(Path(content["Key"]))
         if "cifar" in bucket_name:
-            test_fnames = self.get_test_fnames()
+            test_fnames = get_test_fnames()
             if testing:
                 filenames = list(test_fnames)
             else:
                 filenames = list(set(filenames).difference(test_fnames))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         random.shuffle(self.filepaths)
-
-    @staticmethod
-    def get_test_fnames():
-        with open("cifar_test_fnames.txt") as f:
-            test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
-        return test_fnames
 
     def __len__(self):
         return len(self.filepaths)
@@ -187,8 +194,16 @@ class DiskLoader(BaseDataLoader):
         image_dtype: go_bindings.NumpyDtype = np.uint8,
         batch_size: int = 64,
         collate_fn: Callable = collate.default_collate,
+        shuffle: bool = False,
     ):
         super().__init__(dataset, dataset_name, img_dims, image_dtype, batch_size, collate_fn)
+        self.shuffle = shuffle
+
+    def __iter__(self):
+        if self.shuffle:
+            random.shuffle(self.dataset.filepaths)
+        self.index = 0
+        return self
 
     def __next__(self):
         if self.index >= len(self.dataset):
@@ -262,7 +277,6 @@ class InfiniCacheLoader(BaseDataLoader):
     """DataLoader specific to InfiniCache. Associates each batch of images with a key in the cache,
     rather than each image.
     """
-
     def __init__(
         self,
         dataset: DatasetS3,
