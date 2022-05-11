@@ -80,8 +80,6 @@ def training_cycle(
                 running_loss = 0.0
             train_load = time.time()
 
-        total_time_taken = sum(train_dataloader.dataset.load_times)
-        print("total time", total_time_taken)
         LOGGER.info(
             "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec.",
             epoch + 1,
@@ -105,9 +103,6 @@ def training_cycle(
                 num_correct += torch.sum(logit_preds == labels)
                 test_samples += labels.shape[0]
                 test_load = time.time()
-
-            total_time_taken = sum(test_dataloader.dataset.load_times)
-            print("total time", total_time_taken)
 
             perc_correct = num_correct / test_samples * 100
 
