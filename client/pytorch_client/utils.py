@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 import torchvision
+import os
 
 
 def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[Path]:
@@ -14,13 +15,13 @@ def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[Path]:
     filenames = list(dataset_path.rglob("*.png"))
     filenames.extend(list(dataset_path.rglob("*.jpg")))
     with open(test_fnames_path) as f:
-        test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
+        test_fnames = set([fname.strip() for fname in f.readlines()])
     filestubs = set(map(lambda x: x.name, filenames))
     train_filenames = list(filestubs.difference(test_fnames))
     train_filenames = sorted(train_filenames, key=lambda filename: filename)
-    train_filenames = list(map(lambda x: dataset_path / x, train_filenames))
+    train_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), train_filenames))
     test_filenames = sorted(test_fnames, key=lambda filename: filename.stem)
-    test_filenames = list(map(lambda x: dataset_path / x, test_filenames))
+    test_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), test_filenames))
 
     return train_filenames, test_filenames
 
