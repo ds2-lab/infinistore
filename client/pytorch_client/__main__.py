@@ -79,7 +79,7 @@ def main():
         args.disk_source = os.path.join(args.disk_source, "full")
 
       # trigger download
-      trainset = DatasetDisk(list(Path(args.disk_source)), s3_bucket = args.s3_source, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar)
+      trainset = DatasetDisk(list(args.disk_source), s3_bucket = args.s3_source, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar)
 
       if args.dataset == "cifar":
         train_source, test_source = utils.split_cifar_data(
