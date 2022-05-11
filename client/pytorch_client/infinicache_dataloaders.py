@@ -50,8 +50,9 @@ class DatasetDisk(Dataset):
     """Simulates having to load each data point from disk every call."""
 
     def __init__(self, data_path: str, s3_bucket: str, label_idx: int, testing: bool = False):
-        self.s3_client = boto3.client("s3")
-        self.download_from_s3(s3_bucket, data_path)  # We probably don't need this since the AWS CLI is faster
+        if s3_bucket != "":
+            self.s3_client = boto3.client("s3")
+            self.download_from_s3(s3_bucket, data_path)  # We probably don't need this since the AWS CLI is faster
         dataset_path = Path(data_path)  # path to where the data should be stored on Disk
         filenames = list(dataset_path.rglob("*.png"))
         filenames.extend(list(dataset_path.rglob("*.jpg")))
