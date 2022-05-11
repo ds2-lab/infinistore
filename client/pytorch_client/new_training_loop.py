@@ -21,7 +21,7 @@ WRITER = SummaryWriter()
 LOGGER = logging_utils.initialize_logger()
 
 SEED = 1234
-NUM_EPOCHS = 10
+NUM_EPOCHS = 30
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
 
@@ -81,7 +81,7 @@ def training_cycle(
             train_load = time.time()
 
         LOGGER.info(
-            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec.",
+            "Finished Epoch %d for %s. Total load time for %d batches is %.3f sec.",
             epoch + 1,
             str(train_dataloader.dataset),
             train_dl_times.count,
@@ -128,20 +128,20 @@ def training_cycle(
 
 
 def initialize_model(
-    model_type: str, num_channels: int, device: str = "cuda:0"
+    model_type: str, num_channels: int, num_classes: int, device: str = "cuda:0"
 ) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
     if model_type == "resnet":
         print("Initializing Resnet50 model")
-        model = cnn_models.Resnet50(num_channels)
+        model = cnn_models.Resnet50(num_channels, num_classes)
     elif model_type == "efficientnet":
         print("Initializing EfficientNetB4 model")
-        model = cnn_models.EfficientNetB4(num_channels)
+        model = cnn_models.EfficientNetB4(num_channels, num_classes)
     elif model_type == "densenet":
         print("Initializing DenseNet161 model")
-        model = cnn_models.DenseNet161(num_channels)
+        model = cnn_models.DenseNet161(num_channels, num_classes)
     else:
         print("Initializing BasicCNN model")
-        model = cnn_models.BasicCNN(num_channels)
+        model = cnn_models.BasicCNN(num_channels, num_classes)
 
     model = model.to(device)
     model.train()
@@ -178,7 +178,7 @@ if __name__ == "__main__":
         channels=True,
         dataset_name="CIFAR-10",
         img_dims=(3, 32, 32),
-        obj_size=16,
+        obj_size=8,
         img_transform=normalize_cifar,
     )
 
@@ -188,7 +188,7 @@ if __name__ == "__main__":
         channels=True,
         dataset_name="CIFAR-10",
         img_dims=(3, 32, 32),
-        obj_size=16,
+        obj_size=8,
         img_transform=normalize_cifar,
     )
 
@@ -204,7 +204,3 @@ if __name__ == "__main__":
     test_infini_dataloader = DataLoader(
         test_infini, batch_size=4, shuffle=True, num_workers=0, collate_fn=utils.infinicache_collate, pin_memory=True
     )
-
-    model, loss_fn, optim_func = initialize_model("resnet", num_channels=3)
-    print("Running training with the InfiniCache dataloader")
-    training_cycle(model, train_infini_dataloader, test_infini_dataloader, optim_func, loss_fn, 3, "cuda:0")

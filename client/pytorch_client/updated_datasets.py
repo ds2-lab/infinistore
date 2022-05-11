@@ -117,8 +117,7 @@ class MiniObjDataset(Dataset):
         self.chunked_fpaths = np.array(np.split(filenames_arr, (len(filenames_arr) // self.object_size)))
         self.chunked_labels = np.array(np.split(labels_arr, (len(labels_arr) // self.object_size)))
 
-        self.base_keyname = f"{dataset_name}_{self.object_size}_"
-        self.load_times = []
+        self.base_keyname = f"{dataset_name}-{self.object_size}-"
         self.img_dims = img_dims
         self.data_type = np.uint8
         self.labels = np.ones(self.chunked_labels.shape, dtype=self.data_type)
@@ -130,7 +129,7 @@ class MiniObjDataset(Dataset):
 
     def __getitem__(self, idx: int):
         num_samples = len(self.chunked_fpaths[idx])
-        key = f"{self.base_keyname}_{idx:05d}"
+        key = f"{self.base_keyname}-{idx:05d}"
         self.data_shape = (num_samples, *self.img_dims)
 
         try:
@@ -168,7 +167,7 @@ class MiniObjDataset(Dataset):
         return img_tensor
 
     def set_in_cache(self, idx: int):
-        key = f"{self.base_keyname}_{idx:05d}"
+        key = f"{self.base_keyname}-{idx:05d}"
         images, labels = self.get_s3_threaded(idx)
         self.labels[idx] = np.array(labels, dtype=self.data_type)
         go_bindings.set_array_in_cache(GO_LIB, key, np.array(images).astype(self.data_type))
