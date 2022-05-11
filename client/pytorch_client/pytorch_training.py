@@ -55,10 +55,11 @@ def training_cycle(
         running_loss = 0.0
         model.train(mode=not validation)
         history = None
-        start_time = time.time()
-    
+        epoch_start = time.time()
+        
+        batch_start = time.time()
         for idx, (images, labels) in enumerate(train_dataloader):
-            loading_time += time.time() - start_time
+            loading_time += time.time() - batch_start
             images = images.to(device)
             labels = labels.to(device)
         
@@ -83,14 +84,16 @@ def training_cycle(
                         f"Epoch: {epoch+1:03d}/{num_epochs:03d} |"
                         f" Batch: {idx+1:03d}/{num_batches:03d} |"
                         f" Cost: {running_loss/iteration:.4f} |"
-                        f" Elapsed: {time.time() - start_time:.3f} secs"
+                        f" Elapsed: {time.time() - epoch_start:.3f} secs"
                     )
                 )
                 iteration = 0
                 running_loss = 0.0
+            
+            # reset batch start
+            batch_start = time.time()
 
         top1, top5, total = history
-        start_time = time.time()
 
     return loading_time, top1 / total, top5 / total
 
