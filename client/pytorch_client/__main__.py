@@ -36,8 +36,8 @@ def main():
   parser.add_argument("-v", "--version", action="version",
                       version="pytorch_client {}".format("1"))
   parser.add_argument("--dataset", action='store', type=str, help="Dataset to use, choosing from mnist, imagenet or cifar.", default="cifar")
-  parser.add_argument("--ready", action=argparse.BooleanOptionalAction, help="Set if data is loaded to the data source", default=False)
-  parser.add_argument("--cpu", action=argparse.BooleanOptionalAction, help="Using cpu for training.")
+  parser.add_argument("--ready", action='store_true', help="Set if data is loaded to the data source")
+  parser.add_argument("--cpu", action='store_true', help="Using cpu for training.")
   parser.add_argument("--disk_source", action='store', type=str, help="Load dataset from disk and specifiy the path.", default="")
   parser.add_argument("--s3_source", action='store', type=str, help="Load dataset from S3 and specifiy the bucket.", default="cifar10-infinicache")
   parser.add_argument("--s3_train", action='store', type=str, help="Load training set from S3 and specifiy the bucket.", default="infinicache-cifar-train")
@@ -47,7 +47,7 @@ def main():
   parser.add_argument("--batch", action='store', type=int, help="The batch size.", default=64)
   parser.add_argument("--epochs", action='store', type=int, help="Max epochs.", default=100)
   parser.add_argument("--accuracy", action='store', type=float, help="Target accuracy.", default=1.0)
-  parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, help="Simply benchmark the pretrained model.")
+  parser.add_argument("--benchmark", action='store_true', help="Simply benchmark the pretrained model.")
   parser.add_argument("--workers", action='store', type=int, help="Number of workers.", default=0)
   parser.add_argument("-o", "--output", action='store', type=str, help="Output file", default="")
 
