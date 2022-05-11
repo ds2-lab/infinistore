@@ -53,7 +53,7 @@ def training_cycle(
     for epoch in range(num_epochs):
         iteration = 0
         running_loss = 0.0
-        model.train()
+        model.train(mode=not benchmarking)
         for idx, (images, labels) in enumerate(train_dataloader):
             images = images.to(device)
             labels = labels.to(device)
@@ -144,6 +144,7 @@ def run_training_get_results(
     accuracy: float = 1.0,
 ):
     training_cycle(model, data_loader, optim_func, loss_fn, num_epochs, device, accuracy)
+    model.eval()
     sample_loader = next(iter(data_loader))
     sample_loader_data = sample_loader[0].to(torch.float32).to(device)
     sample_loader_labels = sample_loader[1]

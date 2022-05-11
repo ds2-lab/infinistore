@@ -40,9 +40,9 @@ LOGGER = logging_utils.get_logger(__name__)
 
 GO_LIB = go_bindings.load_go_lib(os.path.join(os.path.dirname(__file__), "ecClient.so"))
 
-def get_test_fnames():
+def get_test_fnames(base_path: str = "") -> list:
     with open(os.path.join(os.path.dirname(__file__), "cifar_test_fnames.txt")) as f:
-        test_fnames = set([Path(fname.strip()) for fname in f.readlines()])
+        test_fnames = set([Path(os.path.join(base_path, fname.strip())) for fname in f.readlines()])
     return test_fnames
 
 
@@ -56,8 +56,8 @@ class DatasetDisk(Dataset):
         filenames = list(dataset_path.rglob("*.png"))
         filenames.extend(list(dataset_path.rglob("*.jpg")))
         if "cifar" in data_path:
-            filestubs = set(map(lambda x: x.name, filenames))
-            test_fnames = get_test_fnames()
+            filestubs = set(filenames)
+            test_fnames = get_test_fnames(data_path)
             if testing:
                 filenames = list(test_fnames)
             else:
