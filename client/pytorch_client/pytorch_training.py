@@ -156,8 +156,8 @@ def run_training_get_results(
         LOGGER.info(
             "[Epoch %3d] Training for %s with %d samples, data loading time %.3f sec, training time %.3f sec, top accuracies %.3f, %.3f.",
             epoch + 1,
-            str(data_loader),
-            data_loader.total_samples if hasattr(data_loader, "total_samples") else data_loader.dataset.total_samples,
+            str(data_loader.dataset),
+            data_loader.dataset.total_samples,
             training_loading_time,
             training_time,
             accuracy * 100,

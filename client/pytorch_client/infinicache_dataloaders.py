@@ -116,6 +116,7 @@ class DatasetS3(Dataset):
             else:
                 filenames = list(set(filenames).difference(test_fnames))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
+        self.total_samples = 0
         random.shuffle(self.filepaths)
 
     def __len__(self):
@@ -125,10 +126,14 @@ class DatasetS3(Dataset):
         label = self.filepaths[idx].stem.split("_")[self.label_idx]
         s3_png = self.s3_client.get_object(Bucket=self.bucket_name, Key=str(self.filepaths[idx]))
         img_bytes = s3_png["Body"].read()
+        self.total_samples += 1
 
         pil_img = Image.open(BytesIO(img_bytes))
         img_tensor = F.pil_to_tensor(pil_img)
         return img_tensor, int(label)
+
+    def __str__(self):
+        return f"{self.bucket_name}_DatasetS3"
 
 
 class BaseDataLoader(ABC):
