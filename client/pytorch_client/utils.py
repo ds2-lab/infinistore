@@ -20,7 +20,7 @@ def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[Path]:
     train_filenames = list(filestubs.difference(test_fnames))
     train_filenames = sorted(train_filenames, key=lambda filename: filename)
     train_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), train_filenames))
-    test_filenames = sorted(test_fnames, key=lambda filename: filename.stem)
+    test_filenames = sorted(test_fnames, key=lambda filename: filename)
     test_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), test_filenames))
 
     return train_filenames, test_filenames
