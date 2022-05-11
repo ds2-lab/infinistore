@@ -33,12 +33,11 @@ from torch.utils.data import Dataset
 from torch.utils.data._utils import collate
 from torchvision.transforms import functional as F
 
-import go_bindings
+import go_bindings 
+from go_bindings import GO_LIB
 import logging_utils
 
-LOGGER = logging_utils.get_logger(__name__)
-
-GO_LIB = go_bindings.load_go_lib(os.path.join(os.path.dirname(__file__), "ecClient.so"))
+LOGGER = logging_utils.get_logger(__name__, logging_utils.set_std_handler())
 
 def get_test_fnames(base_path: str = "") -> list:
     with open(os.path.join(os.path.dirname(__file__), "cifar_test_fnames.txt")) as f:

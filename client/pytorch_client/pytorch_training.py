@@ -16,7 +16,8 @@ import cnn_models
 import infinicache_dataloaders
 import logging_utils
 
-LOGGER = logging_utils.initialize_logger()
+LOGGER = logging_utils.initialize_logger(True)
+DATALOG = logging_utils.get_logger("datalog")
 
 SEED = 1234
 NUM_EPOCHS = 10
@@ -35,30 +36,33 @@ def training_cycle(
         infinicache_dataloaders.InfiniCacheLoader,
         infinicache_dataloaders.S3Loader,
         infinicache_dataloaders.DiskLoader,
+        DataLoader,
     ],
-    optim_func: torch.optim.Adam,
-    loss_fn: nn.CrossEntropyLoss,
+    optim_func: torch.optim.Adam = None,
+    loss_fn: nn.CrossEntropyLoss = None,
     num_epochs: int = 1,
-    device: str = "cuda:0",
-    accuracy: float = 1.0,
+    device: str = "cuda"
 ):
-    start_time = time.time()
     num_batches = len(train_dataloader)
 
-    benchmarking = num_epochs == 0
-    if benchmarking:
+    validation = num_epochs == 0
+    if validation:
         num_epochs = 1 
 
-    history = None
+    loading_time = 0.0
     for epoch in range(num_epochs):
         iteration = 0
         running_loss = 0.0
-        model.train(mode=not benchmarking)
+        model.train(mode=not validation)
+        history = None
+        start_time = time.time()
+    
         for idx, (images, labels) in enumerate(train_dataloader):
+            loading_time += time.time() - start_time
             images = images.to(device)
             labels = labels.to(device)
         
-            if not benchmarking:
+            if not validation:
                 logits, _ = model(images)
 
                 loss = loss_fn(logits, labels)
@@ -78,29 +82,17 @@ def training_cycle(
                     (
                         f"Epoch: {epoch+1:03d}/{num_epochs:03d} |"
                         f" Batch: {idx+1:03d}/{num_batches:03d} |"
-                        f" Cost: {running_loss/iteration:.4f}"
+                        f" Cost: {running_loss/iteration:.4f} |"
+                        f" Elapsed: {time.time() - start_time:.3f} secs"
                     )
                 )
                 iteration = 0
                 running_loss = 0.0
 
-        total_time_taken = sum(train_dataloader.load_times)
         top1, top5, total = history
-        LOGGER.info(
-            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec (%.3f, %.3f).",
-            epoch + 1,
-            str(train_dataloader),
-            train_dataloader.total_samples,
-            total_time_taken,
-            top1 / total * 100,
-            top5 / total * 100,
-        )
-        if top1 / total >= accuracy:
-            LOGGER.info("Accuracy reached.")
-            break
+        start_time = time.time()
 
-    end_time = time.time()
-    print(f"Time taken: {end_time - start_time}")
+    return loading_time, top1 / total, top5 / total
 
 def compare_pred_vs_actual(logit_scores: torch.Tensor, labels: torch.Tensor, silent: bool = False):
     logit_scores = logit_scores.to("cpu")
@@ -137,20 +129,53 @@ def count_top_k_preds(logit_scores: torch.Tensor, labels: torch.Tensor, history 
 def run_training_get_results(
     model: nn.Module,
     data_loader: DataLoader,
+    validation_loader: DataLoader,
     optim_func: torch.optim,
     loss_fn: nn.CrossEntropyLoss,
     num_epochs: int,
     device: str,
-    accuracy: float = 1.0,
+    target_accuracy: float = 1.0,
 ):
-    training_cycle(model, data_loader, optim_func, loss_fn, num_epochs, device, accuracy)
-    model.eval()
-    sample_loader = next(iter(data_loader))
-    sample_loader_data = sample_loader[0].to(torch.float32).to(device)
-    sample_loader_labels = sample_loader[1]
-    if torch.no_grad():
-        model_result = model(sample_loader_data)
-    compare_pred_vs_actual(model_result[0], sample_loader_labels)
+    validation_loading_time = 0.0
+    validation_time = 0.0
+    training_loading_time = 0.0
+    training_time = 0.0
+
+    if validation_loader is not None:
+        validation_start = time.time()
+        validation_loading_time, accuracy, top5 = training_cycle(model, validation_loader, num_epochs=0, device=device)
+        validation_time = time.time() - validation_start
+        LOGGER.info("Pretrained top-1 accuracy: %.3f, top-5 accuracy %.3f", accuracy * 100, top5 * 100)
+        DATALOG.info("%d,%d,%f,%f,%f,%f,%f", 1, 0, validation_start, validation_loading_time, validation_time, accuracy, top5)
+
+    for epoch in range(num_epochs):
+        epoch_start = time.time()
+        loading_time, accuracy, top5 = training_cycle(model, data_loader, optim_func, loss_fn, 1, epoch + 1, device=device)
+        training_time += time.time() - epoch_start
+        training_loading_time += loading_time
+        LOGGER.info(
+            "[Epoch %3d] Training for %s with %d samples, data loading time %.3f sec, training time %.3f sec, top accuracies %.3f, %.3f.",
+            epoch + 1,
+            str(data_loader),
+            data_loader.total_samples if hasattr(data_loader, "total_samples") else data_loader.dataset.total_samples,
+            training_loading_time,
+            training_time,
+            accuracy * 100,
+            top5 * 100,
+        )
+        DATALOG.info("%d,%d,%f,%f,%f,%f,%f", 0, epoch + 1, epoch_start, training_loading_time, training_time, accuracy, top5)
+
+        if validation_loader is not None:
+            validation_start = time.time()
+            loading_time, accuracy, top5 = training_cycle(model, validation_loader, num_epochs=0, device=device)
+            validation_time += time.time() - validation_start
+            validation_loading_time += loading_time
+            LOGGER.info("[Epoch %3d] Validation top-1 accuracy: %.3f, top-5 accuracy %.3f", epoch + 1, accuracy * 100, top5 * 100)
+            DATALOG.info("%d,%d,%f,%f,%f,%f,%f", 1, epoch + 1, validation_start, validation_loading_time, validation_time, accuracy, top5)
+
+            if accuracy >= target_accuracy:
+                LOGGER.info("Accuracy reached.")
+            break
 
 def initialize_model(
     model_type: str, num_channels: int, device: str = "cuda:0"
