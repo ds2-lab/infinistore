@@ -175,7 +175,7 @@ def run_training_get_results(
 
             if accuracy >= target_accuracy:
                 LOGGER.info("Accuracy reached.")
-            break
+                break
 
 def initialize_model(
     model_type: str, num_channels: int, device: str = "cuda:0"
