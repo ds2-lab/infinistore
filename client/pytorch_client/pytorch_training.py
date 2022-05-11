@@ -150,7 +150,7 @@ def run_training_get_results(
 
     for epoch in range(num_epochs):
         epoch_start = time.time()
-        loading_time, accuracy, top5 = training_cycle(model, data_loader, optim_func, loss_fn, 1, epoch + 1, device=device)
+        loading_time, accuracy, top5 = training_cycle(model, data_loader, optim_func, loss_fn, 1, device=device)
         training_time += time.time() - epoch_start
         training_loading_time += loading_time
         LOGGER.info(
