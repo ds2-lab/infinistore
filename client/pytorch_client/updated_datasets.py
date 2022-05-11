@@ -4,7 +4,6 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
-from pathlib import Path
 from typing import Optional
 
 import boto3
@@ -29,13 +28,12 @@ class DatasetDisk(Dataset):
 
     def __init__(
         self,
-        filepaths: list[Path],
+        filepaths: list[str],
         label_idx: int,
         dataset_name: str,
         img_transform: Optional[torchvision.transforms.Compose] = None,
     ):
-        fpaths = list(map(lambda x: str(x), filepaths))
-        self.filepaths = np.array(sorted(fpaths, key=lambda filename: filename))
+        self.filepaths = np.array(filepaths)
         self.label_idx = label_idx
         self.img_transform = img_transform
         self.total_samples = 0
