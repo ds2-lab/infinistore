@@ -109,12 +109,6 @@ class DatasetS3(Dataset):
         for page in paginator.paginate(Bucket=bucket_name):
             for content in page.get("Contents"):
                 filenames.append(Path(content["Key"]))
-        if "cifar" in bucket_name:
-            test_fnames = get_test_fnames()
-            if testing:
-                filenames = list(test_fnames)
-            else:
-                filenames = list(set(filenames).difference(test_fnames))
         self.filepaths = sorted(filenames, key=lambda filename: filename.stem)
         self.total_samples = 0
         random.shuffle(self.filepaths)

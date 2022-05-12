@@ -50,11 +50,13 @@ def main():
   parser.add_argument("--benchmark", action='store_true', help="Simply benchmark the pretrained model.")
   parser.add_argument("--workers", action='store', type=int, help="Number of workers.", default=0)
   parser.add_argument("-o", "--output", action='store', type=str, help="Output file", default="")
+  parser.add_argument("--prefix", action='store', type=str, help="Output prefix", default="")
 
   args, _ = parser.parse_known_args()
 
   if args.output != "":
-    pytorch_training.DATALOG = logging_utils.get_logger(pytorch_training.DATALOG.name, logging_utils.set_file_handler(args.output))
+    output = args.prefix + args.output
+    pytorch_training.DATALOG = logging_utils.get_logger(pytorch_training.DATALOG.name, logging_utils.set_file_handler(output))
 
   normalize_cifar = utils.normalize_image(True)
   trainset, testset = None, None

@@ -27,25 +27,25 @@ dryrun: build build-simulator
 	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
 
 simulate: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
 
 simulate-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
 
 playback: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
 
 playback-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
 
 playback-static: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-average: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
 
 playback-static-norecovery: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
+	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
@@ -79,3 +79,8 @@ test-local-small: build-bench
 	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -sz 100 -d 1 -p 0 -op 0
 	bin/redbench -n 100 -c 3 -keymin 2 -keymax 2 -d 1 -p 0 -op 1
 
+ml-cifar-disk:
+	python3 ../client/pytorch_client --dataset cifar --disk_source /data/local/cifar --model densenet --ready -o cifar_densenet_disk.csv 1>cifar_densenet_disk.log 2>&1 &
+
+ml-places-sion:
+	./playback.sh exec "python3 ../client/pytorch_client --dataset places --s3_source places-infinicache --s3_train \"\" --s3_test \"\" --loader infinicache --model basic --epochs 10 -o _places_basic_sion.csv" 1000 "" "" 1>./log 2>&1 &

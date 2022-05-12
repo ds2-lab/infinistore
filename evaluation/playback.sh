@@ -6,19 +6,21 @@ fi
 
 PWD=`dirname $0`
 DATE=`date "+%Y%m%d%H%M"`
-ENTRY="/data/$DATE"
+ENTRY="data/$DATE"
 NODE_PREFIX="Store1VPCNode"
 PID=/tmp/infinicache.pid
 
 source $PWD/util.sh
+mkdir -p "$PWD/$ENTRY"
 
 function perform(){
-	FILE=$1
-	CLUSTER=$2
-	PROXY_PARAMS=$3
-	PLAY_PARAMS=$4
-	COMPACT=$5
-	DASHBOARD=$6
+	CMD=$1
+	FILE=$2
+	CLUSTER=$3
+	PROXY_PARAMS=$4
+	PLAY_PARAMS=$5
+	COMPACT=$6
+	DASHBOARD=$7
 
 	if [ "$COMPACT" == "-enable-dashboard" ] ; then
 		DASHBOARD=$COMPACT
@@ -34,9 +36,16 @@ function perform(){
 		sleep 1s
 	done
 	cat /tmp/infinicache.pid
-	# playback
 	sleep 1s
-	playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS" $FILE
+
+	# playback
+	if [ "$CMD" == "exec" ] ; then
+		$FILE $PLAY_PARAMS --prefix ${PREPROXY}
+	else
+		playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS" $FILE
+	fi
+	
+	# stop proxy
 	kill -2 `cat $PID`
   # Wait for proxy cleaned up
 	TIMEOUT=60
@@ -58,22 +67,30 @@ function perform(){
 }
 
 function dry_perform(){
-	FILE=$1
-	CLUSTER=$2
-	PARAMS=$3
+	FILE=$2
+	CLUSTER=$3
+	PROXY_PARAMS=$4
+	PLAY_PARAMS=$5
+	COMPACT=$6
+	DASHBOARD=$7
 
-	dryrun "-cluster=$CLUSTER $PARAMS" $FILE
+	# dryrun "-cluster=$CLUSTER $PARAMS" $FILE
+
+	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
+	echo "$FILE $PLAY_PARAMS --prefix ${PREPROXY}"
+	$FILE $PLAY_PARAMS --prefix ${PREPROXY}
 }
 
 if [ "$1" == "dryrun" ]; then
-	dry_perform $2 $3 "$4"
+	echo "Dry run"
+	dry_perform "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 else
 	mkdir -p $PWD/$ENTRY
 	CLUSTER=$2
 	((MAXLAMBDAID=CLUSTER-1))
 
 	START=`date +"%Y-%m-%d %H:%M:%S"`
-	perform $1 $2 "$3" "$4" $5 $6
+	perform "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 	mv $PWD/log $PWD/$ENTRY.log
 	END=`date +"%Y-%m-%d %H:%M:%S"`
 	
