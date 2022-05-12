@@ -15,3 +15,6 @@ log
 evaluation/bin
 bin
 .vscode
+client/pytorch_client/ecClient.*
+__pycache__
+*.log

@@ -1,0 +1,24 @@
+2022-04-10 17:30:03,220 — infinicache_logger — INFO — TRAINING STARTED
+2022-04-10 17:30:31,220 — infinicache_logger — INFO — Finished Epoch 1 for DiskDataset. Total load time for 60000 samples is 2.793 sec.
+2022-04-10 17:30:35,917 — infinicache_logger — INFO — Finished Epoch 2 for DiskDataset. Total load time for 120000 samples is 5.440 sec.
+2022-04-10 17:30:40,616 — infinicache_logger — INFO — Finished Epoch 3 for DiskDataset. Total load time for 180000 samples is 8.087 sec.
+2022-04-10 17:30:45,322 — infinicache_logger — INFO — Finished Epoch 4 for DiskDataset. Total load time for 240000 samples is 10.743 sec.
+2022-04-10 17:30:50,030 — infinicache_logger — INFO — Finished Epoch 5 for DiskDataset. Total load time for 300000 samples is 13.396 sec.
+2022-04-10 17:30:54,738 — infinicache_logger — INFO — Finished Epoch 6 for DiskDataset. Total load time for 360000 samples is 16.046 sec.
+2022-04-10 17:30:59,453 — infinicache_logger — INFO — Finished Epoch 7 for DiskDataset. Total load time for 420000 samples is 18.696 sec.
+2022-04-10 17:31:04,160 — infinicache_logger — INFO — Finished Epoch 8 for DiskDataset. Total load time for 480000 samples is 21.339 sec.
+2022-04-10 17:31:08,884 — infinicache_logger — INFO — Finished Epoch 9 for DiskDataset. Total load time for 540000 samples is 23.995 sec.
+2022-04-10 17:31:13,578 — infinicache_logger — INFO — Finished Epoch 10 for DiskDataset. Total load time for 600000 samples is 26.643 sec.
+2022-04-10 18:17:20,568 — infinicache_logger — INFO — Finished Epoch 1 for InfiniCacheDataset. Total load time for 60000 samples is 2764.141 sec.
+2022-04-10 18:17:26,401 — infinicache_logger — INFO — Finished Epoch 2 for InfiniCacheDataset. Total load time for 120000 samples is 2767.798 sec.
+2022-04-10 18:17:34,714 — infinicache_logger — INFO — Finished Epoch 3 for InfiniCacheDataset. Total load time for 180000 samples is 2773.924 sec.
+2022-04-10 18:17:40,551 — infinicache_logger — INFO — Finished Epoch 4 for InfiniCacheDataset. Total load time for 240000 samples is 2777.593 sec.
+2022-04-10 18:17:49,050 — infinicache_logger — INFO — Finished Epoch 5 for InfiniCacheDataset. Total load time for 300000 samples is 2783.909 sec.
+2022-04-10 18:17:54,842 — infinicache_logger — INFO — Finished Epoch 6 for InfiniCacheDataset. Total load time for 360000 samples is 2787.524 sec.
+2022-04-10 18:18:00,743 — infinicache_logger — INFO — Finished Epoch 7 for InfiniCacheDataset. Total load time for 420000 samples is 2791.217 sec.
+2022-04-10 18:18:06,587 — infinicache_logger — INFO — Finished Epoch 8 for InfiniCacheDataset. Total load time for 480000 samples is 2794.872 sec.
+2022-04-10 18:18:12,515 — infinicache_logger — INFO — Finished Epoch 9 for InfiniCacheDataset. Total load time for 540000 samples is 2798.596 sec.
+2022-04-10 18:18:18,394 — infinicache_logger — INFO — Finished Epoch 10 for InfiniCacheDataset. Total load time for 600000 samples is 2802.291 sec.
+2022-04-10 19:41:20,209 — infinicache_logger — INFO — Finished Epoch 1 for S3Dataset. Total load time for 60000 samples is 2179.305 sec.
+2022-04-10 20:16:52,888 — infinicache_logger — INFO — Finished Epoch 2 for S3Dataset. Total load time for 120000 samples is 4309.238 sec.
+2022-04-10 20:52:02,520 — infinicache_logger — INFO — Finished Epoch 3 for S3Dataset. Total load time for 180000 samples is 6416.116 sec.
