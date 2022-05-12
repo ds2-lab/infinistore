@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import random
 from pathlib import Path
 
 import torch
@@ -7,7 +9,7 @@ import torchvision
 import os
 
 
-def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[Path]:
+def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[str]:
     """
     Expects all files to be in a single directory with the same filenames as in the S3 bucket.
     """
@@ -18,7 +20,7 @@ def split_cifar_data(cifar_data_dir: str, test_fnames_path: str) -> list[Path]:
         test_fnames = set([fname.strip() for fname in f.readlines()])
     filestubs = set(map(lambda x: x.name, filenames))
     train_filenames = list(filestubs.difference(test_fnames))
-    train_filenames = sorted(train_filenames, key=lambda filename: filename)
+    random.shuffle(train_filenames)
     train_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), train_filenames))
     test_filenames = sorted(test_fnames, key=lambda filename: filename)
     test_filenames = list(map(lambda x: os.path.join(cifar_data_dir, x), test_filenames))

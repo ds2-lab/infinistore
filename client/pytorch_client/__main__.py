@@ -79,7 +79,7 @@ def main():
         args.disk_source = os.path.join(args.disk_source, "full")
 
       # trigger download
-      trainset = DatasetDisk([Path(args.disk_source)], s3_bucket = args.s3_source, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar)
+      trainset = DatasetDisk([args.disk_source], s3_bucket = args.s3_source, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar)
 
       if args.dataset == "cifar":
         train_source, test_source = utils.split_cifar_data(
@@ -95,11 +95,11 @@ def main():
         args.s3_test = ""
 
       trainset = DatasetDisk(
-        filepaths = [Path(os.path.join(args.disk_source, "training"))], s3_bucket = args.s3_train, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar
+        filepaths = [os.path.join(args.disk_source, "training")], s3_bucket = args.s3_train, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar
       )
       if loadtestset:
         testset = DatasetDisk(
-          filepaths = [Path(os.path.join(args.disk_source, "test"))], s3_bucket = args.s3_test, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar
+          filepaths = [os.path.join(args.disk_source, "test")], s3_bucket = args.s3_test, label_idx=0, dataset_name=args.dataset, img_transform=normalize_cifar
         )
 
   elif args.loader == "ininficache":

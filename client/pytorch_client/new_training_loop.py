@@ -11,16 +11,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 import cnn_models
 import logging_utils
 import updated_datasets
 import utils
 
+WRITER = SummaryWriter()
 LOGGER = logging_utils.initialize_logger()
 
 SEED = 1234
-NUM_EPOCHS = 10
+NUM_EPOCHS = 30
 DEVICE = "cuda:0"
 LEARNING_RATE = 1e-3
 
@@ -41,11 +43,17 @@ def training_cycle(
 ):
     start_time = time.time()
     num_batches = len(train_dataloader)
+    train_dl_times = updated_datasets.LoadTimes("TrainTimer")
+    test_dl_times = updated_datasets.LoadTimes("TestTimer")
+
     for epoch in range(num_epochs):
         iteration = 0
         running_loss = 0.0
         model.train()
+
+        train_load = time.time()
         for idx, (images, labels) in enumerate(train_dataloader):
+            train_dl_times.update(time.time() - train_load)
             images = images.to(device)
             labels = labels.to(device)
             logits, _ = model(images)
@@ -65,39 +73,46 @@ def training_cycle(
                         f" Cost: {running_loss/iteration:.4f}"
                     )
                 )
+                WRITER.add_scalar("Loss/Train", running_loss / iteration, epoch * len(train_dataloader) + idx)
+                WRITER.add_scalar("Average Load Time/Train", train_dl_times.avg, epoch * len(train_dataloader) + idx)
+                WRITER.add_scalar("Sum Load Time/Train", train_dl_times.sum, epoch * len(train_dataloader) + idx)
+
                 iteration = 0
                 running_loss = 0.0
+            train_load = time.time()
 
-        total_time_taken = sum(train_dataloader.dataset.load_times)
         LOGGER.info(
-            "Finished Epoch %d for %s. Total load time for %d samples is %.3f sec.",
+            "Finished Epoch %d for %s. Total load time for %d batches is %.3f sec.",
             epoch + 1,
             str(train_dataloader.dataset),
-            train_dataloader.dataset.total_samples,
-            total_time_taken,
+            train_dl_times.count,
+            train_dl_times.sum,
         )
 
         LOGGER.info("Running Testing:")
         with torch.no_grad():
             num_correct = 0
             test_samples = 0
+            test_load = time.time()
             for idx, (images, labels) in enumerate(test_dataloader):
+                test_dl_times.update(time.time() - test_load)
+
                 images = images.to(device)
                 labels = labels.to(device)
                 logits, _ = model(images)
                 logit_preds = torch.argmax(logits, axis=1)
                 num_correct += torch.sum(logit_preds == labels)
                 test_samples += labels.shape[0]
+                test_load = time.time()
 
-            total_time_taken = sum(test_dataloader.dataset.load_times)
             perc_correct = num_correct / test_samples * 100
 
             LOGGER.info(
-                "Finished Testing Epoch %d for %s. Total load time for %d samples is %.3f sec.",
+                "Finished Testing Epoch %d for %s. Total load time for %d iterations is %.3f sec.",
                 epoch + 1,
                 str(test_dataloader.dataset),
-                test_dataloader.dataset.total_samples,
-                total_time_taken,
+                test_dl_times.count,
+                test_dl_times.sum,
             )
             LOGGER.info(
                 "Test results: %d / %d = %f",
@@ -105,26 +120,29 @@ def training_cycle(
                 test_samples,
                 perc_correct,
             )
+            WRITER.add_scalar("Accuracy/Test", perc_correct, epoch)
+            WRITER.add_scalar("Average Load Time/Test", test_dl_times.avg, epoch)
+            WRITER.add_scalar("Sum Load Time/Test", test_dl_times.sum, epoch)
 
     end_time = time.time()
-    print(f"Time taken: {end_time - start_time}")
+    print(f"Training Time taken: {end_time - start_time}")
 
 
 def initialize_model(
-    model_type: str, num_channels: int, device: str = "cuda:0"
+    model_type: str, num_channels: int, num_classes: int, device: str = "cuda:0"
 ) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
     if model_type == "resnet":
         print("Initializing Resnet50 model")
-        model = cnn_models.Resnet50(num_channels)
+        model = cnn_models.Resnet50(num_channels, num_classes)
     elif model_type == "efficientnet":
         print("Initializing EfficientNetB4 model")
-        model = cnn_models.EfficientNetB4(num_channels)
+        model = cnn_models.EfficientNetB4(num_channels, num_classes)
     elif model_type == "densenet":
         print("Initializing DenseNet161 model")
-        model = cnn_models.DenseNet161(num_channels)
+        model = cnn_models.DenseNet161(num_channels, num_classes)
     else:
         print("Initializing BasicCNN model")
-        model = cnn_models.BasicCNN(num_channels)
+        model = cnn_models.BasicCNN(num_channels, num_classes)
 
     model = model.to(device)
     model.train()
@@ -147,11 +165,11 @@ if __name__ == "__main__":
     train_ds = updated_datasets.DatasetDisk(train_cifar, 0, dataset_name="CIFAR-10", img_transform=normalize_cifar)
     test_ds = updated_datasets.DatasetDisk(test_cifar, 0, dataset_name="CIFAR-10", img_transform=normalize_cifar)
 
-    train_dataloader = DataLoader(train_ds, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
-    test_dataloader = DataLoader(test_ds, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
+    train_dataloader = DataLoader(train_ds, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+    test_dataloader = DataLoader(test_ds, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
 
     model, loss_fn, optim_func = initialize_model("resnet", num_channels=3)
-    print("Running training with the EBS dataloader")
+    print("Running training with the Disk dataloader")
     training_cycle(model, train_dataloader, test_dataloader, optim_func, loss_fn, 3, DEVICE)
 
     # CIFAR INFINICACHE
@@ -161,7 +179,7 @@ if __name__ == "__main__":
         channels=True,
         dataset_name="CIFAR-10",
         img_dims=(3, 32, 32),
-        obj_size=16,
+        obj_size=8,
         img_transform=normalize_cifar,
     )
 
@@ -171,7 +189,7 @@ if __name__ == "__main__":
         channels=True,
         dataset_name="CIFAR-10",
         img_dims=(3, 32, 32),
-        obj_size=16,
+        obj_size=8,
         img_transform=normalize_cifar,
     )
 
@@ -187,7 +205,3 @@ if __name__ == "__main__":
     test_infini_dataloader = DataLoader(
         test_infini, batch_size=4, shuffle=True, num_workers=0, collate_fn=utils.infinicache_collate, pin_memory=True
     )
-
-    model, loss_fn, optim_func = initialize_model("resnet", num_channels=3)
-    print("Running training with the InfiniCache dataloader")
-    training_cycle(model, train_infini_dataloader, test_infini_dataloader, optim_func, loss_fn, 3, DEVICE)

@@ -5,7 +5,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
+from threading import Lock
 from functools import partial
 
 import boto3
@@ -22,19 +23,43 @@ import logging_utils
 
 LOGGER = logging_utils.initialize_logger()
 
+class LoadTimes:
+    def __init__(self, name: str):
+        self.name = name
+        self.count = 0
+        self.avg = 0
+        self.sum = 0
+        self.lock = Lock()
+
+    def reset(self):
+        with self.lock:
+            self.num_loads = 0
+            self.avg = 0
+            self.sum = 0
+
+    def update(self, val: Union[float, int]):
+        with self.lock:
+            self.sum += val
+            self.count += 1
+            self.avg = self.sum / self.count
+
+    def __str__(self):
+        return f"{self.name}: Average={self.avg:.03f}\tSum={self.sum:.03f}\tCount={self.count}"
+
+
 class DatasetDisk(Dataset):
     """Simulates having to load each data point from disk every call."""
 
     def __init__(
         self,
-        filepaths: list[Path],
+        filepaths: list[str],
         label_idx: int,
         dataset_name: str,
         img_transform: Optional[torchvision.transforms.Compose] = None,
         s3_bucket: str = "",
     ):
         if len(filepaths) == 1:
-            localpath = filepaths[0]
+            localpath = Path(filepaths[0])
 
             # Download
             if s3_bucket != "":
@@ -44,28 +69,23 @@ class DatasetDisk(Dataset):
             # Expand
             filepaths = list(localpath.rglob("*.png"))
             filepaths.extend(list(localpath.rglob("*.jpg")))
+            filepaths = list(map(lambda x: str(x), filepaths))
 
-        fpaths = list(map(lambda x: str(x), filepaths))
-        self.filepaths = np.array(sorted(fpaths, key=lambda filename: filename))
+        self.filepaths = np.array(filepaths)
         self.label_idx = label_idx
         self.img_transform = img_transform
         self.total_samples = 0
-        self.load_times = []
         self.dataset_name = dataset_name
 
     def __len__(self):
         return len(self.filepaths)
 
     def __getitem__(self, idx: int):
-        start_time = time.time()
         label = os.path.basename(self.filepaths[idx]).split(".")[0].split("_")[self.label_idx]
         pil_img = Image.open(self.filepaths[idx])
         img_tensor = F.pil_to_tensor(pil_img)
-        end_time = time.time()
         if self.img_transform:
             img_tensor = self.img_transform(img_tensor.to(torch.float32).div(255))
-        time_taken = end_time - start_time
-        self.load_times.append(time_taken)
         self.total_samples += 1
 
         return img_tensor, int(label)
@@ -130,8 +150,7 @@ class MiniObjDataset(Dataset):
         self.chunked_fpaths = np.array(np.split(filenames_arr, (len(filenames_arr) // self.object_size)))
         self.chunked_labels = np.array(np.split(labels_arr, (len(labels_arr) // self.object_size)))
 
-        self.base_keyname = f"{dataset_name}_{self.object_size}_"
-        self.load_times = []
+        self.base_keyname = f"{dataset_name}-{self.object_size}-"
         self.img_dims = img_dims
         self.data_type = np.uint8
         self.labels = np.ones(self.chunked_labels.shape, dtype=self.data_type)
@@ -143,9 +162,8 @@ class MiniObjDataset(Dataset):
         return len(self.chunked_fpaths)
 
     def __getitem__(self, idx: int):
-        start_time = time.time()
         num_samples = len(self.chunked_fpaths[idx])
-        key = f"{self.base_keyname}_{idx:05d}"
+        key = f"{self.base_keyname}-{idx:05d}"
         self.data_shape = (num_samples, *self.img_dims)
 
         try:
@@ -158,14 +176,11 @@ class MiniObjDataset(Dataset):
             self.labels[idx] = np.array(labels, dtype=self.data_type)
             go_bindings.set_array_in_cache(GO_LIB, key, np.array(images).astype(self.data_type))
             images = images.to(torch.float32).reshape(self.data_shape)
-        end_time = time.time()
-        # Image transformations are outside the scope of data loading timing
+
         if self.img_transform:
             images = self.img_transform(images.to(torch.float32).div(255))
         data = (images, labels)
-        time_taken = end_time - start_time
         self.total_samples += num_samples
-        self.load_times.append(time_taken)
         return data
 
     def get_s3_threaded(self, idx: int):
@@ -186,7 +201,7 @@ class MiniObjDataset(Dataset):
         return img_tensor
 
     def set_in_cache(self, idx: int):
-        key = f"{self.base_keyname}_{idx:05d}"
+        key = f"{self.base_keyname}-{idx:05d}"
         images, labels = self.get_s3_threaded(idx)
         self.labels[idx] = np.array(labels, dtype=self.data_type)
         go_bindings.set_array_in_cache(GO_LIB, key, np.array(images).astype(self.data_type))
@@ -202,7 +217,6 @@ class MiniObjDataset(Dataset):
             LOGGER.info("DONE with initial SET into InfiniCache")
         end_time = time.time()
         time_taken = end_time - start_time
-        self.load_times.append(time_taken)
 
         LOGGER.info(
             "Finished Setting Data in InfiniCache. Total load time for %d samples is %.3f sec.",
