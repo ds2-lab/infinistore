@@ -181,20 +181,20 @@ def run_training_get_results(
                 break
 
 def initialize_model(
-    model_type: str, num_channels: int, device: str = "cuda:0"
+    model_type: str, num_channels: int, num_classes: int = 10, device: str = DEVICE
 ) -> tuple[nn.Module, nn.CrossEntropyLoss, torch.optim.Adam]:
     if model_type == "resnet":
         print("Initializing Resnet50 model")
-        model = cnn_models.Resnet50(num_channels)
+        model = cnn_models.Resnet50(num_channels, num_classes)
     elif model_type == "efficientnet":
         print("Initializing EfficientNetB4 model")
-        model = cnn_models.EfficientNetB4(num_channels)
+        model = cnn_models.EfficientNetB4(num_channels, num_classes)
     elif model_type == "densenet":
         print("Initializing DenseNet161 model")
-        model = cnn_models.DenseNet161(num_channels)
+        model = cnn_models.DenseNet161(num_channels, num_classes)
     else:
         print("Initializing BasicCNN model")
-        model = cnn_models.BasicCNN(num_channels)
+        model = cnn_models.BasicCNN(num_channels, num_classes)
 
     model = model.to(device)
     model.train()
