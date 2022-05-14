@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"sync/atomic"
+
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -29,6 +31,7 @@ type GroupInstance struct {
 	group    *Group
 	idx      GroupIndex
 	disabled bool
+	retired  uint32
 }
 
 func (gins *GroupInstance) Idx() int {
@@ -38,6 +41,14 @@ func (gins *GroupInstance) Idx() int {
 func (gins *GroupInstance) Instance() *lambdastore.Instance {
 	ins, _ := gins.LambdaDeployment.(*lambdastore.Instance)
 	return ins
+}
+
+func (gins *GroupInstance) IsRetired() bool {
+	return atomic.LoadUint32(&gins.retired) == 1
+}
+
+func (gins *GroupInstance) Retire() bool {
+	return atomic.CompareAndSwapUint32(&gins.retired, 0, 1)
 }
 
 type GroupInstanceEnumerator struct {

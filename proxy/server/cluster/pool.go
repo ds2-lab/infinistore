@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 	"github.com/mason-leap-lab/infinicache/migrator"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	"github.com/zhangjyr/hashmap"
 )
 
 const DEP_STATUS_POOLED = 0
@@ -26,7 +26,7 @@ var (
 
 type Pool struct {
 	backend  chan *lambdastore.Deployment
-	actives  *hashmap.HashMap
+	actives  hashmap.HashMap
 	recycled int32
 }
 
@@ -34,7 +34,7 @@ type Pool struct {
 func NewPool(numCluster int, numDeployment int) *Pool {
 	s := &Pool{
 		backend: make(chan *lambdastore.Deployment, numDeployment+1), // Allocate extra 1 buffer to avoid blocking
-		actives: hashmap.New(uintptr(numCluster)),
+		actives: hashmap.NewMap(numCluster),
 	}
 	for i := 0; i < numDeployment; i++ {
 		s.backend <- lambdastore.NewDeployment(global.Options.GetLambdaPrefix(), uint64(i))
@@ -56,7 +56,7 @@ func (s *Pool) NumActives() int {
 // This operation will be blocked if no more deployment available
 func (s *Pool) GetForGroup(g *Group, idx GroupIndex) *GroupInstance {
 	gins := g.Reserve(idx, lambdastore.NewInstanceFromDeployment(<-s.backend, uint64(idx.Idx())))
-	s.actives.Set(gins.Id(), gins)
+	s.actives.Store(gins.Id(), gins)
 	g.Set(gins)
 	return gins
 }
@@ -68,7 +68,7 @@ func (s *Pool) ReserveForGroup(g *Group, idx GroupIndex) (*GroupInstance, error)
 	select {
 	case item := <-s.backend:
 		gins := g.Reserve(idx, item)
-		s.actives.Set(gins.Id(), gins)
+		s.actives.Store(gins.Id(), gins)
 		return gins, nil
 	default:
 		return nil, types.ErrNoSpareDeployment
@@ -92,13 +92,12 @@ func (s *Pool) ReserveForInstance(insId uint64) (*GroupInstance, error) {
 
 // Helper function for two phase deletion
 func (s *Pool) getActive(key interface{}) (*GroupInstance, bool) {
-	active, exists := s.actives.Get(key)
+	active, exists := s.actives.Load(key)
 	if !exists {
 		return nil, false
-	} else if legacy, ok := active.(*Legacy); ok {
-		return legacy.GroupInstance, false
 	} else {
-		return active.(*GroupInstance), true
+		ins := active.(*GroupInstance)
+		return ins, !ins.IsRetired()
 	}
 }
 
@@ -106,11 +105,11 @@ func (s *Pool) getActive(key interface{}) (*GroupInstance, bool) {
 // Instead of removing instance from actives, placehold a legacy instance to keep track delegate information.
 // TODO: Relocate meta to reflect delegated placements.
 func (s *Pool) Recycle(dp types.LambdaDeployment) {
-	// There is no atomic delete that can detect the existence of the key. Using two phase deletion here.
-	// We need this to ensure a active being recycle once.
 	if active, ok := s.getActive(dp.Id()); !ok {
+		// Not exist or retired
 		return
-	} else if !s.actives.Cas(dp.Id(), active, &Legacy{GroupInstance: active}) {
+	} else if !active.Retire() {
+		// Retired
 		return
 	}
 
@@ -154,19 +153,21 @@ func (s *Pool) InstanceIndex(id uint64) (*GroupInstance, bool) {
 }
 
 func (s *Pool) Clear(g *Group) {
-	for item := range s.actives.Iter() {
-		if gins, ok := item.Value.(*GroupInstance); ok && gins.group == g {
+	s.actives.Range(func(key, value interface{}) bool {
+		if gins, ok := value.(*GroupInstance); ok && !gins.IsRetired() && gins.group == g {
 			gins.LambdaDeployment.(*lambdastore.Instance).Close()
 		}
-	}
+		return true
+	})
 }
 
 func (s *Pool) ClearAll() {
-	for item := range s.actives.Iter() {
-		if gins, ok := item.Value.(*GroupInstance); ok {
+	s.actives.Range(func(key, value interface{}) bool {
+		if gins, ok := value.(*GroupInstance); ok && !gins.IsRetired() {
 			gins.LambdaDeployment.(*lambdastore.Instance).Close()
 		}
-	}
+		return true
+	})
 }
 
 // MigrationScheduler implementations
