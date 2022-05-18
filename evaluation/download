@@ -3,12 +3,23 @@
 PWD=`dirname $0`
 DATA="~/go/src/github.com/mason-leap-lab/infinicache/evaluation/data"
 DOWNLOAD=$PWD/downloaded/proxy/
+REMOTE="ubuntu@remote"
 
-if [ "$1" == "" ] ; then
+FOLDER=$1
+# date "+%Y%m%d%H%M" -d "$FOLDER" > /dev/null  2>&1 # Linux
+date -jf "%Y%m%d%H%M" "$FOLDER" > /dev/null  2>&1  # Mac
+if [ $? -ne 0 ]; then
+		FOLDER=""
+fi
+if [ "$FOLDER" == "" ] ; then
 	echo "Please specify the data directory, in the form of YYYYMMDDHHmm"
 	exit 1
 fi
 
+if [ "$2" != "" ] ; then
+	REMOTE=$2
+fi
+
 mkdir -p $DOWNLOAD
-ssh -i ~/.ssh/tianium -t ubuntu@server.gmu.tianium.com "cd $DATA && tar -czf $1.tar.gz $1 $1*.log logs/$1"
-scp -i ~/.ssh/tianium ubuntu@server.gmu.tianium.com:$DATA/$1.tar.gz $DOWNLOAD
+ssh -i ~/.ssh/tianium -t $REMOTE "cd $DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER"
+scp -i ~/.ssh/tianium $REMOTE:$DATA/$FOLDER.tar.gz $DOWNLOAD
