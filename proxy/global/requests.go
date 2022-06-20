@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/zhangjyr/hashmap"
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
@@ -40,15 +40,15 @@ func getEmptySlice(size int) []*types.Request {
 
 type RequestCoordinator struct {
 	pool     *sync.Pool
-	registry *hashmap.HashMap
+	registry hashmap.HashMap
 }
 
-func NewRequestCoordinator(size uintptr) *RequestCoordinator {
+func NewRequestCoordinator(size int) *RequestCoordinator {
 	return &RequestCoordinator{
 		pool: &sync.Pool{
 			New: newRequestCounter,
 		},
-		registry: hashmap.New(size),
+		registry: hashmap.NewMapWithStringKey(size),
 	}
 }
 
@@ -60,7 +60,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 	prepared := c.pool.Get().(*RequestCounter)
 	prepared.initialized.Add(1) // Block in case initalization is need.
 
-	ret, ok := c.registry.GetOrInsert(reqId, prepared)
+	ret, ok := c.registry.LoadOrStore(reqId, prepared)
 	// There is potential problem with this late initialization approach!
 	// Since the counter will be used to coordinate async responses of the first batch of concurrent
 	// chunk requests, it is ok here.
@@ -83,11 +83,11 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 }
 
 func (c *RequestCoordinator) RegisterControl(reqId string, ctrl *types.Control) {
-	c.registry.Insert(reqId, ctrl)
+	c.registry.Store(reqId, ctrl)
 }
 
 func (c *RequestCoordinator) Load(reqId string) interface{} {
-	item, _ := c.registry.Get(reqId)
+	item, _ := c.registry.Load(reqId)
 	if counter, ok := item.(*RequestCounter); ok {
 		return counter.Load()
 	} else {
@@ -96,7 +96,7 @@ func (c *RequestCoordinator) Load(reqId string) interface{} {
 }
 
 func (c *RequestCoordinator) Clear(reqId string) {
-	c.registry.Del(reqId)
+	c.registry.Delete(reqId)
 }
 
 func (c *RequestCoordinator) Recycle(item interface{}) bool {

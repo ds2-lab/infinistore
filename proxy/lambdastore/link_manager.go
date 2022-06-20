@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	"github.com/zhangjyr/hashmap"
 )
 
 const (
@@ -42,7 +42,7 @@ type LinkManager struct {
 	// Available links, expandable
 	availables *AvailableLinks
 
-	dataLinks *hashmap.HashMap
+	dataLinks hashmap.HashMap
 	pendings  *list.List
 
 	log logger.ILogger
@@ -53,7 +53,7 @@ func NewLinkManager(ins *Instance) *LinkManager {
 	lm := &LinkManager{
 		instance:   ins,
 		availables: newAvailableLinks(),
-		dataLinks:  hashmap.New(100),
+		dataLinks:  hashmap.NewMap(100),
 		pendings:   list.New(),
 		log:        ins.log,
 	}
@@ -139,14 +139,14 @@ func (m *LinkManager) addDataLinkLocked(link *Connection, cache bool) bool {
 
 	link.Id = atomic.AddUint32(&m.seq, 1)
 	link.BindInstance(m.instance)
-	m.dataLinks.Insert(link.Id, link)
+	m.dataLinks.Store(link.Id, link)
 	m.availables.AddAvailable(link, true) // No limit control here
 	m.log.Debug("Data link added:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
 	return true
 }
 
 func (m *LinkManager) RemoveDataLink(link *Connection) {
-	m.dataLinks.Del(link.Id)
+	m.dataLinks.Delete(link.Id)
 	m.log.Debug("Data link removed:%v, availables: %d, all: %d", link, m.availables.Len(), m.dataLinks.Len())
 	// Data link being removed can be in avaiables already, we ignore this by considering following cases:
 	// 1. New datalink will not be disconnected before first use.
@@ -201,14 +201,15 @@ func (m *LinkManager) resetLocked(legacy *Connection) {
 	}
 
 	m.availables.Reset()
-	for keyVal := range m.dataLinks.Iter() {
-		conn := keyVal.Value.(*Connection)
+	m.dataLinks.Range(func(key interface{}, value interface{}) bool {
+		conn := value.(*Connection)
 		// Filter out unrelated connections
 		if conn.workerId == legacy.workerId {
 			conn.Close()
-			m.dataLinks.Del(keyVal.Key)
+			m.dataLinks.Delete(key)
 		}
-	}
+		return true
+	})
 	m.log.Debug("Data link reset, availables: %d, all: %d", m.availables.Len(), m.dataLinks.Len())
 }
 

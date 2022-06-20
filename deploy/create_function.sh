@@ -7,6 +7,7 @@ DEPLOY_FROM=0
 DEPLOY_CLUSTER=400
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
 DEPLOY_MEM=1024
+DEPLOY_VPC="-vpc"
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
 
@@ -35,5 +36,5 @@ echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Creating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -to=$cluster -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX $DEPLOY_VPC -key=$KEY -to=$cluster -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 rm $KEY*

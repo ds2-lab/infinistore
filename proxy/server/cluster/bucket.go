@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/zhangjyr/hashmap"
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -39,9 +39,9 @@ type Bucket struct {
 	end           DefaultGroupIndex // End logic index of backend group
 	activeStart   GroupIndex        // Instances end at activeStart - 1 are full.
 	activeChanged bool
-	disabled      *hashmap.HashMap // Buffer fulled instance
-	flushLimit    int              // The max number stored in buffer.
-	flushedAt     time.Time        // The last time the "disabled" fulled instance was cleared.
+	disabled      hashmap.HashMap // Buffer fulled instance
+	flushLimit    int             // The max number stored in buffer.
+	flushedAt     time.Time       // The last time the "disabled" fulled instance was cleared.
 
 	//state
 	state int
@@ -74,7 +74,7 @@ func newBucket(id int, group *Group, num int) (bucket *Bucket, err error) {
 		group:      group,
 		log:        global.GetLogger(fmt.Sprintf("Bucket %d:", id)),
 		instances:  make([]*GroupInstance, 0, num),
-		disabled:   hashmap.New(uintptr(num)),
+		disabled:   hashmap.NewMap(num),
 		flushLimit: limit,
 	}
 
@@ -219,7 +219,7 @@ func (b *Bucket) flagInactive(gins *GroupInstance) {
 	}
 
 	gins.disabled = true
-	b.disabled.Set(gins.Idx(), gins)
+	b.disabled.Store(gins.Idx(), gins)
 	if b.disabled.Len() < b.flushLimit && time.Since(b.flushedAt) < BucketFlushInactiveTimeout {
 		return
 	}
@@ -246,7 +246,7 @@ func (b *Bucket) flushInactiveLocked() {
 			if !ginsAll[i].disabled {
 				continue
 			}
-			b.disabled.Del(ginsAll[i].Idx())
+			b.disabled.Delete(ginsAll[i].Idx())
 			b.activeStart = ginsAll[flushed].idx.(*BucketIndex).Next()
 			b.activeChanged = true
 			// Pack disabled instance

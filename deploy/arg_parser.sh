@@ -14,6 +14,7 @@ function help() {
   echo "  -m, --mem=MEM                       Memory size in MB"
   echo "  --no-break                          Do not break for prompt"
   echo "  --no-build                          Skip building lambda code"
+  echo "  --no-vpc                            Lambdas are not deployed in a VPC"
   echo "  --s3=BUCKET                         S3 bucket name"
 }
 
@@ -79,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-build)
       NO_BUILD=1
+      shift # past argument
+      ;;
+    --no-vpc)
+      VPC=
       shift # past argument
       ;;
     --s3)

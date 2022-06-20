@@ -23,13 +23,13 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
-	"github.com/zhangjyr/hashmap"
 )
 
 const (
@@ -180,15 +180,15 @@ type Instance struct {
 
 	// Connection management
 	lm                *LinkManager
-	sessions          *hashmap.HashMap
+	sessions          hashmap.HashMap
 	due               int64
 	reconcilingWorker int32 // The worker id of reconciling function.
 
 	// Backup fields
 	backups          Backups
-	recovering       uint32           // # of backups in use, also if the recovering > 0, the instance is recovering.
-	writtens         *hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
-	backing          uint32           // backing status, 0 for non backing, 1 for reserved, 2 for backing.
+	recovering       uint32          // # of backups in use, also if the recovering > 0, the instance is recovering.
+	writtens         hashmap.HashMap // Whitelist, write opertions will be added to it during parallel recovery.
+	backing          uint32          // backing status, 0 for non backing, 1 for reserved, 2 for backing.
 	backingIns       *Instance
 	backingId        int // Identifier for backup, ranging from [0, # of backups)
 	backingTotal     int // Total # of backups ready for backing instance.
@@ -220,8 +220,8 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		coolTimer:    time.NewTimer(time.Duration(rand.Int63n(int64(WarmTimeout)) + int64(WarmTimeout)/2)), // Differentiate the time to start warming up.
 		coolTimeout:  WarmTimeout,
 		coolReset:    make(chan struct{}, 1),
-		sessions:     hashmap.New(TEMP_MAP_SIZE),
-		writtens:     hashmap.New(TEMP_MAP_SIZE),
+		sessions:     hashmap.NewMap(TEMP_MAP_SIZE),
+		writtens:     hashmap.NewMap(TEMP_MAP_SIZE),
 	}
 	ins.Meta.ResetCapacity(global.Options.GetInstanceCapacity(), 0)
 	ins.backups.instance = ins
@@ -543,7 +543,7 @@ func (ins *Instance) resumeServingLocked() {
 	ins.backups.Stop(ins)
 	// Clear whitelist during fast recovery.
 	if ins.writtens.Len() > 0 {
-		ins.writtens = hashmap.New(TEMP_MAP_SIZE)
+		ins.writtens = hashmap.NewMap(TEMP_MAP_SIZE)
 	}
 }
 
@@ -751,17 +751,16 @@ func (ins *Instance) getSid() string {
 }
 
 func (ins *Instance) initSession() string {
-	sid := ins.getSid()
-	ins.sessions.Set(sid, false)
-	return sid
+	return ins.getSid()
 }
 
 func (ins *Instance) startSession(sid string) bool {
-	return ins.sessions.Cas(sid, false, true)
+	_, started := ins.sessions.LoadOrStore(sid, true)
+	return !started
 }
 
 func (ins *Instance) endSession(sid string) {
-	ins.sessions.Del(sid)
+	ins.sessions.Delete(sid)
 }
 
 func castValidatedConnection(validated promise.Promise) (*Connection, error) {
@@ -1383,7 +1382,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	}
 
 	// Written keys during recovery will not be rerouted.
-	if _, ok := ins.writtens.Get(req.Key); ok {
+	if _, ok := ins.writtens.Load(req.Key); ok {
 		ins.log.Debug("Detected reroute override for key %s", req.Key)
 		return false
 	}
@@ -1488,7 +1487,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		case protocol.CMD_DEL:
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to del", req.Key)
-				ins.writtens.Set(req.Key, &struct{}{})
+				ins.writtens.Store(req.Key, &struct{}{})
 			}
 		}
 		return ctrlLink.SendRequest(req, useDataLink, ins.lm) // Offer lm, so SendRequest is ctrl link free. (We still need to get ctrl link first to confirm lambda status.)
@@ -1505,7 +1504,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 		case protocol.CMD_DEL:
 			if ins.IsRecovering() {
 				ins.log.Debug("Override rerouting for key %s due to del", req.Request.Key)
-				ins.writtens.Set(req.Request.Key, &struct{}{})
+				ins.writtens.Store(req.Request.Key, &struct{}{})
 			}
 		}
 

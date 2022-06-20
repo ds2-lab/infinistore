@@ -5,7 +5,7 @@ import (
 	"regexp"
 
 	mock "github.com/jordwest/mock-conn"
-	"github.com/zhangjyr/hashmap"
+	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 )
 
 var (
@@ -20,13 +20,13 @@ var (
 )
 
 type shortcut struct {
-	ports *hashmap.HashMap
+	ports hashmap.HashMap
 }
 
 func InitShortcut() *shortcut {
 	if Shortcut == nil {
 		Shortcut = &shortcut{
-			ports: hashmap.New(200), // Concurrency * 2
+			ports: hashmap.NewMap(200), // Concurrency * 2
 		}
 	}
 	return Shortcut
@@ -43,10 +43,10 @@ func (s *shortcut) Prepare(addr string, id int, nums ...int) *ShortcutConn {
 
 	// To keep consistent of hash ring, the address must be recoverable and keep consistent.
 	address := fmt.Sprintf(shortcutAddress, id, addr)
-	conn, existed := s.ports.Get(address) // For specified id, GetOrInsert is not necessary.
+	conn, existed := s.ports.Load(address) // For specified id, GetOrInsert is not necessary.
 	if !existed {
 		newConn := NewShortcutConn(address, n)
-		s.ports.Set(address, newConn)
+		s.ports.Store(address, newConn)
 		return newConn
 	} else {
 		return conn.(*ShortcutConn)
@@ -63,7 +63,7 @@ func (s *shortcut) Validate(address string) (string, bool) {
 }
 
 func (s *shortcut) GetConn(address string) (*ShortcutConn, bool) {
-	conn, existed := s.ports.Get(address)
+	conn, existed := s.ports.Load(address)
 	if !existed {
 		return nil, false
 	} else {
@@ -72,7 +72,7 @@ func (s *shortcut) GetConn(address string) (*ShortcutConn, bool) {
 }
 
 func (s *shortcut) Dial(address string) ([]*MockConn, bool) {
-	conn, existed := s.ports.Get(address)
+	conn, existed := s.ports.Load(address)
 	if !existed {
 		return nil, false
 	} else {
@@ -81,7 +81,7 @@ func (s *shortcut) Dial(address string) ([]*MockConn, bool) {
 }
 
 func (s *shortcut) Invalidate(conn *ShortcutConn) {
-	s.ports.Del(conn.Address)
+	s.ports.Delete(conn.Address)
 }
 
 type MockConn struct {
