@@ -714,8 +714,15 @@ func (ins *Instance) closeLocked() {
 	// Close all links.
 	ins.lm.Close()
 
-	// We can't reset components to nil, for lambda can still running.
+	// Close function if necessary
+	if ins.client != nil {
+		if closer, ok := ins.client.(invoker.FunctionCloser); ok {
+			closer.Close()
+		}
+		ins.client = nil
+	}
 
+	// We can't reset components to nil, for lambda can still running.
 	ins.log.Info("[%v]Closed", ins)
 
 	// Recycle instance
@@ -959,11 +966,14 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		// TODO: Check stale status
 		ins.log.Warn("Detected stale meta: %d", ins.Meta.Term)
 	}
-	switch global.Options.GetInvoker() {
-	case global.InvokerLocal:
-		ins.client = &invoker.LocalInvoker{}
-	default:
-		ins.client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+
+	if ins.client == nil {
+		switch global.Options.GetInvoker() {
+		case global.InvokerLocal:
+			ins.client = &invoker.LocalInvoker{}
+		default:
+			ins.client = lambda.New(AwsSession, &aws.Config{Region: aws.String(config.AWSRegion)})
+		}
 	}
 
 	tips := &url.Values{}
@@ -1041,7 +1051,6 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	ins.lambdaCanceller = cancel
 	ins.mu.Unlock()
 	output, err := ins.client.InvokeWithContext(ctx, input)
-	ins.client = nil
 	ins.mu.Lock()
 	ins.lambdaCanceller = nil
 	ins.mu.Unlock()
