@@ -2,8 +2,11 @@ package invoker
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -11,7 +14,16 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/hidez8891/shm"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+)
+
+const (
+	ShmSize = 4096
+)
+
+var (
+	ErrNodeMismatched = errors.New("node mismatched")
 )
 
 type LocalOutputPayloadSetter func(string, []byte)
@@ -23,16 +35,109 @@ type LocalOutputPayloadSetter func(string, []byte)
 // Use container to simulate Lambda resouce limit
 type LocalInvoker struct {
 	SetOutputPayload LocalOutputPayloadSetter
+	nodeName         string
+	nodeCached       *shm.Memory
+	invokeId         int32
+	mu               sync.Mutex
+	closed           chan struct{}
 }
 
 func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lambda.InvokeInput, opts ...request.Option) (*lambda.InvokeOutput, error) {
-	var input protocol.InputEvent
-	json.Unmarshal(invokeInput.Payload, &input)
+	log.Printf("invoking lambda %s...\n", *invokeInput.FunctionName)
+	cached := ivk.nodeCached
+	if cached == nil {
+		ivk.mu.Lock()
+		if ivk.nodeCached == nil {
+			if cache, err := shm.Create(*invokeInput.FunctionName, ShmSize); err != nil {
+				ivk.mu.Unlock()
+				return nil, err
+			} else {
+				ivk.nodeCached = cache
+				ivk.nodeName = *invokeInput.FunctionName
+				ivk.closed = make(chan struct{})
+			}
 
-	log.Printf("invoking lambda %d...\n", input.Id)
+			if err := ivk.execLocked(ctx, invokeInput); err != nil {
+				ivk.mu.Unlock()
+				return nil, err
+			}
+		} else {
+			cached = ivk.nodeCached
+		}
+		ivk.mu.Unlock()
+	}
+	if cached != nil {
+		if ivk.nodeName != *invokeInput.FunctionName {
+			ivk.close()
+			return nil, ErrNodeMismatched
+		}
+
+		cached.Seek(0, io.SeekStart)
+		buffer := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buffer, uint32(len(invokeInput.Payload)))
+		if _, err := cached.Write(buffer); err != nil {
+			ivk.close()
+			return nil, err
+		}
+		if _, err := cached.Write(invokeInput.Payload); err != nil {
+			ivk.close()
+			return nil, err
+		}
+	}
+
+	ret := make(chan []byte, 1)
+	ivk.SetOutputPayload = func(sid string, payload []byte) {
+		ret <- payload
+	}
+
+	statuscode := int64(200)
+	output := &lambda.InvokeOutput{
+		StatusCode: &statuscode,
+		Payload:    <-ret,
+	}
+	ivk.SetOutputPayload = nil
+	return output, nil
+}
+
+func (ivk *LocalInvoker) Close() {
+	cached := ivk.nodeCached
+	if cached != nil {
+		cached.Seek(0, io.SeekStart)
+
+		bye := protocol.InputEvent{Cmd: protocol.CMD_BYE}
+		paylood, _ := json.Marshal(&bye)
+
+		buffer := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buffer, uint32(len(paylood)))
+		if _, err := ivk.nodeCached.Write(buffer); err != nil {
+			ivk.close()
+			return
+		}
+		if _, err := cached.Write(paylood); err != nil {
+			ivk.close()
+			return
+		}
+		// Wait for confirming closing.
+		<-ivk.closed
+	}
+}
+
+func (ivk *LocalInvoker) close() {
+	ivk.mu.Lock()
+	defer ivk.mu.Unlock()
+
+	ivk.closeLocked()
+}
+
+func (ivk *LocalInvoker) execLocked(ctx context.Context, invokeInput *lambda.InvokeInput) error {
+	var input protocol.InputEvent
+	if err := json.Unmarshal(invokeInput.Payload, &input); err != nil {
+		return err
+	}
 
 	args := make([]string, 0, 10)
 	args = append(args, "-dryrun")
+	args = append(args, fmt.Sprintf("-name=%s", *invokeInput.FunctionName))
 	args = append(args, fmt.Sprintf("-sid=%s", input.Sid))
 	args = append(args, fmt.Sprintf("-cmd=%s", input.Cmd))
 	args = append(args, fmt.Sprintf("-id=%d", input.Id))
@@ -55,36 +160,37 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 	}
 	// log.Printf("args: %v\n", args)
 
+	ivk.invokeId++
+	invokeId := ivk.invokeId
+	log.Printf("Start lambda %s...\n", *invokeInput.FunctionName)
 	cmd := exec.CommandContext(ctx, "bin/lambda", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	ret := make(chan []byte, 1)
-	ivk.SetOutputPayload = func(sid string, payload []byte) {
-		if input.Sid == sid {
-			ret <- payload
-		}
-		close(ret)
+	if err := cmd.Start(); err != nil {
+		return err
 	}
 
-	var wg sync.WaitGroup
-	var err error
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		err = cmd.Run()
+		if err := cmd.Wait(); err != nil {
+			log.Printf("lambda %s exited with error: %v\n", *invokeInput.FunctionName, err)
+		}
+		ivk.mu.Lock()
+		defer ivk.mu.Unlock()
+
+		// Avoid closing a new invocation with different invokeId
+		if ivk.invokeId == invokeId {
+			ivk.closeLocked()
+			close(ivk.closed)
+		}
 	}()
-	wg.Wait()
 
-	if err != nil {
-		return nil, err
-	}
+	return nil
+}
 
-	statuscode := int64(200)
-	output := &lambda.InvokeOutput{
-		StatusCode: &statuscode,
-		Payload:    <-ret,
+func (ivk *LocalInvoker) closeLocked() {
+	if ivk.nodeCached != nil {
+		ivk.nodeCached.Close()
+		ivk.nodeCached = nil
 	}
-	ivk.SetOutputPayload = nil
-	return output, nil
 }

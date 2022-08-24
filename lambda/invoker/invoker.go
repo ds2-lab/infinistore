@@ -10,3 +10,7 @@ import (
 type FunctionInvoker interface {
 	InvokeWithContext(context.Context, *lambda.InvokeInput, ...request.Option) (*lambda.InvokeOutput, error)
 }
+
+type FunctionCloser interface {
+	Close()
+}
