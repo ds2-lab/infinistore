@@ -48,6 +48,10 @@ playback-redis-small: build-simulator
 	bin/playback -d 1 -p 0 -redis "redis3-%04d-001.fxxiur.0001.use1.cache.amazonaws.com:6379" -redisCluster 3 -s3 "tianium.ec.backup" -failover s3 -file ./data/$(DATE)_redis /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1>./data/$(DATE).log 2>&1 &
 	@echo "show log: tail -f ./data/$(DATE).log"
 
+playback-redis-accelerated: build-simulator
+	bin/playback -speed 10 -d 1 -p 0 -redis "redis8-%04d-001.oqyub3.0001.use1.cache.amazonaws.com:6379" -redisCluster 8 -s3 "tianium.ec.backup" -failover s3 -file ./data/$(DATE)_redis /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1>./data/$(DATE).log 2>&1 &
+	@echo "show log: tail -f ./data/$(DATE).log"
+
 playback-static: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
