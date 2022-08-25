@@ -466,6 +466,7 @@ func (c *Client) get(host string, key string, reqId string) (ReadAllCloser, []*e
 		// Continue to process multi-part(large) object.
 	}
 
+	// For multi-part object, we need to read all fragments and merge them.
 	allRets := make([]*ecRet, ret.Meta.NumFrags)
 	allRets[0] = ret
 	for i := 1; i < len(allRets); i++ {

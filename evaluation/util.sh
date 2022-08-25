@@ -65,6 +65,7 @@ function playback() {
     PARAMS=$1
     FILE=$2
     $BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE
+    return $?
 }
 
 function dryrun() {

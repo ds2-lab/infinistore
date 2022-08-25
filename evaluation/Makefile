@@ -40,6 +40,9 @@ playback: build build-simulator
 playback-with-dashboard: build build-simulator
 	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
 
+playback-accelerated: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2 -speed=10" -enable-dashboard 1>./log 2>&1 &
+
 playback-redis: build-simulator
 	bin/playback -d 1 -p 0 -redis "redis-%04d-001.fxxiur.0001.use1.cache.amazonaws.com:6379" -redisCluster 12 -file ./data/$(DATE)_redis /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1>./data/$(DATE).log 2>&1 &
 	@echo "show log: tail -f ./data/$(DATE).log"
