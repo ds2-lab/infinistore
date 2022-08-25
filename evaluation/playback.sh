@@ -39,11 +39,17 @@ function perform(){
 	sleep 1s
 
 	# playback
-	if [ "$CMD" == "exec" ] ; then
-		$FILE $PLAY_PARAMS --prefix ${PREPROXY}
-	else
-		playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS" $FILE
-	fi
+	PLAYBACK_RET=1
+	while [ $PLAYBACK_RET -ne 0 ]
+	do
+		if [ "$CMD" == "exec" ] ; then
+			$FILE $PLAY_PARAMS --prefix ${PREPROXY}
+			PLAYBACK_RET=0 # exec mode does not support checkpoint
+		else
+			PLAYBACK_RET=playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
+			echo "playback return $PLAYBACK_RET"
+		fi
+	done
 	
 	# stop proxy
 	kill -2 `cat $PID`

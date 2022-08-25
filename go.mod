@@ -14,6 +14,7 @@ require (
 	github.com/gizak/termui/v3 v3.1.0
 	github.com/google/go-cmp v0.5.6 // indirect
 	github.com/google/uuid v1.2.0
+	github.com/hidez8891/shm v0.0.0-20200313135933-0ec4df5f28c7 // indirect
 	github.com/jordwest/mock-conn v0.0.0-20180617021051-4896c6bd1641
 	github.com/kelindar/binary v1.0.9
 	github.com/klauspost/reedsolomon v1.9.12
