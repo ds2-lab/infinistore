@@ -2,7 +2,7 @@ DATE = $(shell date "+%Y%m%d%H%M")
 
 deploy:
 	aws configure
-	aws s3api put-bucket-policy --bucket bucket jzhang33.default --policy file://${GOPATH}/src/github.com/mason-leap-lab/infinicache/evaluation/cloudwatch/policy.json
+	aws s3api put-bucket-policy --bucket jzhang33.default --policy file://${GOPATH}/src/github.com/mason-leap-lab/infinicache/evaluation/cloudwatch/policy.json
 
 prepare:
 	mkdir -p bin/
