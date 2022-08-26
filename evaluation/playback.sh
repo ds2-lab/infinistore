@@ -46,7 +46,8 @@ function perform(){
 			$FILE $PLAY_PARAMS --prefix ${PREPROXY}
 			PLAYBACK_RET=0 # exec mode does not support checkpoint
 		else
-			PLAYBACK_RET=playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
+			playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
+			PLAYBACK_RET=$?
 			echo "playback return $PLAYBACK_RET"
 		fi
 	done
