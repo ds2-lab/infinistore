@@ -40,13 +40,15 @@ function perform(){
 
 	# playback
 	PLAYBACK_RET=1
+	RETRIAL=0
 	while [ $PLAYBACK_RET -ne 0 ]
 	do
 		if [ "$CMD" == "exec" ] ; then
 			$FILE $PLAY_PARAMS --prefix ${PREPROXY}
 			PLAYBACK_RET=0 # exec mode does not support checkpoint
 		else
-			playback "-cluster=$CLUSTER -file=$PREPROXY $COMPACT $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
+			((RETRIAL=RETRIAL+1)) # Update retrial for different runs to avoid the collision of output data.
+			playback "-cluster=$CLUSTER -file=$PREPROXY-$RETRIAL $COMPACT $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
 			PLAYBACK_RET=$?
 			echo "playback return $PLAYBACK_RET"
 		fi
