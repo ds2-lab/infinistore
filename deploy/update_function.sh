@@ -51,7 +51,7 @@ else
 fi
 
 echo "Updating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} $CODE -config -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_TO} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -S3 ${S3} $CODE -config -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 
 if [ "$CODE" == "-code" ] && [ ! $NO_BUILD  ] ; then
   rm $KEY*
