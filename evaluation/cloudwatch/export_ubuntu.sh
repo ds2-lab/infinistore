@@ -73,7 +73,7 @@ do
   for k in {0..10}
   do
     echo "exporting $LAMBDA$LOG_PREFIX$i"
-    RUNNING=`aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i | grep taskId | awk -F \" '{ print $4 }'`
+    RUNNING=`aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "jzhang33.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i | grep taskId | awk -F \" '{ print $4 }'`
     if [ "$RUNNING" == "" ] ; then
       if [ k == 2 ] ; then
         echo "abort"

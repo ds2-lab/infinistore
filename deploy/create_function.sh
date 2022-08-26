@@ -4,14 +4,14 @@ BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="Store1VPCNode"
 KEY="lambda"
 DEPLOY_FROM=0
-DEPLOY_CLUSTER=400
+DEPLOY_CLUSTER=1000
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
 DEPLOY_MEM=1024
 DEPLOY_VPC="-vpc"
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
 
-S3="tianium.default"
+S3="jzhang33.default"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 
@@ -36,5 +36,5 @@ echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Creating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX $DEPLOY_VPC -key=$KEY -to=$cluster -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX $DEPLOY_VPC -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_TO} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 rm $KEY*

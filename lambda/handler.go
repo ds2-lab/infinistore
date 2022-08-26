@@ -573,7 +573,7 @@ func main() {
 	store.Server.HandleFunc(protocol.CMD_MHELLO, store.Server.Handler(handlers.MHelloHandler))
 
 	if DRY_RUN {
-		dryrun()
+		// dryrun()
 		return
 	}
 

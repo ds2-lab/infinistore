@@ -14,7 +14,7 @@ zip $KEY $KEY
 echo "updating lambda code.."
 
 echo "putting code zip to s3"
-aws s3api put-object --bucket tianium.default --key $KEY.zip --body $KEY.zip
+aws s3api put-object --bucket jzhang33.default --key $KEY.zip --body $KEY.zip
 
 go run $BASE/../../deploy/deploy_function.go -from=0 -to=300 -role=$ROLE -bucket=$BUCKET -prefix=$PREFIX \
 -create=true -config=true -vpc=false -key=$KEY -mem=$mem -timeout=200

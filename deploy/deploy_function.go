@@ -16,7 +16,7 @@ import (
 const (
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::022127035044:role/lambda-store"
+	ROLE = "arn:aws:iam::205616672683:role/jzhang33"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
@@ -36,11 +36,11 @@ var (
 	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-0fd0db0832568af17"),
-		aws.String("subnet-043f6284f2bdcc8c5"),
+		aws.String("subnet-0922312408cf8f9ab"),
+		aws.String("subnet-0dae3bda0928da1b9"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-079f6cc4e658209c3"),
+		aws.String("sg-02db9835d66449bb8"),
 	}
 )
 

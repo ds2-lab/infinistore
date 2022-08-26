@@ -1,8 +1,8 @@
 #!/bin/bash
 
-SUBNET_ID="subnet-77e0622b"
-ALLOCATION_ID="eipalloc-0fef6282d27e74209"
-ROUTE_TABLE_ID="rtb-04e86a30459311471"
+SUBNET_ID="subnet-0f276387ac4cba169"
+ALLOCATION_ID="eipalloc-02d452e00ee147b21"
+ROUTE_TABLE_ID="rtb-00c1d9dfbfbc3ef90"
 NAT_NAME="nat-lambda"
 NATID=`aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=$NAT_NAME" --filter 'Name=state,Values=available' | grep NatGatewayId | awk -F \" '{ print $4 }'`
 

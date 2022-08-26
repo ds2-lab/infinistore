@@ -31,6 +31,6 @@ do
   fi
 
   # Execute
-  aws logs create-export-task --log-group-name $LAMBDA$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$i
+  aws logs create-export-task --log-group-name $LAMBDA$i --from ${startTime} --to ${endTime} --destination "jzhang33.default" --destination-prefix $FILE$PREFIX$i
   sleep 2s
 done
