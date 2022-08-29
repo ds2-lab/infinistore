@@ -93,6 +93,7 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	}
 
 	// Both calback writer and request writer (Flush) are supported.
+	conn.SetWriteDeadline(time.Now().Add(DefaultTimeout))
 	for _, write := range writes {
 		err := write(req)
 		if err != nil && conn.isConnectionFailed(err) {

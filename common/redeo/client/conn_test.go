@@ -5,6 +5,7 @@ import (
 	//"testing"
 	//"time"
 
+	"context"
 	"io"
 	"time"
 
@@ -35,6 +36,78 @@ var _ = Describe("Connection", func() {
 		conn.Close()
 		_, err = mockconn.Server.Read(buff)
 		Expect(err).To(Equal(io.EOF))
+	})
+
+	// Mock connection didn't support timeout.
+	// It("Should request timeout by default during sending request", func() {
+	// 	net.InitShortcut()
+	// 	shortcut := net.Shortcut.Prepare("shortcut", 1, 1)
+	// 	mockconn := shortcut.Validate(0).Conns[0]
+	// 	conn := NewShortcut(mockconn)
+
+	// 	req := NewRequest()
+	// 	err := conn.StartRequest(req, func(_ Request) error {
+	// 		conn.WriteBulkString("test")
+	// 		return nil
+	// 	})
+	// 	Expect(err).To(Equal(context.DeadlineExceeded))
+
+	// 	conn.Close()
+	// })
+
+	It("Should startRequest return err on failing to send", func() {
+		net.InitShortcut()
+		shortcut := net.Shortcut.Prepare("shortcut", 1, 1)
+		mockconn := shortcut.Validate(0).Conns[0]
+		conn := NewShortcut(mockconn)
+
+		go func() {
+			// consume the request
+			<-time.After(1 * time.Second)
+			conn.Close()
+		}()
+
+		req := NewRequest()
+		err := conn.StartRequest(req, func(_ Request) error {
+			conn.WriteBulkString("test")
+			return nil
+		})
+		Expect(err).To(Equal(io.ErrClosedPipe))
+	})
+
+	It("Should request timeout by default after sent request", func() {
+		net.InitShortcut()
+		shortcut := net.Shortcut.Prepare("shortcut", 1, 1)
+		mockconn := shortcut.Validate(0).Conns[0]
+		conn := NewShortcut(mockconn)
+
+		go func() {
+			// consume the request
+			buff := make([]byte, 1024)
+			n, err := mockconn.Server.Read(buff)
+			Expect(err).To(BeNil())
+			// $4\r\ntest\r\n
+			Expect(n).To(Equal(10))
+			Expect(string(buff[4:8])).To(Equal("test"))
+		}()
+
+		req := NewRequest()
+		err := conn.StartRequest(req, func(_ Request) error {
+			conn.WriteBulkString("test")
+			return nil
+		})
+		Expect(err).To(BeNil())
+
+		// wait for the response
+		done := make(chan struct{})
+		req.OnRespond(func(_ interface{}, err error) {
+			Expect(err).To(Equal(context.DeadlineExceeded))
+			close(done)
+		})
+
+		<-done
+
+		conn.Close()
 	})
 
 	It("Should close the connection correctly", func() {
