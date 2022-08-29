@@ -103,7 +103,7 @@ function custom(){
 	while [ $PLAYBACK_RET -ne 0 -a $RETRIAL -lt 10 ]	# limit to 10 retrials
 	do
 		((RETRIAL=RETRIAL+1)) # Update retrial for different runs to avoid the collision of output data.
-		playback "-$CLUSTER -file=$PREPROXY-$RETRIAL $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
+		playback "-file=$PREPROXY-$RETRIAL $PLAY_PARAMS -checkpoint=$ENTRY.checkpoint" $FILE
 		PLAYBACK_RET=$?
 		echo "playback return $PLAYBACK_RET"
 	done

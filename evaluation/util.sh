@@ -64,6 +64,7 @@ function bench() {
 function playback() {
     PARAMS=$1
     FILE=$2
+    echo "$BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE"
     $BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE
     return $?
 }
