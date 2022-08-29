@@ -41,7 +41,7 @@ function perform(){
 	# playback
 	PLAYBACK_RET=1
 	RETRIAL=0
-	while [ $PLAYBACK_RET -ne 0 ]
+	while [ $PLAYBACK_RET -ne 0 -a $RETRIAL -lt 10 ]	# limit to 10 retrials
 	do
 		if [ "$CMD" == "exec" ] ; then
 			$FILE $PLAY_PARAMS --prefix ${PREPROXY}

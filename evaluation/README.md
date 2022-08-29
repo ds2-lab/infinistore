@@ -67,6 +67,12 @@ cloudwatch/download.sh ${EXPERIMENT} log
 ### Workload Processing Log
 
 ~~~
+workload/preprocess.sh ${EXPERIMENT}
+~~~
+
+or
+
+~~~
 # Unzip
 mkdir -p downloaded/proxy/${EXPERIMENT}
 tar -xzf downloaded/proxy/${EXPERIMENT}.tar.gz -C downloaded/proxy/${EXPERIMENT}/
