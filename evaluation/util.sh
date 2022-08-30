@@ -66,12 +66,16 @@ function bench() {
 function playback() {
     PARAMS=$1
     FILE=$2
-    $BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE
+    echo "$BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE"
+    # use /bin/bash -c to avoid possible non-consistency in handling paramters.
+    /bin/bash -c "$BINDIR/playback -addrlist localhost:6378 $PARAMS $FILE"
     return $?
 }
 
 function dryrun() {
     PARAMS=$1
     FILE=$2
-    $BINDIR/playback -dryrun $PARAMS $FILE
+    # use /bin/bash -c to avoid possible non-consistency in handling paramters.
+    echo "$BINDIR/playback -dryrun $PARAMS $FILE"
+    /bin/bash -c "$BINDIR/playback -dryrun $PARAMS $FILE"
 }
