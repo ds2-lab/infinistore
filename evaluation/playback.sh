@@ -95,7 +95,7 @@ function custom(){
 	CLUSTER=$3
 	PLAY_PARAMS=$4
 
-	PREPROXY=$PWD/${ENTRY}-${CLUSTER}
+	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER
 
 	# playback
 	PLAYBACK_RET=1
