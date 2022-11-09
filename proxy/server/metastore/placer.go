@@ -65,11 +65,12 @@ func (l *DefaultPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Comm
 	meta, got, err := l.metaStore.GetOrInsert(key, newMeta)
 	if err != nil {
 		newMeta.close()
-		return nil, nil, err
+		return meta, nil, err
 	}
 	if got {
 		newMeta.close()
 	}
+	cmd.GetRequest().Key = meta.ChunkKey(chunkId)
 	cmd.GetRequest().Info = meta
 
 	instance, post, err := l.Place(meta, chunkId, cmd)

@@ -83,7 +83,7 @@ package main
 // 			<-ended
 // 			defer close(invokes)
 
-// 			reader, err := shm.Open(opt.name, invoker.ShmSize)
+// 			ctrl, err := shm.Open(opt.name, invoker.ShmSize)
 // 			if err != nil {
 // 				return
 // 			}
@@ -92,18 +92,17 @@ package main
 // 			buffer := make([]byte, invoker.ShmSize)
 // 			for {
 // 				<-time.After(10 * time.Millisecond)
-// 				_, err := reader.ReadAt(buffer, 0)
+// 				_, err := ctrl.ReadAt(buffer, 0)
 // 				if err != nil {
 // 					return
 // 				}
+// 				// Clear what has been read.
+// 				ctrl.WriteAt(reset, 0)
 
 // 				read := binary.LittleEndian.Uint32(buffer[:4])
 // 				if read == 0 {
 // 					// No input available, retry.
 // 					continue
-// 				} else {
-// 					// Reset input length.
-// 					copy(buffer, reset)
 // 				}
 
 // 				if read+4 > uint32(len(buffer)) {
