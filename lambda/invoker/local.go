@@ -40,14 +40,24 @@ type LocalInvoker struct {
 	invokeId         int32
 	mu               sync.Mutex
 	closed           chan struct{}
+	rsp              chan []byte
 }
 
 func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lambda.InvokeInput, opts ...request.Option) (*lambda.InvokeOutput, error) {
+	// Do some initialization for first invocation.
+	if ivk.rsp == nil {
+		ivk.rsp = make(chan []byte, 1)
+		ivk.SetOutputPayload = func(sid string, payload []byte) {
+			ivk.rsp <- payload
+		}
+	}
+
 	log.Printf("invoking lambda %s...\n", *invokeInput.FunctionName)
 	cached := ivk.nodeCached
 	if cached == nil {
 		ivk.mu.Lock()
 		if ivk.nodeCached == nil {
+			// Create shared memory for function reinvoking, so the local lambda can be reused.
 			if cache, err := shm.Create(*invokeInput.FunctionName, ShmSize); err != nil {
 				ivk.mu.Unlock()
 				return nil, err
@@ -72,6 +82,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 			return nil, ErrNodeMismatched
 		}
 
+		// Reinvoke the local lambda function.
 		cached.Seek(0, io.SeekStart)
 		buffer := make([]byte, 4)
 		binary.LittleEndian.PutUint32(buffer, uint32(len(invokeInput.Payload)))
@@ -85,17 +96,11 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 		}
 	}
 
-	ret := make(chan []byte, 1)
-	ivk.SetOutputPayload = func(sid string, payload []byte) {
-		ret <- payload
-	}
-
 	statuscode := int64(200)
 	output := &lambda.InvokeOutput{
 		StatusCode: &statuscode,
-		Payload:    <-ret,
+		Payload:    <-ivk.rsp, // Wait for response.
 	}
-	ivk.SetOutputPayload = nil
 	return output, nil
 }
 

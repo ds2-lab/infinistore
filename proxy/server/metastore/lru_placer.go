@@ -117,6 +117,7 @@ func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command)
 		}
 		newMeta.close()
 	}
+	cmd.GetRequest().Key = meta.ChunkKey(chunkId)
 	cmd.GetRequest().Info = meta
 
 	_, post, err := p.Place(meta, chunkId, cmd)

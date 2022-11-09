@@ -118,13 +118,13 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	// We need the counter to figure out when the object is fully stored.
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_SET, prepared.DChunks, prepared.PChunks)
 
-	chunkKey := prepared.ChunkKey(int(dChunkId))
+	// Updated by Tianium: 20221102
+	// req.Key will not be set until we get meta and have information about the version.
 	req := types.GetRequest(client)
 	req.Seq = seq
 	req.Id = types.Id{ReqId: reqId, ChunkId: chunkId}
 	req.InsId = uint64(lambdaId)
 	req.Cmd = protocol.CMD_SET
-	req.Key = chunkKey
 	req.BodyStream = bodyStream
 	req.CollectorEntry = collectEntry
 	req.Info = prepared
@@ -154,7 +154,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		// T1: Some chunks are set.
 		// T2: The placer decides to evict this object (in rare case) by DELETE it.
 		// T3: We get a deleted meta.
-		server.NewErrorResponse(w, seq, "KEY %s not set to lambda store, may got evicted before all chunks are set.", chunkKey).Flush()
+		server.NewErrorResponse(w, seq, "KEY %s not set to lambda store, may got evicted before all chunks are set.", meta.ChunkKey(int(dChunkId))).Flush()
 		return
 	}
 
@@ -193,6 +193,11 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	lambdaDest := meta.Placement[dChunkId]
+	if meta.NumChunks() == 0 {
+		p.log.Error("Error: Detect unexpected ec settings from meta of key %s, fix using default value.", key)
+		meta.DChunks = global.Options.D
+		meta.PChunks = global.Options.P
+	}
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := types.GetRequest(client)
