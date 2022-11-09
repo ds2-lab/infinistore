@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	. "github.com/onsi/ginkgo"
@@ -56,7 +57,7 @@ func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
 
 func newTestMeta(i int) *Meta {
 	return &Meta{
-		Key:        strconv.Itoa(i),
+		key:        strconv.Itoa(i),
 		ChunkSize:  1,
 		Placement:  []uint64{uint64(i)},
 		placerMeta: &LRUPlacerMeta{},
@@ -118,7 +119,7 @@ func dump(metas []*Meta) string {
 		if meta.placerMeta.(*LRUPlacerMeta).visited {
 			visited = 1
 		}
-		elem[i] = fmt.Sprintf("%s-%d", meta.Key, visited)
+		elem[i] = fmt.Sprintf("%s-%d", meta.Key(), visited)
 	}
 	return strings.Join(elem, ",")
 }
@@ -128,9 +129,9 @@ func proxySimulator(incomes chan interface{}, p *LRUPlacer, done *sync.WaitGroup
 		switch m := income.(type) {
 		case *Meta:
 			chunk := m.lastChunk
-			fmt.Printf("Processing %d@%s\n", m.lastChunk, m.Key)
-			meta, _, _ := p.Insert(m.Key, m)
-			fmt.Printf("Set %d@%s: %v\n", chunk, meta.Key, meta.Placement)
+			fmt.Printf("Processing %d@%s\n", m.lastChunk, m.Key())
+			meta, _, _ := p.Insert(m.Key(), m)
+			fmt.Printf("Set %d@%s: %v\n", chunk, meta.Key(), meta.Placement)
 		case func():
 			m()
 		}
@@ -200,7 +201,7 @@ var _ = Describe("Placer", func() {
 	It("should post process callback works", func() {
 		var called string
 		cb := func(meta *Meta) {
-			called = meta.Key
+			called = meta.Key()
 		}
 
 		meta := newTestMeta(1)
@@ -214,10 +215,11 @@ var _ = Describe("Placer", func() {
 	It("should basic LRU works", func() {
 		numCluster := 10
 		capacity := 1000
+		reqId := uuid.New().String()
 
 		n := 50
 		shards := 6
-		chunkSize := 400
+		chunkSize := int64(400)
 
 		placer := initGroupPlacer(numCluster, capacity)
 		queues := make([]chan interface{}, numCluster)
@@ -232,7 +234,7 @@ var _ = Describe("Placer", func() {
 		for i := 0; i < n; i++ {
 			for j := 0; j < shards; j++ {
 				lambdaId := sess % numCluster
-				queues[lambdaId] <- placer.NewMeta(strconv.Itoa(i), strconv.Itoa(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0)
+				queues[lambdaId] <- placer.NewMeta(reqId, strconv.Itoa(i), chunkSize*int64(shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0)
 				sess++
 			}
 		}
@@ -248,9 +250,10 @@ var _ = Describe("Placer", func() {
 	It("should GET request return same placement", func() {
 		numCluster := 10
 		capacity := 1000
+		reqId := uuid.New().String()
 
 		shards := 6
-		chunkSize := 400
+		chunkSize := int64(400)
 
 		placer := initGroupPlacer(numCluster*2, capacity)
 		queues := make([]chan interface{}, numCluster)
@@ -269,11 +272,11 @@ var _ = Describe("Placer", func() {
 				lambdaId := sess % numCluster
 				queues[lambdaId] <- func(m *Meta) func() {
 					return func() {
-						meta, _, _ := placer.Insert(m.Key, m)
-						fmt.Printf("Set %d@%s: %v\n", m.lastChunk, meta.Key, meta.Placement)
+						meta, _, _ := placer.Insert(m.Key(), m)
+						fmt.Printf("Set %d@%s: %v\n", m.lastChunk, meta.Key(), meta.Placement)
 						conns.Done()
 					}
-				}(placer.NewMeta(strconv.Itoa(i), strconv.Itoa(chunkSize*shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0))
+				}(placer.NewMeta(reqId, strconv.Itoa(i), chunkSize*int64(shards), 4, 2, j, int64(chunkSize), uint64(lambdaId), 0))
 				sess++
 			}
 		}

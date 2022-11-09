@@ -41,7 +41,7 @@ func BenchmarkNewMeta(b *testing.B) {
 func BenchmarkMetaPoolAssignment(b *testing.B) {
 	var meta *Meta
 	for i := 0; i < b.N; i++ {
-		meta = NewEmptyMeta()
+		meta = newEmptyMeta()
 		meta.test()
 		meta.close()
 	}

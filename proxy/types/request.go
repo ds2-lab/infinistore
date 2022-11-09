@@ -40,7 +40,9 @@ var (
 )
 
 type RequestCloser interface {
-	MarkReturnd(*Id) bool
+	MarkReturnd(*Id) (uint64, bool)
+	IsFulfilled(status ...uint64) bool
+	IsAllReturned(status ...uint64) bool
 	Close()
 }
 
@@ -75,6 +77,9 @@ type Request struct {
 	// Shared if request to be send to multiple lambdas
 	response *response
 	Cleanup  RequestCloser
+	// Added by Tianium 20221102
+	AllDone      bool // Is sharded request done after chunk request
+	AllSucceeded bool // Is sharded request succeeded after chunk request
 }
 
 func GetRequest(client *redeo.Client) *Request {
@@ -296,7 +301,11 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	// req.close safe
 	cleanup := req.Cleanup
 	if cleanup != nil {
-		cleanup.MarkReturnd(&req.Id)
+		status, _ := cleanup.MarkReturnd(&req.Id)
+		// Added by Tianium: 20221102
+		// Update status of shared request.
+		req.AllDone = cleanup.IsAllReturned(status)
+		req.AllSucceeded = cleanup.IsFulfilled(status)
 	} else {
 		req.MarkReturned()
 	}
