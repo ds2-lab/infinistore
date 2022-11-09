@@ -6,6 +6,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
@@ -136,7 +137,8 @@ func (counter *RequestCounter) reset(c *RequestCoordinator, reqId string, cmd st
 	counter.reqId = reqId
 	counter.status = 0
 	counter.numToFulfill = uint64(d)
-	if Options.Evaluation && Options.NoFirstD {
+	if cmd == protocol.CMD_SET ||
+		(Options.Evaluation && Options.NoFirstD) {
 		counter.numToFulfill = uint64(d + p)
 	}
 	l := int(d + p)
@@ -236,9 +238,8 @@ func (c *RequestCounter) Load() *RequestCounter {
 	return c
 }
 
-func (c *RequestCounter) MarkReturnd(id *types.Id) bool {
-	_, ok := c.AddReturned(id.Chunk())
-	return ok
+func (c *RequestCounter) MarkReturnd(id *types.Id) (uint64, bool) {
+	return c.AddReturned(id.Chunk())
 }
 
 func (c *RequestCounter) Close() {

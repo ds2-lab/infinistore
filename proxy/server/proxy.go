@@ -91,7 +91,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	seq, _ := c.NextArg().Int()
 	key, _ := c.NextArg().String()
 	reqId, _ := c.NextArg().String()
-	size, _ := c.NextArg().String()
+	size, _ := c.NextArg().Int()
 	dChunkId, _ := c.NextArg().Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 	dataChunks, _ := c.NextArg().Int()
@@ -111,8 +111,13 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Start counting time.
 	collectEntry, _ := collector.CollectRequest(collector.LogRequestStart, nil, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano())
 
-	prepared := p.placer.NewMeta(
+	prepared := p.placer.NewMeta(reqId,
 		key, size, int(dataChunks), int(parityChunks), int(dChunkId), int64(bodyStream.Len()), uint64(lambdaId), int(randBase))
+	prepared.SetTimout(protocol.GetBodyTimeout(bodyStream.Len())) // Set timeout for the operation to be considered as failed.
+	// Added by Tianium: 20221102
+	// We need the counter to figure out when the object is fully stored.
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_SET, prepared.DChunks, prepared.PChunks)
+
 	chunkKey := prepared.ChunkKey(int(dChunkId))
 	req := types.GetRequest(client)
 	req.Seq = seq
@@ -123,17 +128,32 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	req.BodyStream = bodyStream
 	req.CollectorEntry = collectEntry
 	req.Info = prepared
+	// Added by Tianium: 20221102
+	// Add counter support.
+	req.Cleanup = counter // Set cleanup so the counter can always be released.
+	counter.Requests[dChunkId] = req
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
-	if err != nil {
+	if err != nil && err == metastore.ErrConcurrentCreation {
+		// Later concurrent setting will be automatically abandoned and return the same result as the earlier one.
+		bodyStream.(resp.Holdable).Unhold() // bodyStream now will automatically be closed.
+		meta.Wait()
+		if meta.IsValid() {
+			rsp := &types.Response{Cmd: protocol.CMD_SET, Id: req.Id, Body: []byte(strconv.FormatUint(meta.Placement[dChunkId], 10))}
+			req.SetResponse(rsp)
+		} else {
+			req.SetResponse(types.ErrMaxAttemptsReached)
+		}
+		return
+	} else if err != nil {
 		server.NewErrorResponse(w, seq, err.Error()).Flush()
 		return
-	} else if meta.Deleted {
-		// Object may be evicted in some cases:
-		// 1: Some chunks were set.
-		// 2: Placer evicted this object (unlikely).
-		// 3: We got evicted meta.
+	} else if meta.IsDeleted() {
+		// Object may be deleted during PUT in a rare case in cache mode (COS is disabled) such as:
+		// T1: Some chunks are set.
+		// T2: The placer decides to evict this object (in rare case) by DELETE it.
+		// T3: We get a deleted meta.
 		server.NewErrorResponse(w, seq, "KEY %s not set to lambda store, may got evicted before all chunks are set.", chunkKey).Flush()
 		return
 	}
@@ -192,7 +212,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 
 	// Validate the status of meta. If evicted, replace. All chunks will be replaced, so fulfill shortcut is not applicable here.
 	// Not all placers support eviction.
-	if meta.Deleted {
+	if meta.IsDeleted() {
 		// Unlikely, just to be safe
 		p.log.Debug("replace evicted chunk %s", chunkKey)
 
@@ -208,13 +228,15 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
-	// Send request to lambda channel
+	// Check late chunk request.
 	if counter.IsFulfilled() {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
-		req.Abandon()
+		req.Abandon() // counter will be released on abandoning (req.Cleanup set).
 		return
 	}
+
+	// Send request to lambda channel
 
 	// Validate the status of the instance
 	instance := p.cluster.Instance(uint64(lambdaDest))
@@ -251,10 +273,15 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			// the response of this cmd_recover's behavior is the same as cmd_get
 			fallthrough
 		case protocol.CMD_GET:
-			rsp.Size = wrapper.Request.Info.(*metastore.Meta).Size
+			rsp.Size = strconv.FormatInt(wrapper.Request.Info.(*metastore.Meta).Size, 10)
 			rsp.PrepareForGet(w, wrapper.Request.Seq)
 		case protocol.CMD_SET:
 			rsp.PrepareForSet(w, wrapper.Request.Seq)
+			// Added by Tianium 20221102
+			// Confirm the meta
+			if wrapper.Request.AllSucceeded {
+				wrapper.Request.Info.(*metastore.Meta).ConfirmCreated()
+			}
 		default:
 			rsp := server.NewErrorResponse(w, wrapper.Request.Seq, "unable to respond unsupport command %s", wrapper.Request.Cmd)
 			if err := rsp.Flush(); err != nil {
@@ -314,6 +341,11 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	default:
 		collector.CollectRequest(collector.LogRequestAbandon, wrapper.Request.CollectorEntry)
 		r := server.NewErrorResponse(w, wrapper.Request.Seq, "%v", rsp)
+		// Added by Tianium 20221102
+		// Fail the meta
+		if wrapper.Request.Cmd == protocol.CMD_SET {
+			wrapper.Request.Info.(*metastore.Meta).Invalidate()
+		}
 		if err := r.Flush(); err != nil {
 			client.Conn().Close()
 			return

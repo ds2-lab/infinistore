@@ -90,8 +90,8 @@ func NewLRUPlacer(store *MetaStore, cluster InstanceManager) *LRUPlacer {
 	return placer
 }
 
-func (p *LRUPlacer) NewMeta(key string, size string, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
-	meta := NewMeta(key, size, dChunks, pChunks, chunkSize)
+func (p *LRUPlacer) NewMeta(reqId string, key string, size int64, dChunks, pChunks, chunk int, chunkSize int64, lambdaId uint64, sliceSize int) *Meta {
+	meta := NewMeta(reqId, key, size, dChunks, pChunks, chunkSize)
 	if meta.slice == nil {
 		meta.slice = p.cluster.GetSlice(sliceSize)
 	} else {
@@ -105,7 +105,11 @@ func (p *LRUPlacer) NewMeta(key string, size string, dChunks, pChunks, chunk int
 func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command) (*Meta, MetaPostProcess, error) {
 	chunkId := newMeta.lastChunk
 
-	meta, got, _ := p.store.GetOrInsert(key, newMeta)
+	meta, got, err := p.store.GetOrInsert(key, newMeta)
+	if err != nil {
+		newMeta.close()
+		return nil, nil, err
+	}
 	if got {
 		// Only copy placement assignment if the chunk has not been confirm.
 		if meta.placerMeta == nil || !meta.placerMeta.(*LRUPlacerMeta).confirmed[chunkId] {
@@ -123,7 +127,11 @@ func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command)
 func (p *LRUPlacer) Insert(key string, newMeta *Meta) (*Meta, MetaPostProcess, error) {
 	chunkId := newMeta.lastChunk
 
-	meta, got, _ := p.store.GetOrInsert(key, newMeta)
+	meta, got, err := p.store.GetOrInsert(key, newMeta)
+	if err != nil {
+		newMeta.close()
+		return nil, nil, err
+	}
 	if got {
 		meta.Placement[chunkId] = newMeta.Placement[chunkId]
 		newMeta.close()
@@ -163,15 +171,10 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
-	// Added by Tianium: 20210427
-	// Check if it is "evicted". Initialize on demand recovery by replacing.
-	// Eviction flag(Deleted) will not be removed until all chunks have been confirmed.
-	if meta.Deleted && meta.placerMeta != nil && meta.placerMeta.(*LRUPlacerMeta).allConfirmed() {
-		meta.placerMeta = nil
-		if meta.slice != nil {
-			meta.slice.Reset(meta.slice.Size())
-		}
-	}
+	// Deleted by Tianium: 20221102
+	// Because of the versioning, no evicted object will be restored for following reason:
+	// In storage mode (COS is enabled), the object will not be evicted but deleted only.
+	// In cache mode, insert will lead to a new version of object, and the old version was or will be evicted at some point.
 
 	// Initialize placerMeta if not.
 	if meta.placerMeta == nil {
@@ -179,22 +182,15 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 	}
 	placerMeta := meta.placerMeta.(*LRUPlacerMeta)
 
-	// Usually this should always be false for SET operation, flag RESET if true.
-	if placerMeta.confirmed[chunkId] {
-		meta.Reset = true
-		// No size update is required, reserved on setting.
-		return p.cluster.Instance(meta.Placement[chunkId]), nil, nil
-	}
+	// Deleted by Tianium: 20221102
+	// Reseting is replaced by versioning.
 
 	// Check if a replacement decision has been made.
 	if !IsPlacementEmpty(placerMeta.swapMap) {
 		meta.Placement[chunkId] = placerMeta.swapMap[chunkId]
 		placerMeta.confirm(chunkId)
-		// Added by Tianium: 20210427
-		// Remove eviction flag on all confirmed
-		if placerMeta.allConfirmed() {
-			meta.Deleted = false
-		}
+		// Deleted by Tianium: 20221102
+		// No evicted/deleted object will be restored anymore.
 
 		// No size update is required, reserved on eviction.
 		return p.cluster.Instance(meta.Placement[chunkId]), nil, nil
@@ -219,11 +215,8 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 			p.log.Debug("Lambda %d size updated: %d of %d (key:%d@%s, Δ:%d).",
 				assigned, size, instance.Meta.Capacity, chunkId, meta.Key, meta.ChunkSize)
 
-			// Added by Tianium: 20210427
-			// Remove eviction flag on all confirmed
-			if placerMeta.allConfirmed() {
-				meta.Deleted = false
-			}
+			// Deleted by Tianium: 20221102
+			// No evicted/deleted object will be restored anymore.
 
 			// LOCK FREE: Regardless the value of p.primary, if meta has been in the placer already, either position should be non-zero.
 			if placerMeta.pos[p.primary] > 0 || placerMeta.pos[p.secondary] > 0 {
@@ -292,11 +285,9 @@ func (p *LRUPlacer) FindPlacement(meta *Meta, chunkId int) (*lambdastore.Instanc
 
 	meta.Placement[chunkId] = placerMeta.swapMap[chunkId]
 	placerMeta.confirm(chunkId)
-	// Added by Tianium: 20210427
-	// Remove eviction flag on all confirmed
-	if placerMeta.allConfirmed() {
-		meta.Deleted = false
-	}
+	// Deleted by Tianium: 20221102
+	// No evicted/deleted object will be restored anymore.
+
 	placerMeta.once = &sync.Once{}
 	return p.cluster.Instance(meta.Placement[chunkId]), placerMeta.postProcess, nil
 }
@@ -308,13 +299,13 @@ func (p *LRUPlacer) Get(key string, chunk int) (*Meta, bool) {
 	}
 
 	// If deleted, skip checks below.
-	if meta.Deleted {
+	if meta.IsDeleted() {
 		return meta, ok
 	}
 
 	// Assertion: If normal, all chunks must be confirmed.
 	if meta.placerMeta == nil || !meta.placerMeta.(*LRUPlacerMeta).confirmed[chunk] {
-		p.log.Warn("Detected unconfirmed chunk: %s, evicted: %v", meta.ChunkKey(chunk), meta.Deleted)
+		p.log.Warn("Detected unconfirmed chunk: %s, evicted: %v", meta.ChunkKey(chunk), meta.IsDeleted())
 		return nil, false
 	}
 
@@ -405,9 +396,10 @@ func (p *LRUPlacer) NextAvailableObject(meta *Meta, candidate *Meta) (*Meta, boo
 	return candidate, found
 }
 
+// evictMeta evicts candidate and set necessary properties of the meta to get prepared for replacing.
 func (p *LRUPlacer) evictMeta(meta *Meta, candidate *Meta, resetSecondary bool) {
 	// Found candidate and candidate is large enough to be freed for space.
-	candidate.Deleted = true
+	candidate.Delete()
 
 	// Don't reset placerMeta here, reset on recover object.
 	// m.placerMeta = nil

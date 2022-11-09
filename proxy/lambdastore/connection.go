@@ -815,8 +815,18 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp := &types.Response{Cmd: protocol.CMD_SET, Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
+	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
+
+	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
+	if counter == nil {
+		conn.log.Warn("Request not found: %s.", rsp.Id.ReqId)
+	}
+	defer counter.Close()
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
+	// Added by Tianium 2022-11-02
+	// Flag chunk set as succeeded.
+	counter.AddSucceeded(chunk, false)
 	req, err := conn.SetResponse(rsp, false)
 	if err == nil {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
