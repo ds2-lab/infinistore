@@ -36,7 +36,8 @@ func init() {
 		ServerIp = ip
 	}
 
-	Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT | protocol.FLAG_DISABLE_WAIT_FOR_COS
+	// Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT | protocol.FLAG_DISABLE_WAIT_FOR_COS
+	Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT
 }
 
 func IsWarmupWithFixedInterval() bool {
