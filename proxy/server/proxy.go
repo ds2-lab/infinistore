@@ -83,7 +83,7 @@ func (p *Proxy) Release() {
 	cluster.CleanUpPool()
 }
 
-// HandleSet "set chunk" handler
+// HandleSetChunk is the handler for "set chunk".
 func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
 
@@ -164,7 +164,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 }
 
-// HandleGet "get chunk" handler
+// HandleGetChunk is the handler for "get chunk".
 func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// Response with pong to confirm the preflight test.
 	// w.AppendBulkString(protocol.CMD_PONG)

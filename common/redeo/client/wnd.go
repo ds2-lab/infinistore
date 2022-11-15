@@ -45,7 +45,14 @@ func (m *RequestMeta) IsTimeout(t time.Time) bool {
 		return false
 	}
 
-	dl, ok := m.Context().Deadline()
+	// To avoid using lock, ensure the Request is stll avaiable.
+	req := m.Request
+	if req == nil {
+		// If the request is not available, it must be acked.
+		return false
+	}
+
+	dl, ok := req.Context().Deadline()
 	if !ok {
 		dl = m.Deadline
 	}
