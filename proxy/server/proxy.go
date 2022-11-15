@@ -116,7 +116,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	prepared.SetTimout(protocol.GetBodyTimeout(bodyStream.Len())) // Set timeout for the operation to be considered as failed.
 	// Added by Tianium: 20221102
 	// We need the counter to figure out when the object is fully stored.
-	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_SET, prepared.DChunks, prepared.PChunks)
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_SET, prepared.DChunks, prepared.PChunks, nil)
 
 	// Updated by Tianium: 20221102
 	// req.Key will not be set until we get meta and have information about the version.
@@ -192,13 +192,19 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
-	lambdaDest := meta.Placement[dChunkId]
-	if meta.NumChunks() == 0 {
-		p.log.Error("Error: Detect unexpected ec settings from meta of key %s, fix using default value.", key)
-		meta.DChunks = global.Options.D
-		meta.PChunks = global.Options.P
+	// Validate the version of meta matches.
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks, meta)
+	if counter.Meta.(*metastore.Meta).Version() != meta.Version() {
+		meta = counter.Meta.(*metastore.Meta)
 	}
-	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
+
+	// Validate if the chunk id is still valid for the returned meta.
+	if dChunkId >= int64(meta.NumChunks()) {
+		server.NewNilResponse(w, seq).Flush()
+		return
+	}
+
+	lambdaDest := meta.Placement[dChunkId]
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := types.GetRequest(client)
 	req.Seq = seq
