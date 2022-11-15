@@ -57,7 +57,7 @@ func (c *RequestCoordinator) Len() int {
 	return c.registry.Len()
 }
 
-func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *RequestCounter {
+func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int, meta interface{}) *RequestCounter {
 	prepared := c.pool.Get().(*RequestCounter)
 	prepared.initialized.Add(1) // Block in case initalization is need.
 
@@ -69,7 +69,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int) *R
 	counter := ret.(*RequestCounter)
 	if !ok {
 		// New counter registered, initialize values.
-		counter.reset(c, reqId, cmd, d, p)
+		counter.reset(c, reqId, cmd, d, p, meta)
 		// Release initalization lock
 		counter.initialized.Done()
 	} else {
@@ -115,6 +115,7 @@ type RequestCounter struct {
 	Cmd          string
 	DataShards   int
 	ParityShards int
+	Meta         interface{}
 	Requests     []*types.Request
 
 	coordinator  *RequestCoordinator
@@ -129,10 +130,11 @@ func newRequestCounter() interface{} {
 	return &RequestCounter{}
 }
 
-func (counter *RequestCounter) reset(c *RequestCoordinator, reqId string, cmd string, d int, p int) {
+func (counter *RequestCounter) reset(c *RequestCoordinator, reqId string, cmd string, d int, p int, meta interface{}) {
 	counter.Cmd = cmd
 	counter.DataShards = d
 	counter.ParityShards = p
+	counter.Meta = meta
 	counter.coordinator = c
 	counter.reqId = reqId
 	counter.status = 0

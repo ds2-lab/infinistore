@@ -31,6 +31,7 @@ type Placer interface {
 	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
 	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
 	Get(string, int) (*Meta, bool)
+	GetByVersion(string, int, int) (*Meta, bool)
 	Dispatch(*lambdastore.Instance, types.Command) error
 	MetaStats() types.MetaStoreStats
 }
@@ -91,6 +92,16 @@ func (l *DefaultPlacer) Get(key string, chunk int) (*Meta, bool) {
 
 	// TODO: Do some statistic
 
+	return meta, ok
+}
+
+func (l *DefaultPlacer) GetByVersion(key string, ver int, chunk int) (*Meta, bool) {
+	meta, ok := l.metaStore.GetByVersion(key, ver)
+	if !ok {
+		return nil, ok
+	}
+
+	// TODO: Do some statistic
 	return meta, ok
 }
 

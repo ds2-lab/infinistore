@@ -314,6 +314,27 @@ func (p *LRUPlacer) Get(key string, chunk int) (*Meta, bool) {
 	return meta, ok
 }
 
+func (p *LRUPlacer) GetByVersion(key string, ver int, chunk int) (*Meta, bool) {
+	meta, ok := p.store.GetByVersion(key, ver)
+	if !ok {
+		return nil, ok
+	}
+
+	// If deleted, skip checks below.
+	if meta.IsDeleted() {
+		return meta, ok
+	}
+
+	// Assertion: If normal, all chunks must be confirmed.
+	if meta.placerMeta == nil || !meta.placerMeta.(*LRUPlacerMeta).confirmed[chunk] {
+		p.log.Warn("Detected unconfirmed chunk: %s, evicted: %v", meta.ChunkKey(chunk), meta.IsDeleted())
+		return nil, false
+	}
+
+	p.TouchObject(meta)
+	return meta, ok
+}
+
 // Object management implementation: Clock LRU
 func (p *LRUPlacer) AddObject(meta *Meta) {
 	placerMeta := meta.placerMeta.(*LRUPlacerMeta)
