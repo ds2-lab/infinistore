@@ -141,6 +141,7 @@ func (conn *Conn) Close() error {
 	// Signal sub-goroutings to quit.
 	select {
 	case <-conn.done:
+		return ErrConnectionClosed
 	default:
 		close(conn.done)
 	}
@@ -315,7 +316,7 @@ func (conn *Conn) close() error {
 func (conn *Conn) invalidate(shortcut *net.MockConn) {
 	// Thread safe implementation
 	if shortcut != nil && atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&conn.shortcut)), unsafe.Pointer(shortcut), unsafe.Pointer(nil)) {
-		shortcut.Invalid()
+		shortcut.Close()
 	}
 }
 
