@@ -13,7 +13,7 @@ var (
 	Shortcut *shortcut
 
 	// Concurency Estimate concurrency required.
-	Concurrency = 100
+	Concurrency = 1000
 
 	shortcutAddress    = "shortcut:%d:%s"
 	shortcutRecognizer = regexp.MustCompile(`^shortcut:[0-9]+:(.+)$`)
@@ -26,7 +26,7 @@ type shortcut struct {
 func InitShortcut() *shortcut {
 	if Shortcut == nil {
 		Shortcut = &shortcut{
-			ports: hashmap.NewMap(200), // Concurrency * 2
+			ports: hashmap.NewMapWithStringKey(Concurrency),
 		}
 	}
 	return Shortcut
@@ -106,6 +106,10 @@ func (c *MockConn) Close() error {
 	return c.parent.close(c.idx, c)
 }
 
+func (c *MockConn) close() {
+	c.Conn.Close()
+}
+
 func (c *MockConn) Invalid() {
 	c.parent.Conns[c.idx] = nil
 }
@@ -144,7 +148,7 @@ func (cn *ShortcutConn) Close(idxes ...int) {
 func (cn *ShortcutConn) close(i int, conn *MockConn) error {
 	if conn != nil {
 		cn.Conns[i] = nil
-		return conn.Close()
+		conn.close()
 	}
 
 	return nil
