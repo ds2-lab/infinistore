@@ -44,7 +44,7 @@ var _ = Describe("RequestCoordinator", func() {
 
 	It("should single chunk request be recycled", func() {
 		counter := &TestRequestCounter{}
-		counter.reset(coordinator, "test", "get", 1, 0)
+		counter.reset(coordinator, "test", "get", 1, 0, nil)
 		req := newRequest(counter, "0")
 		err := req.SetResponse(errDummyResponse)
 
@@ -54,7 +54,7 @@ var _ = Describe("RequestCoordinator", func() {
 
 	It("should timeout in request lock free", func() {
 		counter := &TestRequestCounter{}
-		counter.reset(coordinator, "test", "get", 1, 0)
+		counter.reset(coordinator, "test", "get", 1, 0, nil)
 		req := newRequest(counter, "0")
 
 		go func() {

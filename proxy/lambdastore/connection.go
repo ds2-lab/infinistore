@@ -943,6 +943,9 @@ func (conn *Connection) readAndSetDue(ins *Instance) error {
 }
 
 func (conn *Connection) ackCommand(cmd string) error {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
 	conn.w.WriteCmd(protocol.CMD_ACK)
 	if err := conn.w.Flush(); err != nil {
 		conn.log.Warn("Failed to acknowledge %s: %v", cmd, err)
