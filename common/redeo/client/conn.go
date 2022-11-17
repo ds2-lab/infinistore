@@ -129,7 +129,13 @@ func (conn *Conn) LastError() error {
 }
 
 func (conn *Conn) IsClosed() bool {
-	return atomic.LoadUint32(&conn.closed) == 1
+	if atomic.LoadUint32(&conn.closed) == 1 {
+		// Wait for the connection to be closed.
+		<-conn.done
+		return true
+	} else {
+		return false
+	}
 }
 
 // Close Signal connection should be closed. Function close() will be called later for actural operation
@@ -138,6 +144,10 @@ func (conn *Conn) Close() error {
 		return ErrConnectionClosed
 	}
 
+	// Close connection to force block read to quit
+	err := conn.GetConn().Close()
+	conn.invalidate(conn.shortcut)
+
 	// Signal sub-goroutings to quit.
 	select {
 	case <-conn.done:
@@ -145,10 +155,6 @@ func (conn *Conn) Close() error {
 	default:
 		close(conn.done)
 	}
-
-	// Close connection to force block read to quit
-	err := conn.GetConn().Close()
-	conn.invalidate(conn.shortcut)
 
 	go func() {
 		// Wait for quiting of all sub-goroutings
