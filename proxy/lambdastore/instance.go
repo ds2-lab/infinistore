@@ -70,13 +70,14 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN                       = 2
-	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
-	TEMP_MAP_SIZE                           = 10
-	BACKING_DISABLED                        = 0
-	BACKING_RESERVED                        = 1
-	BACKING_ENABLED                         = 2
-	BACKING_FORBID                          = 3
+	MAX_CMD_QUEUE_LEN = 1
+	MAX_CONCURRENCY   = 2
+	// ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
+	TEMP_MAP_SIZE    = 10
+	BACKING_DISABLED = 0
+	BACKING_RESERVED = 1
+	BACKING_ENABLED  = 2
+	BACKING_FORBID   = 3
 
 	DESCRIPTION_UNSTARTED  = "unstarted"
 	DESCRIPTION_CLOSED     = "closed"
@@ -160,21 +161,21 @@ type Instance struct {
 	*Deployment
 	Meta
 
-	chanCmd         chan types.Command
-	chanPriorCmd    chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	status          uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
-	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
-	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
-	validated       promise.Promise
-	numOutbound     int32
-	numInbound      int32
-	mu              sync.Mutex
-	closed          chan struct{}
-	coolTimer       *time.Timer
-	coolTimeout     time.Duration
-	coolReset       chan struct{}
-	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
-	numInsFailure   int    // # of continues instance failure.
+	chanCmd      chan types.Command
+	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
+	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
+	phase        uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
+	validated    promise.Promise
+	numOutbound  int32
+	numInbound   int32
+	mu           sync.Mutex
+	closed       chan struct{}
+	coolTimer    *time.Timer
+	coolTimeout  time.Duration
+	coolReset    chan struct{}
+	numFailure   uint32 // # of continues validation failure, which means to node may stop resonding.
+	// numInsFailure   int    // # of continues instance failure.
 	client          invoker.FunctionInvoker
 	lambdaCanceller context.CancelFunc
 
@@ -227,7 +228,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
-	ins.lm.SetMaxActiveDataLinks(MAX_CMD_QUEUE_LEN)
+	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY)
 	return ins
 }
 
@@ -257,15 +258,15 @@ func (ins *Instance) Status() uint64 {
 	if ins.IsBacking(true) {
 		backing += INSTANCE_BACKING
 	}
-	if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
-		failure += FAILURE_MAX_QUEUE_REACHED
-		ins.numInsFailure++
-		if ins.numInsFailure >= ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES {
-			global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
-		}
-	} else {
-		ins.numInsFailure = 0
-	}
+	// if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
+	// 	failure += FAILURE_MAX_QUEUE_REACHED
+	// 	ins.numInsFailure++
+	// 	if ins.numInsFailure >= ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES {
+	// 		global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
+	// 	}
+	// } else {
+	// 	ins.numInsFailure = 0
+	// }
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +
 		(uint64(atomic.LoadUint32(&ins.awakeness)) << 4) +
