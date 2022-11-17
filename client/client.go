@@ -51,7 +51,7 @@ type Client struct {
 	conns map[string][]*client.Conn
 	// mappingTable map[string]*cuckoo.Filter
 	logEntry logEntry
-	shortcut bool
+	shortcut *net.ShortcutConn
 	closed   bool
 }
 
@@ -110,10 +110,7 @@ func (c *Client) Close() {
 func (c *Client) initDial(address string) (string, error) {
 	// initialize parallel connections under address
 	connect := c.connect
-	c.shortcut = false
-	_, ok := net.Shortcut.Validate(address)
-	if ok {
-		c.shortcut = true
+	if _, ok := net.Shortcut.Validate(address); ok {
 		connect = c.connectShortcut
 	}
 	// Connect use original address
@@ -133,22 +130,22 @@ func (c *Client) connect(addr string, n int) error {
 }
 
 func (c *Client) connectShortcut(addr string, n int) error {
-	shortcuts, ok := net.Shortcut.Dial(addr)
+	var ok bool
+	c.shortcut, ok = net.Shortcut.GetConn(addr)
 	if !ok {
 		return ErrDialShortcut
 	}
 	c.conns[addr] = make([]*client.Conn, n)
-	for i := 0; i < n && i < len(shortcuts); i++ {
+	for i := 0; i < n; i++ {
 		c.validate(addr, i)
 	}
 	return nil
 }
 
 func (c *Client) validate(address string, i int) (cn *client.Conn, err error) {
-	// Because shortcut can not be closed, we don't consider it here.
 	if c.conns[address][i] == nil || c.conns[address][i].IsClosed() {
 		var conn sysnet.Conn
-		if !c.shortcut {
+		if c.shortcut == nil || c.shortcut.Address != address {
 			conn, err = sysnet.Dial("tcp", address)
 			if err == nil {
 				c.conns[address][i] = client.NewConn(conn, func(cn *client.Conn) {
@@ -158,16 +155,11 @@ func (c *Client) validate(address string, i int) (cn *client.Conn, err error) {
 				})
 			}
 		} else {
-			shortcut, ok := net.Shortcut.GetConn(address)
-			if !ok {
-				err = ErrDialShortcut
-			} else {
-				c.conns[address][i] = client.NewShortcut(shortcut.Validate(i).Conns[i], func(cn *client.Conn) {
-					cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
-					cn.SetWindowSize(2) // use 2 to form pipeline
-					cn.Handler = c
-				})
-			}
+			c.conns[address][i] = client.NewShortcut(c.shortcut.Validate(i).Conns[i], func(cn *client.Conn) {
+				cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
+				cn.SetWindowSize(2) // use 2 to form pipeline
+				cn.Handler = c
+			})
 		}
 	}
 	cn = c.conns[address][i]
@@ -219,6 +211,12 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			if req.Cancel != nil {
 				req.Cancel()
 			}
+			// In case of deadline exceeded, we don't know what blocks the connection. Close it to force a new connection to be created next time.
+			if err == context.DeadlineExceeded {
+				req.Conn().Close()
+			}
+
+			// Keep record of the last error
 			if err != nil {
 				r.Err = err
 			}
