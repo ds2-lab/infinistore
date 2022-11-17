@@ -17,6 +17,7 @@ const (
 	REQCNT_MASK_RETURNED    uint64 = 0x000000000000FFFF
 	REQCNT_MASK_SUCCEED     uint64 = 0x00000000FFFF0000
 	REQCNT_MASK_RECOVERED   uint64 = 0x0000FFFF00000000
+	REQCNT_MAX_CHUNKS       int    = 16
 	REQCNT_BITS_RETURNED    uint64 = 0
 	REQCNT_BITS_SUCCEED     uint64 = 16
 	REQCNT_BITS_RECOVERED   uint64 = 32
@@ -155,12 +156,10 @@ func (c *RequestCounter) String() string {
 	return c.reqId
 }
 
+// AddSucceeded sets specified chunk of the object request as succeeded. If the chunk is recovered from backing store, it will be marked as recovered.
+// Returns the updated status of the request and if the chunk request has been fulfilled already.
 func (c *RequestCounter) AddSucceeded(chunk int, recovered bool) (uint64, bool) {
-	marked := false
-	if c.Requests[chunk] != nil {
-		marked = c.Requests[chunk].MarkReturned()
-	}
-
+	marked := c.markReturnd(chunk)
 	if !marked {
 		return c.Status(), !marked
 	} else if recovered {
@@ -171,12 +170,10 @@ func (c *RequestCounter) AddSucceeded(chunk int, recovered bool) (uint64, bool) 
 	}
 }
 
+// AddReturned sets specified chunk of the object request as returned but failed.
+// Returns the updated status of the request and if the chunk request has been fulfilled already.
 func (c *RequestCounter) AddReturned(chunk int) (uint64, bool) {
-	marked := false
-	if c.Requests[chunk] != nil {
-		marked = c.Requests[chunk].MarkReturned()
-	}
-
+	marked := c.markReturnd(chunk)
 	if !marked {
 		return c.Status(), !marked
 	} else {
@@ -244,13 +241,22 @@ func (c *RequestCounter) MarkReturnd(id *types.Id) (uint64, bool) {
 	return c.AddReturned(id.Chunk())
 }
 
+func (c *RequestCounter) markReturnd(chunk int) bool {
+	req := c.Requests[chunk]
+	if req != nil {
+		return req.MarkReturned()
+	} else {
+		return false
+	}
+}
+
 func (c *RequestCounter) Close() {
 	c.close()
 }
 
 func (c *RequestCounter) close() bool {
 	cnt := atomic.AddInt32(&c.refs, -1)
-	if cnt >= 0 && c.ReleaseIfAllReturned() && cnt == 0 {
+	if c.ReleaseIfAllReturned() && cnt == 0 {
 		c.coordinator.Recycle(c)
 		return true
 	} else {

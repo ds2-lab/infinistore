@@ -104,6 +104,11 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		p.log.Error("Error on get value reader: %v", err)
 		return
 	}
+	if dataChunks+parityChunks > int64(global.REQCNT_MAX_CHUNKS) {
+		server.NewErrorResponse(w, seq, "Too many chunks, max %d chunks supported.", global.REQCNT_MAX_CHUNKS).Flush()
+		return
+	}
+
 	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 
 	p.log.Debug("HandleSet %s: %d@%s", reqId, dChunkId, key)
