@@ -136,9 +136,6 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			}
 			// Try next group
 			test += len(meta.Placement)
-		} else if ins.IsBusy(cmd) {
-			// Try next group
-			test += len(meta.Placement)
 		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK); err == lambdastore.ErrInstanceBusy {
 			// Try next group
 			test += len(meta.Placement)
@@ -164,11 +161,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 }
 
 func (l *DefaultPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) (err error) {
-	if ins.IsBusy(cmd) {
-		err = lambdastore.ErrInstanceBusy
-	} else {
-		err = ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK)
-	}
+	err = ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK)
 	if err == nil || err != lambdastore.ErrInstanceBusy {
 		return err
 	}
@@ -199,9 +192,6 @@ func (l *DefaultPlacer) Dispatch(ins *lambdastore.Instance, cmd types.Command) (
 		cmd.GetRequest().InsId = ins.Id()
 		if l.testChunk(ins, uint64(meta.ChunkSize)) {
 			// Sizing check failed, try next group
-			test += len(meta.Placement)
-		} else if ins.IsBusy(cmd) {
-			// Try next group
 			test += len(meta.Placement)
 		} else if err := ins.DispatchWithOptions(cmd, lambdastore.DISPATCH_OPT_BUSY_CHECK|lambdastore.DISPATCH_OPT_RELOCATED); err == lambdastore.ErrInstanceBusy || lambdastore.IsLambdaTimeout(err) {
 			// Try next group

@@ -325,6 +325,10 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	}
 
 	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
+	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && ins.IsBusy(cmd) {
+		return ErrInstanceBusy
+	}
+
 	select {
 	case ins.chanCmd <- cmd:
 		// continue after select
@@ -351,10 +355,12 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 }
 
 func (ins *Instance) IsBusy(cmd types.Command) bool {
-	if len(ins.chanCmd) >= MAX_CMD_QUEUE_LEN {
+	numOutBound := atomic.LoadInt32(&ins.numOutbound)
+	numInBound := atomic.LoadInt32(&ins.numInbound)
+	if int(numOutBound+numInBound)+len(ins.chanCmd) >= MAX_CONCURRENCY {
 		return true
 	} else if cmd.String() == protocol.CMD_SET {
-		return atomic.LoadInt32(&ins.numOutbound) > 0
+		return numOutBound > 0
 	} else {
 		return false
 	}
