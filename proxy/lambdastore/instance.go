@@ -70,7 +70,8 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 5
+	MAX_CMD_QUEUE_LEN = 1
+	MAX_CONCURRENCY   = 2
 	TEMP_MAP_SIZE     = 10
 	BACKING_DISABLED  = 0
 	BACKING_RESERVED  = 1
@@ -225,7 +226,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
-	ins.lm.SetMaxActiveDataLinks(MAX_CMD_QUEUE_LEN)
+	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY)
 	return ins
 }
 
