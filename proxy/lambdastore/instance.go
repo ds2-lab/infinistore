@@ -864,7 +864,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 				// Time to abandon
 				return ins.flagValidatedLocked(nil, ErrValidationTimeout)
 			}
-			ins.log.Warn("Timeout on validating, re-ping...")
+			ins.log.Debug("Timeout on validating, re-ping...")
 		} else {
 			// Validated.
 			return castValidatedConnection(ins.validated)
