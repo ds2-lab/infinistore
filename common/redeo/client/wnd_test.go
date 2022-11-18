@@ -102,7 +102,7 @@ var _ = Describe("Window", func() {
 		defer wnd.mu.RUnlock()
 
 		// Create bucket on demand.
-		bucket, i, _ := wnd.seek(wnd.active.seq+BucketSize*SeqStep+SeqStep, wnd.active.Ref(), true)
+		bucket, i, _ := wnd.seekRLocked(wnd.active.seq+BucketSize*SeqStep+SeqStep, wnd.active.Ref(), true)
 		Expect(bucket).To(Not(Equal(wnd.active)))
 		Expect(bucket).To(Equal(wnd.active.next))
 		Expect(i).To(Equal(int64(1)))
@@ -110,7 +110,7 @@ var _ = Describe("Window", func() {
 		Expect(bucket.Refs()).To(Equal(0))
 
 		// Seek created bucket.
-		bucket, i, _ = wnd.seek(wnd.active.seq+BucketSize*SeqStep+SeqStep, wnd.active.Ref(), false)
+		bucket, i, _ = wnd.seekRLocked(wnd.active.seq+BucketSize*SeqStep+SeqStep, wnd.active.Ref(), false)
 		Expect(bucket).To(Not(Equal(wnd.active)))
 		Expect(bucket).To(Equal(wnd.active.next))
 		Expect(i).To(Equal(int64(1)))
@@ -118,7 +118,7 @@ var _ = Describe("Window", func() {
 		Expect(bucket.Refs()).To(Equal(0))
 
 		// Seek nonexisted bucket.
-		bucket, i, _ = wnd.seek(wnd.active.seq+2*BucketSize*SeqStep+SeqStep, wnd.active.Ref(), false)
+		bucket, i, _ = wnd.seekRLocked(wnd.active.seq+2*BucketSize*SeqStep+SeqStep, wnd.active.Ref(), false)
 		Expect(bucket).To(Equal(NilBucket))
 		Expect(i).To(Equal(int64(BucketSize + 1)))
 		Expect(wnd.active.Refs()).To(Equal(0))
@@ -130,7 +130,7 @@ var _ = Describe("Window", func() {
 		wnd.Close()
 		wnd.mu.RLock()
 		var err error
-		bucket, i, err = wnd.seek(active.seq+BucketSize*SeqStep+SeqStep, (&active).Ref(), true)
+		bucket, i, err = wnd.seekRLocked(active.seq+BucketSize*SeqStep+SeqStep, (&active).Ref(), true)
 		Expect(bucket).To(Equal(NilBucket))
 		Expect(i).To(Equal(int64(BucketSize + 1)))
 		Expect(err).To(Equal(ErrConnectionClosed))
