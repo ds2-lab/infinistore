@@ -189,7 +189,7 @@ func (wnd *Window) AddRequest(req Request) (*RequestMeta, error) {
 		active.DeRef()
 		active = wnd.active.Ref()
 	}
-	bucket, i, err := wnd.seek(seq, active, true)
+	bucket, i, err := wnd.seekRLocked(seq, active, true)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func (wnd *Window) MatchRequest(seq int64) (Request, error) {
 		return nil, ErrConnectionClosed
 	}
 
-	_, _, meta, err := wnd.findRequestMeta(seq)
+	_, _, meta, err := wnd.findRequestMetaRLocked(seq)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (wnd *Window) AckRequest(seq int64) (Request, error) {
 	}
 
 	// Locate the request.
-	bucket, i, meta, err := wnd.findRequestMeta(seq)
+	bucket, i, meta, err := wnd.findRequestMetaRLocked(seq)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func (wnd *Window) AckRequest(seq int64) (Request, error) {
 		// log.Printf("Update acked to %d, try release %d", acked, seq+atomic.LoadInt64(&wnd.size)*SeqStep)
 
 		// Notify possible blocked requests.
-		blocked, i, _ = wnd.seek(seq+atomic.LoadInt64(&wnd.size)*SeqStep, blocked.Ref(), false)
+		blocked, i, _ = wnd.seekRLocked(seq+atomic.LoadInt64(&wnd.size)*SeqStep, blocked.Ref(), false)
 		if blocked != NilBucket {
 			meta := blocked.requests[i]
 			if meta != nil {
@@ -283,7 +283,7 @@ func (wnd *Window) AckRequest(seq int64) (Request, error) {
 		if seq > atomic.LoadInt64(&wnd.seq) {
 			break
 		}
-		bucket, i, _ = wnd.seek(seq, bucket.Ref(), false)
+		bucket, i, _ = wnd.seekRLocked(seq, bucket.Ref(), false)
 		if bucket == NilBucket {
 			break
 		}
@@ -327,13 +327,13 @@ func (wnd *Window) IsClosed() bool {
 	return atomic.LoadInt32(&wnd.close) == 1
 }
 
-func (wnd *Window) seek(seq int64, bucket *ReqBucket, forSet bool) (*ReqBucket, int64, error) {
+func (wnd *Window) seekRLocked(seq int64, bucket *ReqBucket, forSet bool) (*ReqBucket, int64, error) {
 	// defer bucket.DeRef()
 	i := seq - bucket.seq
 	var err error
 	for i >= BucketSize*SeqStep {
 		if forSet {
-			bucket, err = wnd.prepareNextBucketForSet(bucket)
+			bucket, err = wnd.prepareNextBucketForSetRLocked(bucket)
 			if err != nil {
 				return bucket, i / SeqStep, err
 			}
@@ -350,7 +350,7 @@ func (wnd *Window) seek(seq int64, bucket *ReqBucket, forSet bool) (*ReqBucket, 
 	return bucket, i / SeqStep, err
 }
 
-func (wnd *Window) findRequestMeta(seq int64) (*ReqBucket, int64, *RequestMeta, error) {
+func (wnd *Window) findRequestMetaRLocked(seq int64) (*ReqBucket, int64, *RequestMeta, error) {
 	if seq <= atomic.LoadInt64(&wnd.acked) {
 		// log.Printf("acked seq: %d, acked: %d", seq, acked)
 		return nil, 0, nil, ErrAcked
@@ -360,7 +360,7 @@ func (wnd *Window) findRequestMeta(seq int64) (*ReqBucket, int64, *RequestMeta, 
 	}
 
 	// Seek and locate meta
-	bucket, i, err := wnd.seek(seq, wnd.active.Ref(), false)
+	bucket, i, err := wnd.seekRLocked(seq, wnd.active.Ref(), false)
 	if err != nil {
 		// log.Printf("unseen seq: %d, no more bucket", seq)
 		return bucket, i, nil, err
@@ -377,7 +377,7 @@ func (wnd *Window) findRequestMeta(seq int64) (*ReqBucket, int64, *RequestMeta, 
 	return bucket, i, meta, nil
 }
 
-func (wnd *Window) prepareNextBucketForSet(bucket *ReqBucket) (*ReqBucket, error) {
+func (wnd *Window) prepareNextBucketForSetRLocked(bucket *ReqBucket) (*ReqBucket, error) {
 	if bucket.next != NilBucket {
 		return bucket.Next(), nil
 	}
@@ -429,7 +429,9 @@ func (wnd *Window) cleanUp() {
 			i := int64(0)
 			var err error
 			for j := int64(0); j < atomic.LoadInt64(&wnd.size); j++ {
-				bucket, i, err = wnd.seek(seq+j, bucket.Ref(), false)
+				wnd.mu.RLock()
+				bucket, i, err = wnd.seekRLocked(seq+j*SeqStep, bucket.Ref(), false)
+				wnd.mu.RUnlock()
 				if err != nil {
 					// err == ErrNotSeen, end of the window.
 					break
