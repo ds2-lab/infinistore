@@ -816,10 +816,15 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
+	// Check lambda if it is supported
+	defer conn.finalizeCommmand(rsp.Cmd)
 
 	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
 	if counter == nil {
-		conn.log.Warn("Request not found: %s.", rsp.Id.ReqId)
+		// conn.log.Warn("Request not found: %s, can be cancelled already", rsp.Id.ReqId)
+		// Set response
+		conn.SetResponse(rsp, true)
+		return
 	}
 	defer counter.Close()
 
@@ -831,9 +836,6 @@ func (conn *Connection) setHandler(start time.Time) {
 	if err == nil {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
-
-	// Check lambda if it is supported
-	conn.finalizeCommmand(rsp.Cmd)
 }
 
 func (conn *Connection) delHandler() {
