@@ -340,13 +340,14 @@ func (wnd *Window) seek(seq int64, bucket *ReqBucket, forSet bool) (*ReqBucket, 
 		} else {
 			bucket = bucket.Next()
 			if bucket == NilBucket {
+				err = ErrNotSeen
 				break
 			}
 		}
 		i = seq - bucket.seq
 	}
 	bucket.DeRef()
-	return bucket, i / SeqStep, nil
+	return bucket, i / SeqStep, err
 }
 
 func (wnd *Window) findRequestMeta(seq int64) (*ReqBucket, int64, *RequestMeta, error) {
@@ -359,10 +360,10 @@ func (wnd *Window) findRequestMeta(seq int64) (*ReqBucket, int64, *RequestMeta, 
 	}
 
 	// Seek and locate meta
-	bucket, i, _ := wnd.seek(seq, wnd.active.Ref(), false)
-	if bucket == NilBucket {
+	bucket, i, err := wnd.seek(seq, wnd.active.Ref(), false)
+	if err != nil {
 		// log.Printf("unseen seq: %d, no more bucket", seq)
-		return bucket, i, nil, ErrNotSeen
+		return bucket, i, nil, err
 	}
 	meta := bucket.requests[i]
 	if meta == nil {
@@ -426,9 +427,11 @@ func (wnd *Window) cleanUp() {
 			seq := atomic.LoadInt64(&wnd.acked) + SeqStep
 			bucket := wnd.active
 			i := int64(0)
+			var err error
 			for j := int64(0); j < atomic.LoadInt64(&wnd.size); j++ {
-				bucket, i, _ = wnd.seek(seq+j, bucket.Ref(), false)
-				if bucket == NilBucket {
+				bucket, i, err = wnd.seek(seq+j, bucket.Ref(), false)
+				if err != nil {
+					// err == ErrNotSeen, end of the window.
 					break
 				}
 
