@@ -70,8 +70,8 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 0 // Max number of commands in the queue
-	MAX_CONCURRENCY   = 2 // The number of concurrent requests to the instance.
+	MAX_CMD_QUEUE_LEN = 0
+	MAX_CONCURRENCY   = 2
 	TEMP_MAP_SIZE     = 10
 	BACKING_DISABLED  = 0
 	BACKING_RESERVED  = 1
@@ -256,9 +256,6 @@ func (ins *Instance) Status() uint64 {
 	}
 	if ins.IsBacking(true) {
 		backing += INSTANCE_BACKING
-	}
-	if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
-		failure += FAILURE_MAX_QUEUE_REACHED
 	}
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +
@@ -1304,7 +1301,8 @@ func (ins *Instance) bye(conn *Connection) {
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
-	if req := cmd.GetRequest(); req != nil && req.IsResponded() {
+	req := cmd.GetRequest()
+	if req != nil && req.IsResponded() {
 		// Request is responded
 		return
 	} else if req != nil && req.Cmd == protocol.CMD_GET &&
@@ -1314,7 +1312,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Set instance busy on request.
-	ins.busy(cmd)
+	ins.busy(req)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1338,7 +1336,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		}
 
 		if reclaimPass {
-			ins.doneBusy(cmd)
+			ins.doneBusy(req)
 			// No more thing to do, the request will be handled by another instance.
 			return
 		} else if err != nil {
@@ -1373,7 +1371,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if request, ok := cmd.(*types.Request); ok {
 			request.SetResponse(lastErr)
 		}
-		ins.doneBusy(cmd)
+		ins.doneBusy(req)
 	}
 
 	// Reset timer
@@ -1566,16 +1564,24 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	}
 }
 
-func (ins *Instance) busy(cmd types.Command) {
-	if cmd.String() == protocol.CMD_SET {
+func (ins *Instance) busy(req *types.Request) {
+	if req == nil {
+		return
+	}
+
+	if req.String() == protocol.CMD_SET {
 		atomic.AddInt32(&ins.numOutbound, 1)
 	} else {
 		atomic.AddInt32(&ins.numInbound, 1)
 	}
 }
 
-func (ins *Instance) doneBusy(cmd types.Command) {
-	if cmd.String() == protocol.CMD_SET {
+func (ins *Instance) doneBusy(req *types.Request) {
+	if req == nil {
+		return
+	}
+
+	if req.String() == protocol.CMD_SET {
 		atomic.AddInt32(&ins.numOutbound, -1)
 	} else {
 		atomic.AddInt32(&ins.numInbound, -1)
