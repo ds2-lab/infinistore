@@ -1312,7 +1312,8 @@ func (ins *Instance) bye(conn *Connection) {
 }
 
 func (ins *Instance) handleRequest(cmd types.Command) {
-	if req := cmd.GetRequest(); req != nil && req.IsResponded() {
+	req := cmd.GetRequest()
+	if req != nil && req.IsResponded() {
 		// Request is responded
 		return
 	} else if req != nil && req.Cmd == protocol.CMD_GET &&
@@ -1322,7 +1323,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Set instance busy on request.
-	ins.busy(cmd)
+	ins.busy(req)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1346,7 +1347,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		}
 
 		if reclaimPass {
-			ins.doneBusy(cmd)
+			ins.doneBusy(req)
 			// No more thing to do, the request will be handled by another instance.
 			return
 		} else if err != nil {
@@ -1381,7 +1382,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if request, ok := cmd.(*types.Request); ok {
 			request.SetResponse(lastErr)
 		}
-		ins.doneBusy(cmd)
+		ins.doneBusy(req)
 	}
 
 	// Reset timer
@@ -1574,16 +1575,24 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	}
 }
 
-func (ins *Instance) busy(cmd types.Command) {
-	if cmd.String() == protocol.CMD_SET {
+func (ins *Instance) busy(req *types.Request) {
+	if req == nil {
+		return
+	}
+
+	if req.String() == protocol.CMD_SET {
 		atomic.AddInt32(&ins.numOutbound, 1)
 	} else {
 		atomic.AddInt32(&ins.numInbound, 1)
 	}
 }
 
-func (ins *Instance) doneBusy(cmd types.Command) {
-	if cmd.String() == protocol.CMD_SET {
+func (ins *Instance) doneBusy(req *types.Request) {
+	if req == nil {
+		return
+	}
+
+	if req.String() == protocol.CMD_SET {
 		atomic.AddInt32(&ins.numOutbound, -1)
 	} else {
 		atomic.AddInt32(&ins.numInbound, -1)
