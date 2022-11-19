@@ -300,9 +300,11 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	// Set instance busy. Yes requests will call busy twice:
 	// on schedule(instance.handleRequest) and on request.
 	ins := conn.instance // Save a reference in case the connection being released later.
-	ins.busy(req)
 	go func() {
+		// The request has been send, call doneBusy after response set.
 		defer ins.doneBusy(req)
+
+		// Wait for response or timeout.
 		err := req.Timeout()
 		if err == nil {
 			return

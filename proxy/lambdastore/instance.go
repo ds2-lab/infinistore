@@ -70,8 +70,8 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 1
-	MAX_CONCURRENCY   = 2
+	MAX_CMD_QUEUE_LEN = 0 // Max number of commands in the queue
+	MAX_CONCURRENCY   = 2 // The number of concurrent requests to the instance.
 	TEMP_MAP_SIZE     = 10
 	BACKING_DISABLED  = 0
 	BACKING_RESERVED  = 1
@@ -91,13 +91,14 @@ const (
 )
 
 var (
-	CM                    ClusterManager
-	WarmTimeout           = config.InstanceWarmTimeout
-	TriggerTimeout        = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
-	RTT                   = 2 * time.Millisecond
-	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
+	CM             ClusterManager
+	WarmTimeout    = config.InstanceWarmTimeout
+	TriggerTimeout = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
+	// TODO: Make RTT dynamic, global or per instance.
+	RTT                   = 30 * time.Millisecond
+	DefaultConnectTimeout = 200 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
-	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
+	MinValidationInterval = RTT // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
@@ -871,7 +872,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 				// Time to abandon
 				return ins.flagValidatedLocked(nil, ErrValidationTimeout)
 			}
-			ins.log.Debug("Timeout on validating, re-ping...")
+			ins.log.Warn("Timeout on validating, re-ping...")
 		} else {
 			// Validated.
 			return castValidatedConnection(ins.validated)
@@ -1314,7 +1315,6 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 
 	// Set instance busy on request.
 	ins.busy(cmd)
-	defer ins.doneBusy(cmd)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1338,32 +1338,29 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		}
 
 		if reclaimPass {
+			ins.doneBusy(cmd)
+			// No more thing to do, the request will be handled by another instance.
 			return
 		} else if err != nil {
-			// Handle errors
-			if req, ok := cmd.(*types.Request); ok {
-				req.SetResponse(err)
-			}
-			return
+			lastErr = err
 		} else if ctrlLink == nil {
 			// Unexpected error
-			if req, ok := cmd.(*types.Request); ok {
-				req.SetResponse(ErrUnknown)
-			}
 			ins.log.Warn("Unexpected nil control link with no error returned.")
-			return
+			lastErr = ErrUnknown
+			break
+		} else {
+			ins.log.Debug("Ready to %v", cmd)
+
+			// Make request
+			lastErr = ins.request(ctrlLink, cmd, validateDuration)
 		}
 
-		ins.log.Debug("Ready to %v", cmd)
-
-		// Make request
-		lastErr = ins.request(ctrlLink, cmd, validateDuration)
-		leftAttempts = cmd.MarkError(err)
+		leftAttempts = cmd.MarkError(lastErr)
 		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
 			ins.ResetDue() // Force ping on error
-			ins.log.Warn("Failed to %v: %v", cmd, lastErr)
+			ins.log.Warn("Failed to %v: %v, %d attempts remaining.", cmd, lastErr, leftAttempts)
 		}
 	}
 	if lastErr != nil {
@@ -1376,6 +1373,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if request, ok := cmd.(*types.Request); ok {
 			request.SetResponse(lastErr)
 		}
+		ins.doneBusy(cmd)
 	}
 
 	// Reset timer

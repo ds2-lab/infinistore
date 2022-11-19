@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	sysSync "sync"
 	"sync/atomic"
@@ -68,6 +69,14 @@ type ReqBucket struct {
 	refs     int32 // reference counter of the bucket, if refs is not 0, cannot be reset
 }
 
+func newReqBucket(seq int64) *ReqBucket {
+	return &ReqBucket{
+		seq:      seq,
+		requests: make([]*RequestMeta, BucketSize),
+		next:     NilBucket,
+	}
+}
+
 func (b *ReqBucket) Reset() {
 	if b.acked < b.filled {
 		for i := 0; i < len(b.requests); i++ {
@@ -100,6 +109,16 @@ func (b *ReqBucket) Refs() int {
 	return int(atomic.LoadInt32(&b.refs))
 }
 
+func (b *ReqBucket) String() string {
+	if b == NilBucket {
+		return "NilBucket"
+	} else if b.seq == 0 {
+		return "UnexpectedBucket"
+	} else {
+		return fmt.Sprintf("Bucket %d", b.seq)
+	}
+}
+
 type Window struct {
 	seq    int64 // Max sequence seen.
 	top    *ReqBucket
@@ -117,16 +136,13 @@ type Window struct {
 
 func NewWindow() *Window {
 	rand.Seed(time.Now().UnixNano())
+	seqStart := rand.Int63n(SeqStep)
 	wnd := &Window{
-		seq: rand.Int63n(SeqStep),
-		top: &ReqBucket{
-			requests: make([]*RequestMeta, BucketSize),
-			next:     NilBucket,
-		},
+		seq:    seqStart,
+		top:    newReqBucket(seqStart + SeqStep),
 		size:   WindowSize,
 		closed: make(chan struct{}),
 	}
-	wnd.top.seq = wnd.seq + SeqStep
 	wnd.active = wnd.top
 	wnd.tail = wnd.top
 	wnd.acked = wnd.seq
@@ -394,11 +410,7 @@ func (wnd *Window) prepareNextBucketForSetRLocked(bucket *ReqBucket) (*ReqBucket
 	}
 
 	if bucket == wnd.tail {
-		wnd.tail.next = &ReqBucket{
-			seq:      wnd.tail.seq + BucketSize*SeqStep,
-			requests: make([]*RequestMeta, BucketSize),
-			next:     NilBucket,
-		}
+		wnd.tail.next = newReqBucket(wnd.tail.seq + BucketSize*SeqStep)
 		wnd.tail = wnd.tail.next
 	}
 	return bucket.Next(), nil
