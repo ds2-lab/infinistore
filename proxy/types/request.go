@@ -338,23 +338,26 @@ func (req *Request) Timeout(opts ...int) (err error) {
 	if req.responseTimeout < protocol.GetHeaderTimeout() {
 		req.responseTimeout = protocol.GetHeaderTimeout()
 	}
-	// Initialize
-	req.initPromise(opts...)
-	p := req.responded
-	if p != nil {
-		p.SetTimeout(req.responseTimeout)
-		return p.Timeout()
-	} else {
-		// Responded
-		return nil
+	// Initialize promise
+	p := req.initPromise(opts...)
+	// Set timeout
+	p.SetTimeout(req.responseTimeout)
+	// Double check if the request is already responded.
+	if req.IsReturnd() {
+		p.Resolve(nil)
 	}
+	// Wait for timeout
+	return p.Timeout()
 }
 
-func (req *Request) initPromise(opts ...int) {
-	if req.responded == nil {
-		req.responded = promise.NewPromise()
+func (req *Request) initPromise(opts ...int) promise.Promise {
+	responded := req.responded
+	if responded == nil {
+		responded = promise.NewPromise()
+		req.responded = responded
 	}
 	if len(opts) > 0 && opts[0]&DEBUG_INITPROMISE_WAIT > 0 {
 		<-time.After(50 * time.Millisecond)
 	}
+	return responded
 }

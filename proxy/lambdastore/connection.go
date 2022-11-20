@@ -244,10 +244,19 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
+	ins := conn.instance // Save a reference in case the connection being released later.
+	// Clear busy status unless waitResponse is set.
+	waitResponse := false
+	defer func() {
+		if !waitResponse {
+			ins.doneBusy(req)
+		}
+	}()
+
 	// Close check can prevent resource to be used from releasing. However, close signal is not guranteed.
 	if conn.IsClosed() {
 		if req.MarkError(ErrConnectionClosed) > 0 {
-			conn.instance.chanPriorCmd <- req
+			ins.chanPriorCmd <- req
 		} else {
 			req.SetResponse(ErrConnectionClosed)
 		}
@@ -297,9 +306,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 	conn.log.Debug("Sent %v", req)
 
-	// Set instance busy. Yes requests will call busy twice:
-	// on schedule(instance.handleRequest) and on request.
-	ins := conn.instance // Save a reference in case the connection being released later.
+	waitResponse = true
 	go func() {
 		// The request has been send, call doneBusy after response set.
 		defer ins.doneBusy(req)
