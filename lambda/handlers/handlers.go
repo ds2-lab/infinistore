@@ -87,11 +87,14 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	var recovered int64
 	chunkId, stream, ret := Store.GetStream(key)
 	// Recover if not found. This is not desired if recovery is enabled and will generate a warning.
-	// Deleted chunk(ret.Error() == types.ErrDeleted) will not be recovered.
-	if (ret.Error() == types.ErrNotFound || ret.Error() == types.ErrIncomplete) && Persist != nil {
-		log.Debug("Key not found locally, try recovery: %v %s", key, reqId)
+	// Deleted chunk(ret.Error() == types.ErrDeleted) is considered as not found for reasons:
+	// 1. Meta deleted object will not be sent here.
+	// 2. The most possible reason for a key being deleted and requested again is the key has been deleted becaused cache space eviction.
+	if (ret.Error() == types.ErrNotFound || ret.Error() == types.ErrDeleted || ret.Error() == types.ErrIncomplete) && Persist != nil {
 		if Lineage != nil {
-			log.Warn("Key not found while recovery is enabled: %v", key)
+			log.Info("Key %v while recovery is enabled: %v %s", ret.Error(), key, reqId)
+		} else {
+			log.Debug("Key %v locally, try recovery: %v %s", ret.Error(), key, reqId)
 		}
 		errRsp := &worker.ErrorResponse{}
 		chunkId = c.Arg(1).String()
