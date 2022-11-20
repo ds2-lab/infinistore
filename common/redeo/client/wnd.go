@@ -439,17 +439,17 @@ func (wnd *Window) cleanUp() {
 			seq := atomic.LoadInt64(&wnd.acked) + SeqStep
 			bucket := wnd.active
 			i := int64(0)
-			var err error
 			for j := int64(0); j < atomic.LoadInt64(&wnd.size); j++ {
 				wnd.mu.RLock()
-				bucket, i, err = wnd.seekRLocked(seq+j*SeqStep, bucket.Ref(), false)
-				wnd.mu.RUnlock()
-				if err != nil {
-					// err == ErrNotSeen, end of the window.
+				bucket, i, _ = wnd.seekRLocked(seq+j*SeqStep, bucket.Ref(), false)
+				if bucket == NilBucket {
+					wnd.mu.RUnlock()
 					break
 				}
-
+				// In lock, get a reference of the meta to avoid wnd being closed
 				meta := bucket.requests[i]
+				wnd.mu.RUnlock()
+
 				if meta != nil && meta.IsTimeout(t) {
 					_ = meta.SetResponse(context.DeadlineExceeded)
 					req := meta.Request
