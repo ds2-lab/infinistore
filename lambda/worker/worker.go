@@ -62,7 +62,7 @@ type Worker struct {
 
 	// Dynamic connection
 	availableTokens chan *struct{}
-	minDLs          int32 // Minimum data links required.
+	minDLs          int32 // Minimum spare data links required.
 	spareDLs        int32 // # of spared data links.
 	dataLinks       *list.List
 	updatedAt       time.Time
@@ -258,9 +258,9 @@ func (wrk *Worker) VerifyDataLinks(availableLinks int, reportedAt time.Time) {
 	}
 
 	diff := available - spares
-	wrk.updateSpareDLs(diff, reportedAt)
+	spares = wrk.updateSpareDLs(diff, reportedAt)
 	if available >= wrk.minDLs {
-		wrk.log.Info("Correct data links, corrected %d, spare links: %d.", diff, atomic.LoadInt32(&wrk.spareDLs))
+		wrk.log.Info("Correct data links, corrected %d, current spare links: %d.", diff, spares)
 		return
 	}
 
@@ -275,7 +275,7 @@ For:
 			break For
 		}
 	}
-	wrk.log.Warn("Insufficient data links, corrected %d, borrowed: %d, spare links: %d.", diff, borrowed, atomic.LoadInt32(&wrk.spareDLs))
+	wrk.log.Warn("Insufficient data links, corrected %d, will borrow: %d, current spare links: %d.", diff, borrowed, spares)
 }
 
 func (wrk *Worker) ensureConnection(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions, started *sync.WaitGroup) error {
@@ -398,6 +398,8 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr sysnet.Addr, op
 	ch := wrk.availableTokens
 	for token := range ch {
 		if link := wrk.reserveDataLink(nil, token); link == nil {
+			// The number of spare links exceeds the limit, abandon the token.
+			// This is useful for token returning since we may borrow tokens during VerifyDataLinks().
 			continue
 		} else if err := wrk.serveOnce(link, proxyAddr, opts); err != nil {
 			// Failed to connect, exit.
@@ -408,6 +410,8 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr sysnet.Addr, op
 	}
 }
 
+// serveOnce establishes the link and serves the link in a goroutine. No reconnecting will be performed.
+// Token associated with the link will be returned on disconnecting if it has not been consumed (e.g. Not being used to serve any request).
 func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions) error {
 	// Connect to proxy.
 	var conn sysnet.Conn
@@ -464,6 +468,9 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 	return nil
 }
 
+// reserveDataLink prepares a instance for data link without actual connecting.
+// Token, create if not exists, will be granted to the link.
+// If spare links exceed data link limit, the link will not be created. No check if link exists.
 func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
 	spares := wrk.updateSpareDLs(1)
 	defer wrk.log.Debug("Link available, spare links: %d", spares)
@@ -484,6 +491,7 @@ func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
 	return link
 }
 
+// flagReservationUsed returns the token if the link has not served any request.
 func (wrk *Worker) flagReservationUsed(link *Link) bool {
 	token := link.RevokeToken()
 	if token == nil {
@@ -495,15 +503,18 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 		return false
 	}
 
+	// Update the number of spare links. If the number of spare links exceeds the limit, abandon the token.
 	if spares := wrk.updateSpareDLs(-1); spares < wrk.minDLs {
 		select {
 		case wrk.availableTokens <- token:
 			wrk.log.Debug("Token recycled, spare links: %d", spares)
 		default:
-			wrk.log.Warn("Token overflowed(balance: %d), reset balance.", spares)
-			// TODO: This is a dangrous reset. However, program should not reach here, we'll debug this once we see the warning.
-			atomic.StoreInt32(&wrk.spareDLs, int32(len(wrk.availableTokens)))
-			wrk.updatedAt = time.Now()
+			// Unexpected contradiction: we are short of data links but the token channel is full.
+			// Reconcile the number of spare links.
+			if spares > 0 {
+				spares = wrk.updateSpareDLs(-spares) // Use relative value to avoid locking.
+			}
+			wrk.log.Warn("Token overflowed, reset spare links, current spare links: %d.", spares)
 		}
 	} else {
 		wrk.log.Debug("Link consumed, spare links: %d", spares)

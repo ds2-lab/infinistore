@@ -381,6 +381,7 @@ func (l *AvailableLinks) GetRequestPipe() *AvailableLink {
 				}
 			}
 		}
+		// Unlikely but possible on timeout.
 		if al.link == nil {
 			al.links.resetLinkRequest(al, ErrNilLink)
 			return

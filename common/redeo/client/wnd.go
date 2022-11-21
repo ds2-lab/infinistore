@@ -331,7 +331,7 @@ func (wnd *Window) Close() error {
 
 	for bucket := wnd.top; bucket != NilBucket; bucket, bucket.next = bucket.next, nil {
 		bucket.Reset()
-		bucket.requests = nil
+		// bucket.requests = nil
 	}
 	wnd.top = nil
 	wnd.active = nil
