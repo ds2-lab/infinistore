@@ -174,21 +174,26 @@ func (s *LineageStorage) validate(test *types.Chunk, opt *types.OpWrapper) (*typ
 		s.bufferAdd(test)
 	}
 
-	size := s.meta.IncreaseSize(test.Size)                      // Oversize test.
+	size := s.meta.IncreaseSize(test.Size) // Oversize test.
+	fit := true
 	for size >= s.meta.Effective() && s.bufferMeta.Size() > 0 { // No need to init buffer if test is not to be buffered, bufferMeta.Size() would be 0 in this case.
 		evicted := heap.Pop(s.bufferQueue).(*types.Chunk)
 		s.bufferMeta.DecreaseSize(evicted.Size)
 		// If validate is called iteratively, make sure iterate test chunks using reversed heap.
 		// RU of to be delegated is before LRU of delegated already. Stop.
 		if evicted == test {
+			fit = false
 			break
 		}
 
 		// evicted must be objects previously in buffer.
 		s.PersistentStorage.delWithOption(evicted, "eviction", nil)
+		s.log.Info("%s evicted", evicted.Key)
 		size = s.meta.Size()
 	}
-	if size < s.meta.Effective() {
+	// Modified by Tianium 20221120
+	// Don't load real time size. Use the local variable to be consistent.
+	if fit {
 		if opt == nil {
 			opt = &types.OpWrapper{}
 		}
