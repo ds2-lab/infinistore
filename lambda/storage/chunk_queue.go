@@ -14,9 +14,14 @@ func (h *ChunkQueue) Len() int {
 }
 
 func (h *ChunkQueue) Less(i, j int) bool {
-	// log.Printf("Less %d, %d (%v, %v) of %d", i, j, h[i], h[j], len(h))
+	// TODO: Try figure out a formula to avoid largest chunk being evicted immediately after pushed.
 	// Change LRU to Largest Chunk Size. Larger chunk will be evicted first.
-	return h.lru == (h.queue[i].Size > h.queue[j].Size)
+	diff := h.queue[i].Size - h.queue[j].Size
+	if diff != 0 {
+		return h.lru == (diff > 0)
+	} else {
+		return h.queue[i].Accessed.Before(h.queue[j].Accessed)
+	}
 }
 
 func (h ChunkQueue) Swap(i, j int) {
