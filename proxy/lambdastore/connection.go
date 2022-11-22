@@ -314,7 +314,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		err := req.Timeout()
 		if err == nil {
 			rsp := req.Response()
-			if rsp == nil {
+			if rsp != nil {
 				// Wait for response to finalize.
 				rsp.Close()
 			}
