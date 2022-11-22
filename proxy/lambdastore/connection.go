@@ -745,6 +745,10 @@ func (conn *Connection) getHandler(start time.Time) {
 	recovered, _ := conn.r.ReadInt()
 	stream, err := conn.r.StreamBulk()
 	if err != nil {
+		if conn.IsClosed() {
+			// The error should be logged by somewhere that close the connection.
+			return
+		}
 		conn.SetErrorResponse(err)
 		conn.log.Warn("Failed to get body reader of response: %v", err)
 		conn.Close()
@@ -765,14 +769,16 @@ func (conn *Connection) getHandler(start time.Time) {
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
-		// // Set response and exhaust value
-		// conn.SetResponse(rsp)
-		// if err := stream.Close(); err != nil {
-		// 	conn.Close()
-		// 	conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
-		// }
-		// In most cases, such connection has been closed to free request quota. Close the connection again to make sure.
-		conn.Close()
+		// Set response and exhaust value
+		conn.SetResponse(rsp)
+		if err := stream.Close(); err != nil {
+			if conn.IsClosed() {
+				// The error should be logged by somewhere that close the connection.
+				return
+			}
+			conn.Close()
+			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+		}
 		return
 	}
 	defer counter.Close()
