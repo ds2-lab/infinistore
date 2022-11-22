@@ -37,9 +37,10 @@ type Response struct {
 	Size       string
 	Body       []byte
 	BodyStream resp.AllReadCloser
-	Status     int64
+	Status     int64 // Customized status. For GET: 1 - recovered
 
 	finalizer ResponseFinalizer
+	abandon   bool
 
 	w    resp.ResponseWriter
 	done sync.WaitGroup
@@ -97,6 +98,10 @@ func (rsp *Response) Flush() error {
 	}
 
 	return w.Flush()
+}
+
+func (rsp *Response) IsAbandon() bool {
+	return rsp.abandon
 }
 
 func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {

@@ -328,7 +328,7 @@ func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
 		return ErrNotSuppport
 	}
-	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
+	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true})
 }
 
 func (req *Request) Timeout(opts ...int) (err error) {
