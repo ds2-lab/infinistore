@@ -29,7 +29,12 @@ type Response interface {
 	// Prepare overwrite to customize fields of a Response.
 	Prepare()
 
-	// Flush wait for flushing.
+	// Flush waits for the response to be received by the proxy.
+	// Because the data will be written to a buffer and return immediately, a successful "flush"
+	// may not guarantee that the data has been received by the proxy. In a function, the function
+	// can be suspended any time and leave the data in the middle of the network stack, which may lead
+	// to unexpected behavior. To avoid this, an acknowledgement is required to ensure that the data
+	// has been received by the proxy. On timeout, the link will be closed.
 	Flush() error
 
 	// Size overwrite to return the size of a Response.

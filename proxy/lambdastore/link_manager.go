@@ -15,7 +15,7 @@ import (
 const (
 	LinkBucketSize       = 10
 	UnlimitedActiveLinks = 0
-	ActiveLinks          = 1
+	ActiveLinks          = 2 // Always set to 2 for any MAX_CONCURRENCY settings: 1 for ready and 1 for buffering.
 )
 
 var (

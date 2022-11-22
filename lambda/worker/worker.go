@@ -60,10 +60,17 @@ type Worker struct {
 	readyToClose sync.WaitGroup
 	dryrun       bool
 
-	// Dynamic connection
+	// Dynamic connection fields.
+
+	// Tokens works as follows:
+	// 1. It consumes a token to establish a new data link. The link will own the consumed token.
+	// 2. On serving a request, the link will return owned token so the worker can establish
+	//    a new data link that will be ready to serve another request ASAP. Abandon if there are sufficient spare links.
+	// 3. After served the request, the link will be granted a token again.
+	// Current implementation ensures a limited number of data links are newly created(unused) and ready to serve.
 	availableTokens chan *struct{}
 	minDLs          int32 // Minimum spare data links required.
-	spareDLs        int32 // # of spared data links.
+	spareDLs        int32 // # of spare data links.
 	dataLinks       *list.List
 	updatedAt       time.Time
 
@@ -438,7 +445,8 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 		conn = cn
 		remoteAddr = cn.RemoteAddr().String()
 	}
-	wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
+	// Log with len+1, will add to the link if no error.
+	wrk.log.Info("Connection(%s:%v) to %v established(total: %d).", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr, wrk.dataLinks.Len()+1)
 
 	// Recheck if server closed in mutex
 	if wrk.IsClosed() {
@@ -460,17 +468,18 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 	// Serve the client.
 	go func(link *Link) {
 		_ = wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
+		// Recycle the spare token if the link owns one.
 		wrk.flagReservationUsed(link)
 		wrk.removeDataLink(link)
 		link.Close()
+		wrk.log.Info("Connection(%s:%v) disconnected(total: %d).", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), wrk.dataLinks.Len())
 	}(link)
 
 	return nil
 }
 
-// reserveDataLink prepares a instance for data link without actual connecting.
-// Token, create if not exists, will be granted to the link.
-// If spare links exceed data link limit, the link will not be created. No check if link exists.
+// reserveDataLink grants the link a spare token, create the token if not specified.
+// The link will be created if not already existed with the exception if the number spare links exceeds limit.
 func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
 	spares := wrk.updateSpareDLs(1)
 	defer wrk.log.Debug("Link available, spare links: %d", spares)
@@ -491,7 +500,7 @@ func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
 	return link
 }
 
-// flagReservationUsed returns the token if the link has not served any request.
+// flagReservationUsed returns the associated spare token, so new link can be created to serve more requests.
 func (wrk *Worker) flagReservationUsed(link *Link) bool {
 	token := link.RevokeToken()
 	if token == nil {
@@ -509,7 +518,7 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 		case wrk.availableTokens <- token:
 			wrk.log.Debug("Token recycled, spare links: %d", spares)
 		default:
-			// Unexpected contradiction: we are short of data links but the token channel is full.
+			// Unexpected contradiction: we are short of spare links but the token channel is full.
 			// Reconcile the number of spare links.
 			if spares > 0 {
 				spares = wrk.updateSpareDLs(-spares) // Use relative value to avoid locking.
@@ -517,7 +526,7 @@ func (wrk *Worker) flagReservationUsed(link *Link) bool {
 			wrk.log.Warn("Token overflowed, reset spare links, current spare links: %d.", spares)
 		}
 	} else {
-		wrk.log.Debug("Link consumed, spare links: %d", spares)
+		wrk.log.Debug("Token destroyed, spare links: %d", spares)
 	}
 	runtime.Gosched() // Encourage create another connection quickly.
 	return true

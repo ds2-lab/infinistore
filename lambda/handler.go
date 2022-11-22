@@ -353,7 +353,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		}
 		byeHandler(session, status)
 		session.Done()
-		log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
+		log.Info("Lambda timeout, return(%v).", session.Timeout.Since())
 		// }
 	}
 
