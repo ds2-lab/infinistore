@@ -316,7 +316,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			rsp := req.Response()
 			if rsp != nil {
 				// Wait for response to finalize.
-				rsp.Close()
+				rsp.Wait()
 			}
 			return
 		}
@@ -747,16 +747,15 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano())
 
-	rsp := &types.Response{Cmd: protocol.CMD_GET}
+	rsp := types.NewResponse(protocol.CMD_GET)
 	rsp.Id.ReqId = reqId
 	rsp.Id.ChunkId = chunkId
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
 	// Send ack after response has been send.
-	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
-	// If BodyStream is set, rsp.Close will be called at the end of function.
-	// defer rsp.Close() will do no harm and ensure the finalizeCommmand is called.
-	defer rsp.Close()
+	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	// Set rsp as closed so it can be released safely.
+	defer rsp.Done()
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
@@ -815,8 +814,8 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 
-	// Close will block if BodyStream is available.
-	if err := rsp.Close(); err != nil {
+	// Close will block until the stream is flushed.
+	if err := stream.Close(); err != nil {
 		conn.Close()
 	}
 }
@@ -824,13 +823,14 @@ func (conn *Connection) getHandler(start time.Time) {
 func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET from lambda.")
 
-	rsp := &types.Response{Cmd: protocol.CMD_SET, Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
+	rsp := types.NewResponse(protocol.CMD_SET)
+	rsp.Body = []byte(strconv.FormatUint(conn.instance.Id(), 10))
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
 	// Check lambda if it is supported
-	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
-	defer rsp.Close()
+	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	defer rsp.Done()
 
 	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
 	if counter == nil {
@@ -854,12 +854,12 @@ func (conn *Connection) setHandler(start time.Time) {
 func (conn *Connection) delHandler() {
 	conn.log.Debug("DEL from lambda.")
 
-	rsp := &types.Response{Cmd: protocol.CMD_DEL}
+	rsp := types.NewResponse(protocol.CMD_DEL)
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	// Ack lambda if it is supported
-	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
-	defer rsp.Close()
+	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	defer rsp.Done()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
 	conn.SetResponse(rsp) // if del is control cmd, should return False
@@ -971,6 +971,7 @@ func (conn *Connection) ackCommand(cmd string) error {
 }
 
 func (conn *Connection) finalizeCommmand(cmd string) error {
+	conn.log.Debug("finalizing %s.", cmd)
 	if conn.IsClosed() {
 		conn.instance.ResetDue()
 		return ErrConnectionClosed

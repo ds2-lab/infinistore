@@ -9,7 +9,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
-type ResponseCloser func()
+type ResponseFinalizer func()
 
 type ProxyResponse struct {
 	Response interface{}
@@ -39,10 +39,16 @@ type Response struct {
 	BodyStream resp.AllReadCloser
 	Status     int64
 
-	closer ResponseCloser
+	finalizer ResponseFinalizer
 
-	w  resp.ResponseWriter
-	mu sync.Mutex
+	w    resp.ResponseWriter
+	done sync.WaitGroup
+}
+
+func NewResponse(cmd string) *Response {
+	rsp := &Response{Cmd: cmd}
+	rsp.done.Add(1)
+	return rsp
 }
 
 func (rsp *Response) String() string {
@@ -93,32 +99,29 @@ func (rsp *Response) Flush() error {
 	return w.Flush()
 }
 
-func (rsp *Response) OnClose(closer ResponseCloser) {
-	if rsp.closer != nil {
-		closer = func(oldCloser ResponseCloser, newCloser ResponseCloser) ResponseCloser {
+func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {
+	if rsp.finalizer != nil {
+		finalizer = func(oldFinalizer ResponseFinalizer, newFinalizer ResponseFinalizer) ResponseFinalizer {
 			return func() {
-				oldCloser()
-				newCloser()
+				oldFinalizer()
+				newFinalizer()
 			}
-		}(rsp.closer, closer)
+		}(rsp.finalizer, finalizer)
 	}
-	rsp.closer = closer
+	rsp.finalizer = finalizer
+}
+
+func (rsp *Response) Done() {
+	if rsp.finalizer != nil {
+		rsp.finalizer()
+		rsp.finalizer = nil
+	}
+
+	rsp.done.Done()
 }
 
 // Close will block and wait for the stream to be flushed.
 // Don't clean any fields if it can't be blocked until flushed.
-func (rsp *Response) Close() error {
-	rsp.mu.Lock()
-	defer rsp.mu.Unlock()
-
-	var err error
-	if rsp.BodyStream != nil {
-		err = rsp.BodyStream.Close()
-		rsp.BodyStream = nil
-	}
-	if rsp.closer != nil {
-		rsp.closer()
-		rsp.closer = nil
-	}
-	return err
+func (rsp *Response) Wait() {
+	rsp.done.Wait()
 }
