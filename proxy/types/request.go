@@ -350,6 +350,18 @@ func (req *Request) Timeout(opts ...int) (err error) {
 	return p.Timeout()
 }
 
+func (req *Request) Response() *Response {
+	if !req.IsResponded() {
+		return nil
+	}
+
+	if rsp, ok := req.responded.Value().(*Response); ok {
+		return rsp
+	}
+
+	return nil
+}
+
 func (req *Request) initPromise(opts ...int) promise.Promise {
 	responded := req.responded
 	if responded == nil {

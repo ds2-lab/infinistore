@@ -313,6 +313,11 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		// Wait for response or timeout.
 		err := req.Timeout()
 		if err == nil {
+			rsp := req.Response()
+			if rsp == nil {
+				// Wait for response to finalize.
+				rsp.Close()
+			}
 			return
 		}
 
@@ -592,6 +597,7 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 }
 
 // SetResponse Set response for last request.
+// If parameter release is set and no error, the connection will be flagged available.
 func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, error) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
@@ -746,8 +752,11 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ChunkId = chunkId
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
-	// Check lambda if it is supported
-	defer conn.finalizeCommmand(rsp.Cmd)
+	// Send ack after response has been send.
+	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
+	// If BodyStream is set, rsp.Close will be called at the end of function.
+	// defer rsp.Close() will do no harm and ensure the finalizeCommmand is called.
+	defer rsp.Close()
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
@@ -806,8 +815,8 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 	}
 
-	// Close will block until BodyStream unhold.
-	if err := stream.Close(); err != nil {
+	// Close will block if BodyStream is available.
+	if err := rsp.Close(); err != nil {
 		conn.Close()
 	}
 }
@@ -820,7 +829,8 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
 	// Check lambda if it is supported
-	defer conn.finalizeCommmand(rsp.Cmd)
+	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
+	defer rsp.Close()
 
 	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
 	if counter == nil {
@@ -847,12 +857,12 @@ func (conn *Connection) delHandler() {
 	rsp := &types.Response{Cmd: protocol.CMD_DEL}
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
+	// Ack lambda if it is supported
+	rsp.OnClose(conn.getCommandFinalizer(rsp.Cmd))
+	defer rsp.Close()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
 	conn.SetResponse(rsp) // if del is control cmd, should return False
-
-	// Check lambda if it is supported
-	conn.finalizeCommmand(rsp.Cmd)
 }
 
 func (conn *Connection) receiveData() {
@@ -892,7 +902,7 @@ func (conn *Connection) recoverHandler() {
 	conn.r.ReadBulkString() // reqId
 	conn.r.ReadBulkString() // chunkId
 
-	// Check lambda if it is supported
+	// Ack lambda if it is supported
 	conn.finalizeCommmand(protocol.CMD_RECOVER)
 }
 
@@ -973,4 +983,10 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 	}
 
 	return nil
+}
+
+func (conn *Connection) getCommandFinalizer(cmd string) func() {
+	return func() {
+		conn.finalizeCommmand(cmd)
+	}
 }
