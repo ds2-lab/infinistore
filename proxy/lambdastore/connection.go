@@ -249,7 +249,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	waitResponse := false
 	defer func() {
 		if !waitResponse {
-			ins.doneBusy(req)
+			conn.doneRequest(ins, req)
 		}
 	}()
 
@@ -286,7 +286,6 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		req.PrepareForRecover(conn)
 	default:
 		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
-		conn.flagAvailable()
 		// Unrecoverable
 		return
 	}
@@ -309,7 +308,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	waitResponse = true
 	go func() {
 		// The request has been send, call doneBusy after response set.
-		defer ins.doneBusy(req)
+		defer conn.doneRequest(ins, req)
 
 		// Wait for response or timeout.
 		err := req.Timeout()
@@ -319,13 +318,13 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 		if resErr := conn.SetErrorResponse(err); resErr == nil {
 			conn.log.Warn("Request timeout: %v", req)
-			// close connection to discard late response.
-			conn.Close()
 		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
-			conn.Close()
 		}
 		// If req is responded, err has been reported somewhere.
+
+		// close connection to discard late response.
+		conn.Close()
 	}()
 }
 
@@ -358,6 +357,16 @@ func (conn *Connection) popRequest(req *types.Request) *types.Request {
 		}
 	}
 	return nil
+}
+
+// doneRequest resets instance and connection status after a request.
+func (conn *Connection) doneRequest(ins *Instance, req *types.Request) {
+	ins.doneBusy(req)
+
+	lm := ins.lm
+	if !conn.control && lm != nil && !conn.IsClosed() {
+		lm.FlagAvailableForRequest(conn)
+	}
 }
 
 // func (conn *Connection) isRequestPending() bool {
@@ -483,7 +492,6 @@ func (conn *Connection) ServeLambda() {
 			err = fmt.Errorf("response error: %s", strErr)
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
-			conn.flagAvailable()
 		case resp.TypeBulk:
 			cmd, err := conn.r.ReadBulkString()
 			if err != nil {
@@ -584,8 +592,7 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 }
 
 // SetResponse Set response for last request.
-// If parameter release is set and no error, the connection will be flagged available.
-func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, error) {
+func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, error) {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
 	if req == nil || !req.IsResponse(rsp) {
@@ -594,11 +601,8 @@ func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.R
 		return nil, ErrMissingRequest
 	}
 
-	// Lock free: double check that poped is what we peeked.
+	// Lock free: double check that poped is what we peeked. Poped will be either req or nil.
 	if poped := conn.popRequest(req); poped == req {
-		if release {
-			conn.flagAvailable()
-		}
 		conn.log.Debug("response matched: %v", req)
 		return req, req.SetResponse(rsp)
 	}
@@ -654,16 +658,6 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 	}
 
 	return false
-}
-
-func (conn *Connection) flagAvailable() bool {
-	lm := conn.lm
-	if conn.control || lm == nil || conn.IsClosed() {
-		return false
-	}
-
-	lm.FlagAvailableForRequest(conn)
-	return true
 }
 
 func (conn *Connection) pongHandler() {
@@ -759,7 +753,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	if counter == nil {
 		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
 		// Set response and exhaust value
-		conn.SetResponse(rsp, false)
+		conn.SetResponse(rsp)
 		if err := stream.Close(); err != nil {
 			conn.Close()
 			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
@@ -773,7 +767,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.log.Debug("GOT %v, abandon (duplicated: %v)", rsp.Id, returned)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		// Connection will not be flagged available until SkipBulk() is executed.
-		req, _ := conn.SetResponse(rsp, false)
+		req, _ := conn.SetResponse(rsp)
 		if req != nil && !returned {
 			_, err := collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
@@ -795,7 +789,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
 	// Connection will not be flagged available until BodyStream is closed.
-	if req, err := conn.SetResponse(rsp, false); err != nil {
+	if req, err := conn.SetResponse(rsp); err != nil {
 		// Failed to set response, release hold.
 		stream.(resp.Holdable).Unhold()
 	} else {
@@ -832,7 +826,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	if counter == nil {
 		// conn.log.Warn("Request not found: %s, can be cancelled already", rsp.Id.ReqId)
 		// Set response
-		conn.SetResponse(rsp, true)
+		conn.SetResponse(rsp)
 		return
 	}
 	defer counter.Close()
@@ -841,7 +835,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	// Added by Tianium 2022-11-02
 	// Flag chunk set as succeeded.
 	counter.AddSucceeded(chunk, false)
-	req, err := conn.SetResponse(rsp, false)
+	req, err := conn.SetResponse(rsp)
 	if err == nil {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
@@ -855,7 +849,7 @@ func (conn *Connection) delHandler() {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
-	conn.SetResponse(rsp, false) // if del is control cmd, should return False
+	conn.SetResponse(rsp) // if del is control cmd, should return False
 
 	// Check lambda if it is supported
 	conn.finalizeCommmand(rsp.Cmd)
@@ -971,11 +965,12 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 		conn.instance.ResetDue()
 		return ErrConnectionClosed
 	} else if err := conn.readAndSetDue(conn.instance); err != nil {
+		// The connection will be closed if error occurs.
 		return err
 	} else if err = conn.ackCommand(cmd); err != nil {
+		// The connection will be closed if error occurs.
 		return err
 	}
 
-	conn.flagAvailable()
 	return nil
 }
