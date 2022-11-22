@@ -314,7 +314,12 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		err := req.Timeout()
 		if err == nil {
 			rsp := req.Response()
-			if rsp != nil {
+			if rsp == nil {
+				return
+			} else if rsp.IsAbandon() && !conn.control {
+				// Close the data link to skip the possible response.
+				conn.Close()
+			} else {
 				// Wait for response to finalize.
 				rsp.Wait()
 			}
@@ -760,12 +765,14 @@ func (conn *Connection) getHandler(start time.Time) {
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
-		// Set response and exhaust value
-		conn.SetResponse(rsp)
-		if err := stream.Close(); err != nil {
-			conn.Close()
-			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
-		}
+		// // Set response and exhaust value
+		// conn.SetResponse(rsp)
+		// if err := stream.Close(); err != nil {
+		// 	conn.Close()
+		// 	conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+		// }
+		// In most cases, such connection has been closed to free request quota. Close the connection again to make sure.
+		conn.Close()
 		return
 	}
 	defer counter.Close()
