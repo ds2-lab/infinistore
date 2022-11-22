@@ -971,7 +971,6 @@ func (conn *Connection) ackCommand(cmd string) error {
 }
 
 func (conn *Connection) finalizeCommmand(cmd string) error {
-	conn.log.Debug("finalizing %s.", cmd)
 	if conn.IsClosed() {
 		conn.instance.ResetDue()
 		return ErrConnectionClosed
