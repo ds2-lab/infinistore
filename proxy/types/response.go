@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/mason-leap-lab/redeo/resp"
 )
+
+type ResponseCloser func()
 
 type ProxyResponse struct {
 	Response interface{}
@@ -36,7 +39,10 @@ type Response struct {
 	BodyStream resp.AllReadCloser
 	Status     int64
 
-	w resp.ResponseWriter
+	closer ResponseCloser
+
+	w  resp.ResponseWriter
+	mu sync.Mutex
 }
 
 func (rsp *Response) String() string {
@@ -85,4 +91,34 @@ func (rsp *Response) Flush() error {
 	}
 
 	return w.Flush()
+}
+
+func (rsp *Response) OnClose(closer ResponseCloser) {
+	if rsp.closer != nil {
+		closer = func(oldCloser ResponseCloser, newCloser ResponseCloser) ResponseCloser {
+			return func() {
+				oldCloser()
+				newCloser()
+			}
+		}(rsp.closer, closer)
+	}
+	rsp.closer = closer
+}
+
+// Close will block and wait for the stream to be flushed.
+// Don't clean any fields if it can't be blocked until flushed.
+func (rsp *Response) Close() error {
+	rsp.mu.Lock()
+	defer rsp.mu.Unlock()
+
+	var err error
+	if rsp.BodyStream != nil {
+		err = rsp.BodyStream.Close()
+		rsp.BodyStream = nil
+	}
+	if rsp.closer != nil {
+		rsp.closer()
+		rsp.closer = nil
+	}
+	return err
 }
