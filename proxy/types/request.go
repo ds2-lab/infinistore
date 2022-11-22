@@ -283,8 +283,7 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
 	responded := req.responded
-	req.responded = nil
-	if responded != nil {
+	if responded != nil && !responded.IsResolved() {
 		responded.Resolve(rsp)
 	}
 
