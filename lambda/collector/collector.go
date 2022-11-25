@@ -58,6 +58,11 @@ type DataEntry interface {
 }
 
 func Send(entry DataEntry) {
+	// Skip data collection if prefix is not set.
+	if len(Prefix) == 0 {
+		return
+	}
+
 	dataDeposited.Add(1)
 	dataGatherer <- entry
 }
@@ -82,6 +87,11 @@ func Save() {
 }
 
 func SaveWithOption(snapshot bool) {
+	// Skip data collection if prefix is not set.
+	if len(Prefix) == 0 {
+		return
+	}
+
 	// Wait for data depository.
 	dataDeposited.Wait()
 	cnt := len(dataDepository)

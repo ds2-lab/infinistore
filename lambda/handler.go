@@ -128,13 +128,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// Check connection
 	proxyAddr := input.ProxyAddr // So far, ProxyAddr is used for shortcut connection only.
-	var wopts *worker.WorkerOptions
+	var wopts worker.WorkerOptions
 	if proxyAddr == nil {
 		proxyAddr = net.StrAddr(input.Proxy)
 	} else {
-		wopts = &worker.WorkerOptions{DryRun: DRY_RUN}
+		wopts.DryRun = true
 	}
-	if started, err := store.Server.StartOrResume(proxyAddr, wopts); err != nil {
+	wopts.LogLevel = log.Level
+	if started, err := store.Server.StartOrResume(proxyAddr, &wopts); err != nil {
 		return DefaultStatus, err
 	} else if started {
 		store.Lifetime.Reborn()
@@ -148,7 +149,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	}
 
 	// Start data collector
-	go collector.Collect(session)
+	if collector.Prefix != "" {
+		go collector.Collect(session)
+	}
 
 	// Check lineage consistency and recovery if necessary
 	var recoverErrs []<-chan error
@@ -268,7 +271,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	if store.IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
-	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
+	log.Info("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
 	log.Debug("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB, stored: %.2f MB, backed: %.2f MB",
 		session.Timeout.Since(), session.Timeout.Interrupted(),
 		float64(store.Store.Meta().Effective())/1000000, float64(store.Store.Meta().System())/1000000, float64(store.Store.Meta().Waterline())/1000000,

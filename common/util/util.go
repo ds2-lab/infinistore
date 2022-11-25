@@ -31,7 +31,7 @@ func IsConnectionFailed(err error) bool {
 
 func PanicRecovery(from string, err *error) {
 	if recovered := recover(); recovered != nil {
-		log.Printf("Error: panic recovered from %s: %v", from, err)
+		log.Printf("Error: panic recovered from %s: %v", from, recovered)
 		if err != nil {
 			*err = ErrPanicRecovered
 		}
