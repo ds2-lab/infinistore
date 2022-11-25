@@ -22,6 +22,12 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
+const (
+	ConnectionOpen uint32 = iota
+	ConnectionClosing
+	ConnectionClosed
+)
+
 var (
 	defaultConnectionLog = &logger.ColorLogger{
 		Prefix: "Undesignated ",
@@ -56,6 +62,7 @@ type Connection struct {
 	respType    chan interface{}
 	closed      uint32
 	done        chan struct{}
+	peeking     sync.WaitGroup
 }
 
 func NewConnection(cn net.Conn) *Connection {
@@ -64,6 +71,7 @@ func NewConnection(cn net.Conn) *Connection {
 		log:      defaultConnectionLog,
 		chanWait: make(chan *types.Request, 1),
 		respType: make(chan interface{}),
+		closed:   ConnectionOpen,
 		done:     make(chan struct{}),
 	}
 	if v := readerPool.Get(); v != nil {
@@ -255,7 +263,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 	// Close check can prevent resource to be used from releasing. However, close signal is not guranteed.
 	if conn.IsClosed() {
-		if req.MarkError(ErrConnectionClosed) > 0 {
+		retries := req.MarkError(ErrConnectionClosed)
+		conn.log.Warn("Unexpected closed connection when sending request: %v, %d retries left.", req, retries)
+		if retries > 0 {
 			ins.chanPriorCmd <- req
 		} else {
 			req.SetResponse(ErrConnectionClosed)
@@ -318,7 +328,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 				return
 			} else if rsp.IsAbandon() && !conn.control {
 				// Close the data link to skip the possible response.
-				conn.Close()
+				conn.CloseWithReason("Abandon in sendRequest", false)
 			} else {
 				// Wait for response to finalize.
 				rsp.Wait()
@@ -384,36 +394,61 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request) {
 // }
 
 func (conn *Connection) IsClosed() bool {
-	return atomic.LoadUint32(&conn.closed) == 1
+	return atomic.LoadUint32(&conn.closed) != ConnectionOpen
+}
+
+func (conn *Connection) Close() error {
+	// Don't block. Close() is called in goroutine.
+	return conn.CloseWithReason("", false)
 }
 
 // Close Signal connection should be closed. Function close() will be called later for actural operation
-func (conn *Connection) Close() error {
-	if !atomic.CompareAndSwapUint32(&conn.closed, 0, 1) {
+func (conn *Connection) CloseWithReason(reason string, block bool) error {
+	if !atomic.CompareAndSwapUint32(&conn.closed, ConnectionOpen, ConnectionClosing) {
 		return ErrConnectionClosed
 	}
 
 	// Signal closed only. This allow ongoing transmission to finish.
-	conn.log.Debug("Signal to close.")
+	conn.log.Debug("Signal to close:%s.", reason)
 	select {
 	case <-conn.done:
 	default:
 		close(conn.done)
 	}
 
-	// Disconnect connection to trigger close()
-	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
-	// 1. If lambda is running, lambda will close the connection.
-	//    When we close it here, the connection has been closed.
-	// 2. In current implementation, the instance will close the connection
-	///   if the lambda will not respond to the link any more.
-	//    For data link, it is when the lambda has returned.
-	//    For ctrl link, it is likely that the system is shutting down.
-	// 3. If we know lambda is active, close conn.Conn first.
-	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
-		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+	closeConn := func() {
+		// Wait for peeking to unblock.
+		// On peeking, we block and read the connection, which can only be unblocked from the other side.
+		// Closing from this side will only make the zombie connection.
+		// We can simple wait given the following assumption:
+		// 1. For control link, heartbeat will trigger the response.
+		// 2. For data link, a request is sent and waiting for response.
+		// 3. On lambda return, the other side close the connection.
+		// NOTE: It could leads to forever wait if we try to close the connection from our side without sending any request.
+		conn.warnAfter(time.Second, conn.isClosed, "Failed to close.")
+		conn.peeking.Wait()
+
+		// Disconnect connection to trigger close()
+		// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+		// 1. If lambda is running, lambda will close the connection.
+		//    When we close it here, the connection has been closed.
+		// 2. In current implementation, the instance will close the connection
+		///   if the lambda will not respond to the link any more.
+		//    For data link, it is when the lambda has returned.
+		//    For ctrl link, it is likely that the system is shutting down.
+		// 3. If we know lambda is active, close conn.Conn first.
+		if tcp, ok := conn.Conn.(*net.TCPConn); ok {
+			tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
+		}
+		// conn.Conn.SetDeadline(time.Now().Add(-time.Second)) // Force timeout to stop blocking read.
+		conn.Conn.Close()
 	}
-	conn.Conn.Close()
+
+	if block {
+		closeConn()
+	} else {
+		go closeConn()
+	}
 
 	return nil
 }
@@ -434,7 +469,7 @@ func (conn *Connection) close() {
 	defer conn.mu.Unlock()
 
 	// Call signal function to avoid duplicated close.
-	conn.Close()
+	conn.CloseWithReason("", true)
 
 	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()
@@ -442,11 +477,19 @@ func (conn *Connection) close() {
 	var w, r interface{}
 	conn.w, w = nil, conn.w
 	conn.r, r = nil, conn.r
+	// If peeking repsonse, don't reuse the reader
+	// if !conn.peeking {
+	// Ensure peeking get unblocked.
+	conn.peeking.Wait()
 	readerPool.Put(r)
+	// } else {
+	// 	conn.log.Warn("Blocking read: connection may not properly closed.")
+	// }
 	writerPool.Put(w)
 	conn.lm = nil
 	// Don't reset instance to nil, we may need it to resend request.
 
+	atomic.CompareAndSwapUint32(&conn.closed, ConnectionClosing, ConnectionClosed)
 	conn.log.Debug("Closed.")
 }
 
@@ -467,6 +510,13 @@ func (conn *Connection) ServeLambda() {
 			conn.close()
 			return
 		case retPeek = <-conn.respType:
+			// Double check	if connection is closed.
+			select {
+			case <-conn.done:
+				conn.close()
+				return
+			default:
+			}
 		}
 
 		// Got response, reset read deadline.
@@ -644,12 +694,22 @@ func (conn *Connection) ClearResponses() {
 }
 
 func (conn *Connection) peekResponse() {
+	defer util.PanicRecovery("proxy/lambdastore/Connection.peekResponse", nil)
+
 	r := conn.r
 	if r == nil {
 		return
 	}
 
+	conn.peeking.Add(1)
+	defer conn.peeking.Done()
+
+	if conn.IsClosed() {
+		return
+	}
+
 	var ret interface{}
+
 	ret, err := r.PeekType()
 	if err != nil {
 		ret = err
@@ -762,9 +822,10 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
 	// Send ack after response has been send.
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	// rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
 	// Set rsp as closed so it can be released safely.
 	defer rsp.Done()
+	defer conn.finalizeCommmand(rsp.Cmd)
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
@@ -777,7 +838,7 @@ func (conn *Connection) getHandler(start time.Time) {
 				return
 			}
 			conn.Close()
-			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+			conn.log.Warn("Failed to skip bulk on request mismatch, %s: %v", reqId, err)
 		}
 		return
 	}
@@ -798,8 +859,12 @@ func (conn *Connection) getHandler(start time.Time) {
 
 		// Consume and abandon the response.
 		if err := stream.Close(); err != nil {
+			if conn.IsClosed() {
+				// The error should be logged by somewhere that close the connection.
+				return
+			}
 			conn.Close()
-			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
+			conn.log.Warn("Failed to skip bulk on abandon, %s: %v", reqId, err)
 		}
 		return
 	}
@@ -829,6 +894,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	// Close will block until the stream is flushed.
 	if err := stream.Close(); err != nil {
+		conn.log.Warn("Failed to stream %s: %v", reqId, err)
 		conn.Close()
 	}
 }
@@ -842,8 +908,9 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
 	// Check lambda if it is supported
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	// rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
 	defer rsp.Done()
+	defer conn.finalizeCommmand(rsp.Cmd)
 
 	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
 	if counter == nil {
@@ -871,8 +938,9 @@ func (conn *Connection) delHandler() {
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	// Ack lambda if it is supported
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	// rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
 	defer rsp.Done()
+	defer conn.finalizeCommmand(rsp.Cmd)
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
 	conn.SetResponse(rsp) // if del is control cmd, should return False
@@ -1002,4 +1070,15 @@ func (conn *Connection) getCommandFinalizer(cmd string) func() {
 	return func() {
 		conn.finalizeCommmand(cmd)
 	}
+}
+
+func (conn *Connection) warnAfter(timeout time.Duration, tester func() bool, format string, args ...interface{}) {
+	<-time.After(timeout)
+	if tester() {
+		conn.log.Warn(format, args...)
+	}
+}
+
+func (conn *Connection) isClosed() bool {
+	return atomic.LoadUint32(&conn.closed) == ConnectionClosed
 }

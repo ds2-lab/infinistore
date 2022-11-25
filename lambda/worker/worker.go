@@ -81,6 +81,7 @@ type Worker struct {
 type WorkerOptions struct {
 	DryRun       bool
 	MinDataLinks int
+	LogLevel     int
 }
 
 func NewWorker(lifeId int64) *Worker {
@@ -123,6 +124,9 @@ func (wrk *Worker) StartOrResume(proxyAddr sysnet.Addr, args ...*WorkerOptions) 
 	if opts.MinDataLinks > MaxDataLinks {
 		opts.MinDataLinks = MaxDataLinks
 	}
+	if logger, ok := wrk.log.(*logger.ColorLogger); ok {
+		logger.Level = opts.LogLevel
+	}
 
 	if proxyAddr == nil {
 		if opts.DryRun {
@@ -145,6 +149,7 @@ func (wrk *Worker) StartOrResume(proxyAddr sysnet.Addr, args ...*WorkerOptions) 
 }
 
 func (wrk *Worker) Pause() {
+	wrk.log.Info("Pausing worker")
 	wrk.mu.Lock()
 	defer wrk.mu.Unlock()
 
@@ -152,6 +157,8 @@ func (wrk *Worker) Pause() {
 }
 
 func (wrk *Worker) Close() {
+	wrk.log.Info("Closing worker")
+
 	wrk.CloseWithOptions(false)
 }
 
@@ -559,7 +566,8 @@ func (wrk *Worker) WaitAck(cmd string, cb func(), links ...interface{}) {
 // HandleCallback callback handler
 func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp := r.(Response)
-	link := LinkFromClient(redeo.GetClient(rsp.Context()))
+	client := redeo.GetClient(rsp.Context())
+	link := LinkFromClient(client)
 
 	if wrk.IsClosed() {
 		wrk.log.Warn("Abort flushing response(%v): %v", rsp, ErrWorkerClosed)
@@ -592,6 +600,8 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 			return
 		} else {
 			wrk.log.Warn("Error on flush response(%v), abandon attempts: %v", rsp, err)
+			// Close the connection from this side.
+			client.Close()
 		}
 
 		rsp.close()
