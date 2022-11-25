@@ -2,6 +2,8 @@ package config
 
 import (
 	"time"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 // LambdaPrefix Prefix of Lambda function, overridable with command line parameter -lambda-prefix.
@@ -27,6 +29,8 @@ const NumLambdaClusters = 12
 
 // LambdaStoreName Obsoleted. Name of Lambda function for replica version.
 const LambdaStoreName = "LambdaStore"
+
+const LambdaLogLevel = logger.LOG_LEVEL_INFO
 
 // InstanceWarmTimout Interval to warmup Lambda functions.
 const InstanceWarmTimeout = 1 * time.Minute

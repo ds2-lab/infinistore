@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 )
@@ -71,6 +72,14 @@ func (o *CommandlineOptions) GetInstanceChunkThreshold() int {
 	}
 
 	return o.funcChunkThreshold
+}
+
+func (o *CommandlineOptions) GetLambdaLogLevel() int {
+	if config.LambdaLogLevel > logger.LOG_LEVEL_ALL {
+		return config.LambdaLogLevel
+	}
+
+	return Log.GetLevel()
 }
 
 func (o *CommandlineOptions) GetInvoker() string {
