@@ -181,13 +181,13 @@ type ecRetMeta struct {
 
 type ecRet struct {
 	sync.WaitGroup
-	reqs []*ClientRequest
+	reqs  []*ClientRequest
+	numOK int32
 
-	Shards    int
-	Err       error
-	NumErrors int32
-	Meta      ecRetMeta // only for get chunk
-	Stats     *logEntry
+	Shards int
+	Err    error
+	Meta   ecRetMeta // only for get chunk
+	Stats  *logEntry
 }
 
 func newEcRet(shards int) *ecRet {
@@ -208,8 +208,8 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			return nil
 		}
 		ctx := context.WithValue(context.Background(), CtxKeyECRet, r)
-		req := &ClientRequest{Request: client.NewRequestWithContext(ctx)}
-		req.OnRespond(func(_ interface{}, err error) {
+		req := &ClientRequest{Request: client.NewRequestWithContext(ctx), Ret: r}
+		req.OnRespond(func(rsp interface{}, err error) {
 			if req.Cancel != nil {
 				req.Cancel()
 			}
@@ -221,7 +221,9 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			// Keep record of the last error
 			if err != nil {
 				r.Err = err
-				atomic.AddInt32(&r.NumErrors, 1)
+			} else if rsp != nil {
+				// Only count ok if response is not nil
+				atomic.AddInt32(&r.numOK, 1)
 			}
 			r.Done()
 		})
@@ -268,4 +270,8 @@ func (r *ecRet) Error(i int) (err error) {
 	}
 	_, err = r.Request(i).Response()
 	return
+}
+
+func (r *ecRet) NumOK() int {
+	return int(atomic.LoadInt32(&r.numOK))
 }
