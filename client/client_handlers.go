@@ -32,7 +32,7 @@ var (
 	// ErrUnexpectedResponse Unexplected response
 	ErrUnexpectedResponse      = errors.New("unexpected response")
 	ErrUnexpectedPreflightPong = errors.New("unexpected preflight pong")
-	ErrMaxPreflightsReached    = errors.New("max preflight attemps reached")
+	ErrMaxPreflightsReached    = errors.New("max preflight attempts reached")
 	ErrAbandonRequest          = errors.New("abandon request")
 	ErrKeyNotFound             = errors.New("key not found")
 	ErrUnknown                 = errors.New("unknown error")
@@ -122,7 +122,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, err
 		log.Warn("Failed to set %s,%s: %v", key, reqId, ErrUnknown)
 		return reqId, ErrClient
 	} else if ret.Err != nil {
-		log.Warn("Failed to set %s,%s: %v", key, reqId, ret.Err)
+		ret.PrintErrors("Failed to set %s,%s", key, reqId)
 		return reqId, ErrClient
 	}
 
@@ -170,7 +170,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	reader, allRets := c.get(host, key, reqId)
 	ret := allRets[0]
 	if ret.Err != nil {
-		log.Warn("Failed to get %s,%s: %v", key, reqId, ret.Err)
+		ret.PrintErrors("Failed to get %s,%s", key, reqId)
 		return reqId, nil, utils.Ifelse(ret.Err == ErrNotFound, ret.Err, ErrClient).(error)
 	}
 
@@ -319,15 +319,14 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 	req.Cmd = protocol.CMD_SET_CHUNK
 	req.ReqId = reqId
 
-	for attemp := 0; attemp < RequestAttempts; attemp++ {
-		if attemp > 0 {
-			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attemp+1)
+	for attempt := 0; attempt < RequestAttempts; attempt++ {
+		if attempt > 0 {
+			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attempt+1)
 		}
 
 		cn, err := c.validate(addr, i)
 		if err != nil {
-			req.SetResponse(err)
-			log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
 			return
 		}
 
@@ -367,15 +366,14 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			continue
 		}
 
-		log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attemp+1)
+		log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attempt+1)
 		ctx, cancel := context.WithTimeout(req.Context(), Timeout)
 		req.Cancel = cancel
 		req.SetContext(ctx)
 		return
 	}
 
-	log.Warn("Stop attempts to set %s(%d): %v", reqId, i, ErrMaxPreflightsReached)
-	req.SetResponse(ErrMaxPreflightsReached)
+	req.SetResponse(fmt.Errorf("stop attempts: %v", ErrMaxPreflightsReached))
 }
 
 func (c *Client) readSetResponse(req *ClientRequest) error {
@@ -402,8 +400,7 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 	chunkId, _ := cn.ReadBulkString()
 	storeId, err := cn.ReadBulkString()
 	if err != nil {
-		log.Warn("Error on reading header of get %s(%d): %v", req.ReqId, cm.AddrIdx, err)
-		req.SetResponse(err)
+		req.SetResponse(fmt.Errorf("error on reading header: %v", err))
 		return err
 	}
 
@@ -566,8 +563,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 
 	cn, err := c.validate(addr, i)
 	if err != nil {
-		req.SetResponse(err)
-		log.Warn("Failed to validate connection %d@%s(%s): %v", i, key, addr, err)
+		req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
 		return
 	}
 
@@ -577,7 +573,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		return nil
 	})
 	if err != nil {
-		log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
+		req.SetResponse(fmt.Errorf("error on initiate request(%s): %v", addr, err))
 		return
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), Timeout)
@@ -606,9 +602,8 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	meta, _ := cn.ReadBulkString()
 	chunkId, err := cn.ReadBulkString()
 	if err != nil {
-		req.SetResponse(err)
+		req.SetResponse(fmt.Errorf("error on reading header: %v", err))
 		// Could acceptable for client first-D optimization.
-		c.smartWarn(req, "Error on reading header of get %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		return err
 	}
 
@@ -635,9 +630,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	cn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := cn.StreamBulk()
 	if err != nil {
-		req.SetResponse(err)
-		// Could acceptable for client first-D optimization.
-		c.smartWarn(req, "Error on getting reader of received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
+		req.SetResponse(fmt.Errorf("error on getting reader of received chunk: %v", err))
 		return err
 	}
 	if valReader.Len() == 0 {
@@ -646,9 +639,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 
 	val, err := valReader.ReadAll()
 	if err != nil {
-		req.SetResponse(err)
-		// Could acceptable for client first-D optimization.
-		c.smartWarn(req, "Error on streaming received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
+		req.SetResponse(fmt.Errorf("error on streaming received chunk: %v", err))
 		return err
 	}
 
@@ -660,14 +651,6 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	log.Debug("Got chunk %s(%d)", req.ReqId, cm.AddrIdx)
 	req.SetResponse(val)
 	return nil
-}
-
-func (c *Client) smartWarn(req *ClientRequest, format string, args ...interface{}) {
-	if req.Ret.NumOK() >= c.DataShards {
-		log.Warn(format, args...)
-	} else {
-		log.Debug(format, args...)
-	}
 }
 
 // func (c *Client) recover(addr string, key string, reqId string, size int, failed []int, shards [][]byte) {
