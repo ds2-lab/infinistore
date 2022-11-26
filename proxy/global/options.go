@@ -144,7 +144,7 @@ func CheckUsage(options *CommandlineOptions) {
 	}
 
 	if options.disableRecovery {
-		Flags |= protocol.FLAG_DISABLE_RECOVERY
+		LambdaFlags |= protocol.FLAG_DISABLE_RECOVERY
 	}
 
 	if options.Evaluation && options.funcCapacity == 0 {

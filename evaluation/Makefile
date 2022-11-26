@@ -17,7 +17,7 @@ build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
 
 build-bench: prepare
-	go build -o bin/redbench github.com/wangaoone/redbench/
+	GO111MODULE=off go build -o bin/redbench github.com/wangaoone/redbench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
@@ -94,9 +94,9 @@ test-redis: build-bench
 
 test-local: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
-	bin/redbench -n 100 -c 5 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 100
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 50
 
 test-local-small: build-bench
 	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -sz 100 -d 1 -p 0 -op 0
-	bin/redbench -n 100 -c 3 -keymin 2 -keymax 2 -d 1 -p 0 -op 1
+	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -d 1 -p 0 -op 1
 

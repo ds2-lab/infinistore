@@ -1040,7 +1040,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix:  global.Options.Prefix,
 		Log:     global.Options.GetLambdaLogLevel(),
-		Flags:   global.Flags | localFlags,
+		Flags:   global.LambdaFlags | localFlags,
 		Backups: config.BackupsPerInstance,
 		Status:  status,
 	}

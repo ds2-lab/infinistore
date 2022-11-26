@@ -1,6 +1,7 @@
 package lambdastore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -59,20 +60,20 @@ type Connection struct {
 	mu          sync.Mutex
 	chanWait    chan *types.Request
 	headRequest unsafe.Pointer
-	respType    chan interface{}
+	peekGrant   chan struct{}
+	peeking     sync.WaitGroup
 	closed      uint32
 	done        chan struct{}
-	peeking     sync.WaitGroup
 }
 
 func NewConnection(cn net.Conn) *Connection {
 	conn := &Connection{
-		Conn:     cn,
-		log:      defaultConnectionLog,
-		chanWait: make(chan *types.Request, 1),
-		respType: make(chan interface{}),
-		closed:   ConnectionOpen,
-		done:     make(chan struct{}),
+		Conn:      cn,
+		log:       defaultConnectionLog,
+		chanWait:  make(chan *types.Request, 1),
+		peekGrant: make(chan struct{}, 1),
+		closed:    ConnectionOpen,
+		done:      make(chan struct{}),
 	}
 	if v := readerPool.Get(); v != nil {
 		rd := v.(resp.ResponseReader)
@@ -89,6 +90,7 @@ func NewConnection(cn net.Conn) *Connection {
 		conn.w = resp.NewRequestWriter(cn)
 	}
 	defaultConnectionLog.Level = global.Log.GetLevel()
+	conn.peekGrant <- struct{}{} // Granted for the first pong.
 	return conn
 }
 
@@ -311,6 +313,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		}
 		conn.Close()
 		return
+	} else if !conn.control {
+		// Only data link need to wait for response.
+		conn.peekGrant <- struct{}{}
 	}
 
 	conn.log.Debug("Sent %v", req)
@@ -425,7 +430,7 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 		// 2. For data link, a request is sent and waiting for response.
 		// 3. On lambda return, the other side close the connection.
 		// NOTE: It could leads to forever wait if we try to close the connection from our side without sending any request.
-		conn.warnAfter(time.Second, conn.isClosed, "Failed to close.")
+		go conn.warnAfter(time.Second, conn.isClosed, "Failed to close.")
 		conn.peeking.Wait()
 
 		// Disconnect connection to trigger close()
@@ -501,15 +506,16 @@ func (conn *Connection) close() {
 // field 2 : chunk id
 // field 3 : obj val
 func (conn *Connection) ServeLambda() {
+	chRsp := make(chan interface{})
 	for {
-		go conn.peekResponse()
+		go conn.peekResponse(chRsp)
 
 		var retPeek interface{}
 		select {
 		case <-conn.done:
 			conn.close()
 			return
-		case retPeek = <-conn.respType:
+		case retPeek = <-chRsp:
 			// Double check	if connection is closed.
 			select {
 			case <-conn.done:
@@ -693,29 +699,33 @@ func (conn *Connection) ClearResponses() {
 	}
 }
 
-func (conn *Connection) peekResponse() {
+func (conn *Connection) peekResponse(chRsp chan interface{}) {
 	defer util.PanicRecovery("proxy/lambdastore/Connection.peekResponse", nil)
-
-	r := conn.r
-	if r == nil {
-		return
-	}
 
 	conn.peeking.Add(1)
 	defer conn.peeking.Done()
 
-	if conn.IsClosed() {
+	// Wait for granted
+	// For control connection, the peekGrant is closed and always granted.
+	// For data connection, the peekGrant is granted after a request is made.
+	select {
+	case <-conn.peekGrant:
+	case <-conn.done:
 		return
 	}
 
+	// Start peeking
+	r := conn.r
+	if r == nil {
+		return
+	}
 	var ret interface{}
-
 	ret, err := r.PeekType()
 	if err != nil {
 		ret = err
 	}
 	select {
-	case conn.respType <- ret:
+	case chRsp <- ret:
 	default:
 		// No consumer. The connection must be closed, abandon.
 	}
@@ -779,6 +789,14 @@ func (conn *Connection) pongHandler() {
 		conn.log.Warn("Discard rouge PONG(%v) for %d, current %v", conn, storeId, validated)
 		conn.Conn.Close() // Close connection normally, so lambda will close itself.
 		conn.Close()
+	}
+	// Disable peek granting.
+	if conn.control {
+		select {
+		case <-conn.peekGrant:
+		default:
+			close(conn.peekGrant)
+		}
 	}
 
 	conn.log.Debug("PONG from lambda confirmed.")
@@ -870,10 +888,10 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	// Finish the response by setting the BodyStream
-	rsp.BodyStream = stream
+	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 
-	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
+	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, stream.Len())
 	// Connection will not be flagged available until BodyStream is closed.
 	if req, err := conn.SetResponse(rsp); err != nil {
 		// Failed to set response, release hold.
@@ -883,7 +901,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 	// Abandon rest chunks.
 	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
-		conn.log.Debug("Request fulfilled: %v, abandon rest chunks.", rsp.Id)
+		conn.log.Debug("Request fulfilled: %v, abandon unresponded chunks.", rsp.Id)
 		for _, req := range counter.Requests {
 			if req != nil && !req.IsReturnd() {
 				// For returned requests, it can be faster one or late one, their connection will decide.
@@ -893,9 +911,25 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	// Close will block until the stream is flushed.
-	if err := stream.Close(); err != nil {
-		conn.log.Warn("Failed to stream %s: %v", reqId, err)
+	if err := rsp.WaitFlush(); err != nil {
+		if err != context.Canceled {
+			conn.log.Warn("Failed to stream %s: %v", reqId, err)
+		} else {
+			conn.log.Debug("Abandon streaming %s", reqId)
+		}
 		conn.Close()
+	} else {
+		status := counter.AddFlushed(chunk)
+		// conn.log.Debug("Flushed %v. Fulfilled: %v(%x), %v", rsp.Id, counter.IsFulfilled(status), status, counter.IsAllFlushed(status))
+		// Abandon rest chunks.
+		if counter.IsFulfilled(status) && !counter.IsAllFlushed(status) {
+			conn.log.Debug("Request fulfilled: %v, abandon unflushed chunks.", rsp.Id)
+			for _, req := range counter.Requests {
+				if req != nil {
+					req.Abandon()
+				}
+			}
+		}
 	}
 }
 
@@ -1066,15 +1100,15 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 	return nil
 }
 
-func (conn *Connection) getCommandFinalizer(cmd string) func() {
-	return func() {
-		conn.finalizeCommmand(cmd)
-	}
-}
+// func (conn *Connection) getCommandFinalizer(cmd string) func() {
+// 	return func() {
+// 		conn.finalizeCommmand(cmd)
+// 	}
+// }
 
 func (conn *Connection) warnAfter(timeout time.Duration, tester func() bool, format string, args ...interface{}) {
 	<-time.After(timeout)
-	if tester() {
+	if !tester() {
 		conn.log.Warn(format, args...)
 	}
 }
