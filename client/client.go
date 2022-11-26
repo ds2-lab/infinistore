@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	sysnet "net"
 	"sync/atomic"
 
@@ -270,6 +271,29 @@ func (r *ecRet) Error(i int) (err error) {
 	}
 	_, err = r.Request(i).Response()
 	return
+}
+
+func (r *ecRet) PrintErrors(prompts string, args ...interface{}) {
+	if r.Err == nil {
+		return
+	}
+
+	// Format prompts
+	if len(args) > 0 {
+		prompts = fmt.Sprintf(prompts, args...)
+	}
+
+	// Print errors
+	if r.NumOK() < len(r.reqs) {
+		log.Warn("%s:%v, details:", prompts, r.Err)
+	} else {
+		log.Warn("%s:%v", prompts, r.Err)
+	}
+	for i := 0; i < len(r.reqs); i++ {
+		if err := r.Error(i); err != nil {
+			log.Warn("%s(%d):%v", prompts, i, err)
+		}
+	}
 }
 
 func (r *ecRet) NumOK() int {
