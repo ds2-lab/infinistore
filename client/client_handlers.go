@@ -726,9 +726,11 @@ func (c *Client) decode(stats *logEntry, data [][]byte, size int) (ReadAllCloser
 			return nil, err
 		}
 		stats.Corrupted, err = c.EC.Verify(data)
-		if !stats.Corrupted {
-			// log.Warn("Verification failed after reconstruction, data could be corrupted: %v", err)
+		if err != nil {
 			return nil, err
+		} else if stats.Corrupted {
+			// log.Warn("Verification failed after reconstruction, data could be corrupted: %v", err)
+			return nil, ErrCorrupted
 		}
 
 		log.Debug("Reconstructed")
