@@ -432,7 +432,7 @@ func (c *Client) get(host string, key string, reqId string) (ReadAllCloser, []*e
 	}
 	ret.Wait()
 
-	if ret.Err != nil && ret.NumErrors > int32(c.ParityShards) {
+	if ret.Err != nil && ret.NumOK() < c.DataShards {
 		return nil, []*ecRet{ret}
 	} else {
 		ret.Err = nil
@@ -606,8 +606,9 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	meta, _ := cn.ReadBulkString()
 	chunkId, err := cn.ReadBulkString()
 	if err != nil {
-		log.Warn("Error on reading header of get %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		req.SetResponse(err)
+		// Could acceptable for client first-D optimization.
+		c.smartWarn(req, "Error on reading header of get %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		return err
 	}
 
@@ -634,8 +635,9 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	cn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := cn.StreamBulk()
 	if err != nil {
-		log.Warn("Error on getting reader of received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		req.SetResponse(err)
+		// Could acceptable for client first-D optimization.
+		c.smartWarn(req, "Error on getting reader of received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		return err
 	}
 	if valReader.Len() == 0 {
@@ -644,8 +646,9 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 
 	val, err := valReader.ReadAll()
 	if err != nil {
-		log.Warn("Error on streaming received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		req.SetResponse(err)
+		// Could acceptable for client first-D optimization.
+		c.smartWarn(req, "Error on streaming received chunk %s(%d): %v", req.ReqId, cm.AddrIdx, err)
 		return err
 	}
 
@@ -657,6 +660,14 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	log.Debug("Got chunk %s(%d)", req.ReqId, cm.AddrIdx)
 	req.SetResponse(val)
 	return nil
+}
+
+func (c *Client) smartWarn(req *ClientRequest, format string, args ...interface{}) {
+	if req.Ret.NumOK() >= c.DataShards {
+		log.Warn(format, args...)
+	} else {
+		log.Debug(format, args...)
+	}
 }
 
 // func (c *Client) recover(addr string, key string, reqId string, size int, failed []int, shards [][]byte) {
