@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -102,10 +103,6 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	bodyStream, err := c.Next()
 	if err != nil {
 		p.log.Error("Error on get value reader: %v", err)
-		return
-	}
-	if dataChunks+parityChunks > int64(global.REQCNT_MAX_CHUNKS) {
-		server.NewErrorResponse(w, seq, "Too many chunks, max %d chunks supported.", global.REQCNT_MAX_CHUNKS).Flush()
 		return
 	}
 
@@ -309,7 +306,11 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		t2 := time.Now()
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
-			p.log.Warn("Error on flush response %v: %v", rsp, err)
+			if err != context.Canceled {
+				p.log.Warn("Error on flush response %v: %v", rsp, err)
+			} else {
+				p.log.Debug("Abandon flushing %v", rsp)
+			}
 			client.Conn().Close()
 			return
 		}

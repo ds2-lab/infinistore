@@ -14,9 +14,9 @@ func TestLambdastore(t *testing.T) {
 }
 
 func shouldTimeout(test func(), expect interface{}) {
-	timer := time.NewTimer(time.Second)
 	timeout := false
 	responeded := make(chan struct{})
+	timer := time.NewTimer(time.Second)
 	go func() {
 		test()
 		responeded <- struct{}{}
@@ -25,9 +25,7 @@ func shouldTimeout(test func(), expect interface{}) {
 	case <-timer.C:
 		timeout = true
 	case <-responeded:
-		if !timer.Stop() {
-			<-timer.C
-		}
+		timer.Stop()
 	}
 
 	switch e := expect.(type) {

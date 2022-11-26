@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	sysnet "net"
+	"sync/atomic"
 
 	"github.com/buraksezer/consistent"
 	"github.com/klauspost/reedsolomon"
@@ -182,10 +183,11 @@ type ecRet struct {
 	sync.WaitGroup
 	reqs []*ClientRequest
 
-	Shards int
-	Err    error
-	Meta   ecRetMeta // only for get chunk
-	Stats  *logEntry
+	Shards    int
+	Err       error
+	NumErrors int32
+	Meta      ecRetMeta // only for get chunk
+	Stats     *logEntry
 }
 
 func newEcRet(shards int) *ecRet {
@@ -219,6 +221,7 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			// Keep record of the last error
 			if err != nil {
 				r.Err = err
+				atomic.AddInt32(&r.NumErrors, 1)
 			}
 			r.Done()
 		})

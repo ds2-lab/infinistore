@@ -432,8 +432,10 @@ func (c *Client) get(host string, key string, reqId string) (ReadAllCloser, []*e
 	}
 	ret.Wait()
 
-	if ret.Err != nil {
+	if ret.Err != nil && ret.NumErrors > int32(c.ParityShards) {
 		return nil, []*ecRet{ret}
+	} else {
+		ret.Err = nil
 	}
 
 	var err error

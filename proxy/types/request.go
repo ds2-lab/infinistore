@@ -49,6 +49,7 @@ type RequestCloser interface {
 type response struct {
 	status uint32
 	client *redeo.Client
+	rsp    interface{}
 }
 
 type Request struct {
@@ -259,6 +260,7 @@ func (req *Request) IsResponded() bool {
 	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
 }
 
+// MarkReturned marks the request as returned/response received and returns if this is the first time to mark.
 func (req *Request) MarkReturned() bool {
 	if req.response == nil {
 		return false
@@ -282,8 +284,13 @@ func (req *Request) IsResponse(rsp *Response) bool {
 func (req *Request) SetResponse(rsp interface{}) (err error) {
 	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
+	// Responsed promise has high priority because:
+	// * The response promise is associated with the sent request.
+	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
+	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
 	responded := req.responded
 	if responded != nil && !responded.IsResolved() {
+		req.responded = nil
 		responded.Resolve(rsp)
 	}
 
@@ -296,7 +303,9 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 		return ErrNoClient
 	}
 
-	// Makeup: do cleanup
+	// Makeup:
+	// 1. Ensure return mark is marked
+	// 2. Do cleanup
 	// req.close safe
 	cleanup := req.Cleanup
 	if cleanup != nil {
@@ -308,15 +317,20 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	} else {
 		req.MarkReturned()
 	}
+	// Guard codes after this line will only executed once.
 	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}
+	// Set response of the request
+	req.response.rsp = rsp
+
+	// Cleanup request.
 	req.close()
 
+	// Asynchronously send the response.
 	if req.response.client == nil {
 		return ErrNoClient
 	}
-
 	ret := req.response.client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 	// Release reference so chan can be garbage collected.
 	req.response.client = nil
@@ -328,7 +342,16 @@ func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
 		return ErrNotSuppport
 	}
-	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true})
+	err := req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true})
+	if err != nil && err != ErrResponded {
+		return err
+	}
+
+	// Try abandon streaming.
+	if rsp := req.Response(); rsp != nil && !rsp.IsAbandon() {
+		rsp.CancelFlush()
+	}
+	return nil
 }
 
 func (req *Request) Timeout(opts ...int) (err error) {
@@ -354,7 +377,7 @@ func (req *Request) Response() *Response {
 		return nil
 	}
 
-	if rsp, ok := req.responded.Value().(*Response); ok {
+	if rsp, ok := req.response.rsp.(*Response); ok {
 		return rsp
 	}
 

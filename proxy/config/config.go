@@ -2,7 +2,22 @@ package config
 
 import (
 	"time"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
+
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
+
+// FLAG_FIXED_INTERVAL_WARMUP warms up lambda with fixed interval regardless workload.
+const FLAG_FIXED_INTERVAL_WARMUP = 0x0001
+
+// FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION enables D+P optimization on client side.
+const FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION = 0x0001
+
+// const LambdaFeatures = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT | protocol.FLAG_DISABLE_WAIT_FOR_COS
+const LambdaFeatures = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT
+const ProxyFeatures = FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION
+const LambdaLogLevel = logger.LOG_LEVEL_ALL // Set to logger.LOG_LEVEL_ALL to keep Lambda log level aligned with proxy log level.
 
 // LambdaPrefix Prefix of Lambda function, overridable with command line parameter -lambda-prefix.
 const LambdaPrefix = "Your Lambda Function Prefix"

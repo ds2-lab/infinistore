@@ -1028,8 +1028,8 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		Id:      ins.Id(),
 		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
 		Prefix:  global.Options.Prefix,
-		Log:     global.Log.GetLevel(),
-		Flags:   global.Flags | localFlags,
+		Log:     global.Options.GetLambdaLogLevel(),
+		Flags:   global.LambdaFlags | localFlags,
 		Backups: config.BackupsPerInstance,
 		Status:  status,
 	}

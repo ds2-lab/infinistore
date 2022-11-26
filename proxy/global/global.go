@@ -7,7 +7,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
@@ -21,7 +21,7 @@ var (
 	BasePort         = 6378
 	BaseMigratorPort = 6380
 	ServerIp         string
-	Flags            uint64
+	LambdaFlags      uint64
 )
 
 func init() {
@@ -36,12 +36,15 @@ func init() {
 		ServerIp = ip
 	}
 
-	// Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT | protocol.FLAG_DISABLE_WAIT_FOR_COS
-	Flags = protocol.FLAG_ENABLE_WARMUP | protocol.FLAG_ENABLE_PERSISTENT
+	LambdaFlags = config.LambdaFeatures
 }
 
 func IsWarmupWithFixedInterval() bool {
-	return Flags&protocol.FLAG_FIXED_INTERVAL_WARMUP > 0
+	return config.ProxyFeatures&config.FLAG_FIXED_INTERVAL_WARMUP > 0
+}
+
+func IsClientsideFirstDOptimization() bool {
+	return config.ProxyFeatures&config.FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION > 0
 }
 
 func GetLogger(prefix string) logger.ILogger {

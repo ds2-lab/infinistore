@@ -103,8 +103,6 @@ func (e *OutputError) String() string {
 const (
 	// FLAG_ENABLE_WARMUP Enable warmup.
 	FLAG_ENABLE_WARMUP = 0x0001
-	// FLAG_FIXED_INTERVAL_WARMUP Warming up with fixed interval regardless workload.
-	FLAG_FIXED_INTERVAL_WARMUP = 0x0002
 
 	// FLAG_ENABLE_REPLICA Enable replication.
 	FLAG_ENABLE_REPLICA = 0x0010
