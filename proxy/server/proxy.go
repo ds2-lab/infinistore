@@ -306,12 +306,12 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		t2 := time.Now()
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
+			client.Conn().Close()
 			if err != context.Canceled {
 				p.log.Warn("Error on flush response %v: %v", rsp, err)
 			} else {
 				p.log.Debug("Abandon flushing %v", rsp)
 			}
-			client.Conn().Close()
 			return
 		}
 

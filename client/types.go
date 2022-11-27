@@ -21,6 +21,5 @@ type ClientRequest struct {
 	client.Request
 	Cmd    string
 	ReqId  string
-	Ret    *ecRet
 	Cancel context.CancelFunc
 }

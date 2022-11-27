@@ -209,7 +209,7 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			return nil
 		}
 		ctx := context.WithValue(context.Background(), CtxKeyECRet, r)
-		req := &ClientRequest{Request: client.NewRequestWithContext(ctx), Ret: r}
+		req := &ClientRequest{Request: client.NewRequestWithContext(ctx)}
 		req.OnRespond(func(rsp interface{}, err error) {
 			if req.Cancel != nil {
 				req.Cancel()
