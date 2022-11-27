@@ -210,7 +210,8 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	req := types.GetRequest(client)
 	req.Seq = seq
-	req.Id = types.Id{ReqId: reqId, ChunkId: chunkId}
+	req.Id.ReqId = reqId
+	req.Id.ChunkId = chunkId
 	req.InsId = uint64(lambdaDest)
 	req.Cmd = protocol.CMD_GET
 	req.BodySize = meta.ChunkSize
@@ -231,7 +232,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
-			p.log.Warn("Failed to replace %v: %v", req.Id, err)
+			p.log.Warn("Failed to replace %v: %v", &req.Id, err)
 			req.SetResponse(err)
 			return
 		}

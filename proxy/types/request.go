@@ -91,7 +91,7 @@ func GetRequest(client *redeo.Client) *Request {
 }
 
 func (req *Request) String() string {
-	return fmt.Sprintf("%s %v", req.Cmd, req.Id)
+	return fmt.Sprintf("%s %v", req.Cmd, &req.Id)
 }
 
 func (req *Request) Name() string {
