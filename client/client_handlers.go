@@ -621,8 +621,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 
 	// Abandon?
 	if chunkId == "-1" {
-		log.Debug("Abandon late chunk %s(%d)", req.ReqId, cm.AddrIdx)
-		req.SetResponse(nil)
+		req.SetResponse(ErrAbandon)
 		return nil
 	}
 
@@ -703,16 +702,15 @@ func (c *Client) decode(stats *logEntry, data [][]byte, size int) (ReadAllCloser
 		// 	return nil, err
 	} else {
 		log.Debug("Verification failed. Reconstructing data...")
-		err := c.EC.Reconstruct(data)
-		if err != nil {
+		if err := c.EC.Reconstruct(data); err != nil {
 			// log.Warn("Reconstruction failed: %v", err)
 			return nil, err
 		}
-		stats.Corrupted, err = c.EC.Verify(data)
-		if err != nil {
+		if good, err := c.EC.Verify(data); err != nil {
 			return nil, err
-		} else if stats.Corrupted {
+		} else if !good {
 			// log.Warn("Verification failed after reconstruction, data could be corrupted: %v", err)
+			stats.Corrupted = true
 			return nil, ErrCorrupted
 		}
 
