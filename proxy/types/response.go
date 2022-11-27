@@ -101,6 +101,7 @@ func (rsp *Response) Flush() error {
 			if holdable, ok := rsp.bodyStream.(resp.Holdable); ok {
 				holdable.Unhold()
 			}
+			// If error is cause by the CancelFlush, override the return error.
 			if rsp.lastError != nil {
 				return rsp.lastError
 			} else {
@@ -109,11 +110,8 @@ func (rsp *Response) Flush() error {
 		}
 	}
 
-	err := w.Flush()
-	if rsp.lastError != nil {
-		return rsp.lastError
-	}
-	return err
+	// If body streaming is successful, we are good.
+	return w.Flush()
 }
 
 func (rsp *Response) IsAbandon() bool {
@@ -131,6 +129,7 @@ func (rsp *Response) WaitFlush() error {
 		case <-rsp.ctx.Done():
 			rsp.abandon = true
 			rsp.lastError = context.Canceled
+			rsp.w.Close()
 		}
 		rsp.cancel()
 	}
