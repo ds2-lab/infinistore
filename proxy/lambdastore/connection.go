@@ -330,7 +330,15 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		err := req.Timeout()
 		if err == nil {
 			rsp := req.Response()
-			if rsp != nil {
+			if rsp == nil {
+				return
+			} else if rsp.IsAbandon() && !conn.control {
+				// If a request is abandoned, the response must be set.
+				// If abandoned before receiving response from Lambda, the rsp is generated in types.Request and
+				// Wait() will return immiediately. We have to close the data link to prevent the link from being reused and
+				// serve next request ASAP.
+				conn.CloseWithReason("Abandon in sendRequest", false) // Can peeking, close asynchrously.
+			} else {
 				// Wait for response to finalize or connection to close.
 				rsp.Wait()
 			}
@@ -855,7 +863,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
-		// conn.log.Warn("Request not found: %s, can be fulfilled already.", reqId)
+		conn.log.Debug("Request not found: %s, can be fulfilled already.", reqId)
 		// Set response and exhaust value
 		conn.SetResponse(rsp)
 		conn.closeStream(stream, "Failed to skip bulk on request mismatch", &rsp.Id)
