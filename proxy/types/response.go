@@ -56,7 +56,7 @@ func NewResponse(cmd string) *Response {
 }
 
 func (rsp *Response) String() string {
-	return fmt.Sprintf("%s %v", rsp.Cmd, rsp.Id)
+	return fmt.Sprintf("%s %v", rsp.Cmd, &rsp.Id)
 }
 
 func (rsp *Response) SetBodyStream(stream resp.AllReadCloser) {

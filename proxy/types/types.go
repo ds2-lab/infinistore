@@ -50,7 +50,7 @@ func (id *Id) Chunk() int {
 	return id.chunk
 }
 
-func (id Id) String() string {
+func (id *Id) String() string {
 	return fmt.Sprintf("%s(%s)", id.ReqId, id.ChunkId)
 }
 
