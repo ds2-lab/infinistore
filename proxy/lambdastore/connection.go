@@ -876,7 +876,11 @@ func (conn *Connection) getHandler(start time.Time) {
 		}
 
 		// Consume and abandon the response.
-		if err := stream.Close(); err != nil {
+		if !conn.control {
+			// For data link, close directly so next request can be served.
+			conn.Close()
+			return
+		} else if err := stream.Close(); err != nil { // For control link, skip stream will be faster.
 			if conn.IsClosed() {
 				// The error should be logged by somewhere that close the connection.
 				return

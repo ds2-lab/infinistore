@@ -129,7 +129,6 @@ func (rsp *Response) WaitFlush() error {
 		case <-rsp.ctx.Done():
 			rsp.abandon = true
 			rsp.lastError = context.Canceled
-			rsp.w.Close()
 		}
 		rsp.cancel()
 	}

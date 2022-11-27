@@ -539,10 +539,22 @@ func (c *Client) decodeFragment(ret *ecRet, size int) (ReadAllCloser, error) {
 		return nil, ret.Err
 	}
 
-	// Filter results
+	// Filter results, either reading all shards or up to the number of data shards, or data reconstruction will fail.
+	// e.g. if we have 4 data shards and 2 parity shards, following are valid cases:
+	// 1. 4 shards
+	// 2. 6 shards
+	// Unexpectedly, 5 shards will fail.
 	chunks := make([][]byte, ret.Len())
-	for i := 0; i < ret.Len(); i++ {
+	tbRead := ret.NumOK()
+	if tbRead < c.DataShards+c.ParityShards {
+		tbRead = c.DataShards
+	}
+	read := 0
+	for i := 0; i < ret.Len() && read < tbRead; i++ {
 		chunks[i] = ret.RetChunk(i)
+		if len(chunks[i]) > 0 {
+			read++
+		}
 	}
 
 	decodeStart := time.Now()
