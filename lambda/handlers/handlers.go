@@ -64,6 +64,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	client := redeo.GetClient(c.Context())
+	link := worker.LinkFromClient(client)
 
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
@@ -78,7 +79,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	}, client)
 
 	t := time.Now()
-	log.Debug("In GET handler(link:%d)", worker.LinkFromClient(client).ID())
+	log.Debug("In GET handler(link:%v)", link)
 
 	reqId := c.Arg(0).String()
 	// Skip: chunkId := c.Arg(1).String()
@@ -167,7 +168,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Info("Get key:%s %v, duration:%v, prepare: %v, transmission:%v", key, reqId, dt, d1, d2)
+		log.Info("Get(link:%v) key:%s %v, duration:%v, prepare: %v, transmission:%v", link, key, reqId, dt, d1, d2)
 		collector.AddRequest(t, types.OP_GET, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	} else {
 		var respError *ResponseError
@@ -194,6 +195,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	client := redeo.GetClient(c.Context())
+	link := worker.LinkFromClient(client)
 
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
@@ -204,7 +206,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	t := time.Now()
-	log.Debug("In SET handler(link:%d)", worker.LinkFromClient(client).ID())
+	log.Debug("In SET handler(link:%v)", link)
 
 	var reqId, chunkId string
 	cmd := c.Name
@@ -282,7 +284,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	d2 := time.Since(t2)
 
 	dt := time.Since(t)
-	log.Info("Set key:%s, chunk: %s, duration:%v, transmission:%v", key, chunkId, dt, d1)
+	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v", link, key, chunkId, dt, d1)
 	finalize(ret, d1, d2, dt)
 }
 
@@ -294,6 +296,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	client := redeo.GetClient(c.Context())
+	link := worker.LinkFromClient(client)
 
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
@@ -312,7 +315,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}, client)
 
 	t := time.Now()
-	log.Debug("In RECOVER handler(link:%d)", worker.LinkFromClient(client).ID())
+	log.Debug("In RECOVER handler(link:%v)", link)
 
 	errRsp := &worker.ErrorResponse{}
 	reqId := c.Arg(0).String()
@@ -393,7 +396,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	d2 := time.Since(t2)
 
 	dt := time.Since(t)
-	log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
+	log.Info("Recovered(link:%v) key:%s %s, duration:%v, prepare: %v, transmission:%v", link, key, reqId, dt, d1, d2)
 	if retCmd == protocol.CMD_GET {
 		collector.AddRequest(t, types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 	}

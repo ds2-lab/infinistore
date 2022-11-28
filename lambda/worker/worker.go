@@ -453,7 +453,7 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 		remoteAddr = cn.RemoteAddr().String()
 	}
 	// Log with len+1, will add to the link if no error.
-	wrk.log.Info("Connection(%s:%v) to %v established(total: %d).", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr, wrk.dataLinks.Len()+1)
+	wrk.log.Info("Connection(%v) to %v established(total: %d).", link, remoteAddr, wrk.dataLinks.Len()+1)
 
 	// Recheck if server closed in mutex
 	if wrk.IsClosed() {
@@ -479,7 +479,7 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 		wrk.flagReservationUsed(link)
 		wrk.removeDataLink(link)
 		link.Close()
-		wrk.log.Info("Connection(%s:%v) disconnected(total: %d).", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), wrk.dataLinks.Len())
+		wrk.log.Info("Connection(%v) disconnected(total: %d).", link, wrk.dataLinks.Len())
 	}(link)
 
 	return nil
