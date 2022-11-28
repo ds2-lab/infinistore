@@ -40,7 +40,7 @@ var (
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 
 	DialTimeout           = 20 * time.Millisecond
-	RetrialDelayStartFrom = 20 * time.Millisecond
+	RetrialDelayStartFrom = 100 * time.Millisecond
 	RetrialMaxDelay       = 10 * time.Second
 )
 
@@ -312,7 +312,7 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 	defer wrk.readyToClose.Done()
 	defer once.Do(started.Done)
 
-	delay := RetrialDelayStartFrom
+	timeout := DialTimeout
 	link.addr = proxyAddr.String() // To be compatibile with shortcut QueueAddr, keep a copy of string address.
 	hbFlags := protocol.PONG_FOR_CTRL
 	if !link.IsControl() {
@@ -326,33 +326,26 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 		if opts.DryRun {
 			shortcuts, ok := net.Shortcut.Dial(link.addr)
 			if !ok {
-				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", delay)
-				delay = wrk.waitDelay(delay)
+				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", timeout)
+				<-time.After(timeout)
 				continue
 			} else {
 				conn = shortcuts[0].Client
 				remoteAddr = shortcuts[0].String()
 			}
 		} else {
-			dailer := &sysnet.Dialer{Timeout: DialTimeout}
+			dailer := &sysnet.Dialer{Timeout: timeout}
 			cn, err := dailer.Dial("tcp", link.addr)
-			if err != nil {
-				wrk.log.Error("Failed to connect proxy %s, retry after %v: %v", proxyAddr, delay, err)
-				delay = wrk.waitDelay(delay)
-			} else {
+			if err == nil {
 				conn = cn
 				remoteAddr = cn.RemoteAddr().String()
+			} else if netErr, ok := err.(sysnet.Error); ok && netErr.Timeout() {
+				wrk.log.Warn("Failed to connect proxy %s: %v, retry.", proxyAddr, err)
+			} else {
+				wrk.log.Warn("Failed to connect proxy %s: %v, retry after %v", proxyAddr, err, timeout)
+				<-time.After(timeout)
 			}
 		}
-
-		// Check connecting status.
-		if conn != nil {
-			delay = RetrialDelayStartFrom
-			wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
-		}
-
-		// Flag started after first connecting trial.
-		once.Do(started.Done)
 
 		// Recheck if server closed in mutex
 		if wrk.IsClosed() {
@@ -362,12 +355,21 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 			return
 		}
 
-		if conn == nil {
-			// retry
-			continue
+		// Check connecting status.
+		if conn != nil {
+			timeout = DialTimeout
+			link.Reset(conn)
+			wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
 		}
 
-		link.Reset(conn)
+		// Flag started after first connecting trial.
+		once.Do(started.Done)
+
+		if conn == nil {
+			// retry
+			timeout = wrk.nextDelay(timeout)
+			continue
+		}
 
 		// Send a heartbeat on the link immediately to confirm store information.
 		// The heartbeat will be queued and send once worker started.
@@ -450,6 +452,7 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 	// Connect to proxy.
 	var conn sysnet.Conn
 	var remoteAddr string
+	timeout := DialTimeout
 	for i := 0; i < MaxDataLinkRetrial; i++ {
 		if opts.DryRun {
 			proxyAddr.(*net.QueueAddr).Pop()
@@ -466,15 +469,16 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 		} else {
 			wrk.log.Debug("Ready to connect %v, attempt %d", proxyAddr, i+1)
 			link.addr = proxyAddr.String()
-			dialer := &sysnet.Dialer{Timeout: DialTimeout}
+			dialer := &sysnet.Dialer{Timeout: timeout}
 			conn, err = dialer.Dial("tcp", proxyAddr.String())
 			if err != nil {
 				if netErr, ok := err.(sysnet.Error); ok && netErr.Timeout() {
 					wrk.log.Warn("Failed to connect proxy %s, attempt %d: %v", proxyAddr, i+1, err)
 				} else {
 					wrk.log.Warn("Failed to connect proxy %s, attempt %d: %v, retry after %v", proxyAddr, i+1, err, DialTimeout)
-					<-time.After(DialTimeout)
+					<-time.After(timeout)
 				}
+				timeout = wrk.nextDelay(timeout)
 				continue
 			}
 			remoteAddr = conn.RemoteAddr().String()
@@ -622,7 +626,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 		}
 
 		left := rsp.markAttempt()
-		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(rsp.maxAttempts()-left-1)))
+		retryIn := DialTimeout * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(rsp.maxAttempts()-left-1)))
 		if left > 0 {
 			wrk.log.Warn("Error on flush response(%v), retry in %v: %v", rsp, retryIn, err)
 			go func() {
@@ -641,8 +645,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp.close()
 }
 
-func (wrk *Worker) waitDelay(delay time.Duration) time.Duration {
-	<-time.After(delay)
+func (wrk *Worker) nextDelay(delay time.Duration) time.Duration {
 	after := delay * RetrialBackoffFactor
 	if after > RetrialMaxDelay {
 		after = RetrialMaxDelay
