@@ -24,7 +24,11 @@ if [ -z "$TIMEOUT" ]; then
 fi
 
 if [ "$CODE" == "-code" ] ; then
-    echo -e "Updating "$EMPH"code and configuration"$RESET" of Lambda deployments ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} to $DEPLOY_MEM MB, ${TIMEOUT}s timeout..."
+    if [ "$CONFIG" == "-config" ] ; then
+        echo -e "Updating "$EMPH"code and configuration"$RESET" of Lambda deployments ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} to $DEPLOY_MEM MB, ${TIMEOUT}s timeout..."
+    else
+        echo -e "Updating "$EMPH"code"$RESET" of Lambda deployments ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} ..."
+    fi
     if [ ! $NO_BREAK ] ; then
         read -p "Press any key to confirm, or ctrl-C to stop."
     fi
@@ -51,7 +55,7 @@ else
 fi
 
 echo "Updating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} $CODE -config -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -S3 ${S3} $CODE $CONFIG -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 
 if [ "$CODE" == "-code" ] && [ ! $NO_BUILD  ] ; then
   rm $KEY*

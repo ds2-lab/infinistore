@@ -8,6 +8,7 @@ function help() {
   echo "  -h, --help                          Show this help message and exit"
   echo "  -v, --verbose                       Display verbose output"
   echo "  --code                              Update lambda code"
+  echo "  -co, --codeonly                     Update lambda code only with update configuration"
   echo "  --prefix=PREFIX                     Prefix for deployment names"
   echo "  --from=FROM                         Start deployment number"
   echo "  --to=TO                             End deployment number"
@@ -23,6 +24,7 @@ if [ $# -eq 0 ] && [ $EXPECTING_ARGS ] ; then
   exit 1
 fi
 
+CONFIG="-config"
 while [[ $# -gt 0 ]]; do
   case $1 in
     -h|--help)
@@ -36,6 +38,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     -code|--code)
       CODE="-code"
+      shift # past argument
+      ;;
+    -co|--codeonly)
+      CODE="-code"
+      CONFIG=""
       shift # past argument
       ;;
     --prefix)
