@@ -10,8 +10,10 @@ const (
 )
 
 var (
+	// Bucket to store experiment data. No date will be stored if InputEvent.Prefix is not set.
 	S3_COLLECTOR_BUCKET string = "jzhang33.default"
-	S3_BACKUP_BUCKET    string = "jzhang33.infinicache%s"
+	// Bucket to store persistent data. Keep "%s" at the end of the bucket name.
+	S3_BACKUP_BUCKET string = "jzhang33.infinicache%s"
 
 	DRY_RUN = false
 )

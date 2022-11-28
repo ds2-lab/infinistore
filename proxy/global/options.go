@@ -91,7 +91,7 @@ func CheckUsage(options *CommandlineOptions) {
 	flag.BoolVar(&printInfo, "h", false, "help info?")
 
 	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
-	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
+	flag.StringVar(&options.Prefix, "prefix", "", "Prefix for data files.")
 	flag.StringVar(&options.lambdaPrefix, "lambda-prefix", "", "Prefix of the Lambda deployments.")
 	flag.StringVar(&options.PublicIP, "ip", "", "Public IP for non-VPC Lambda deployments.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")

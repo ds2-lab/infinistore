@@ -577,6 +577,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 
 	err := rsp.flush(w)
 	if err != nil {
+		// Set link as failure instead of closing it. Different links (control or data) may reconnect or disconnect.
 		wrk.SetFailure(link, err)
 
 		if wrk.IsClosed() {
@@ -600,8 +601,6 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 			return
 		} else {
 			wrk.log.Warn("Error on flush response(%v), abandon attempts: %v", rsp, err)
-			// Close the connection from this side.
-			client.Close()
 		}
 
 		rsp.close()
