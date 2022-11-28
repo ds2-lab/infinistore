@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -69,9 +70,9 @@ func (ln *Link) ID() int {
 
 func (ln *Link) String() string {
 	if ln.ctrl {
-		return ln.addr + "(c)"
+		return fmt.Sprintf("c:%d", ln.id)
 	} else {
-		return ln.addr + "(d)"
+		return fmt.Sprintf("d:%d", ln.id)
 	}
 }
 

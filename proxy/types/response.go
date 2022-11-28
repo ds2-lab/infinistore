@@ -118,8 +118,13 @@ func (rsp *Response) IsAbandon() bool {
 	return rsp.abandon
 }
 
-func (rsp *Response) WaitFlush() error {
+func (rsp *Response) WaitFlush(cancelable bool) error {
 	if rsp.bodyStream != nil {
+		if !cancelable {
+			return rsp.bodyStream.Close()
+		}
+
+		// Allow the wait be canceled.
 		chWait := make(chan error)
 		go func() {
 			chWait <- rsp.bodyStream.Close()

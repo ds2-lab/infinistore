@@ -332,12 +332,17 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			rsp := req.Response()
 			if rsp == nil {
 				return
-			} else if rsp.IsAbandon() && !conn.control {
-				// If a request is abandoned, the response must be set.
-				// If abandoned before receiving response from Lambda, the rsp is generated in types.Request and
-				// Wait() will return immiediately. We have to close the data link to prevent the link from being reused and
-				// serve next request ASAP.
-				conn.CloseWithReason("Abandon in sendRequest", false) // Can peeking, close asynchrously.
+			} else if rsp.IsAbandon() {
+				if conn.control {
+					// Consume the request in the queue, unblock queue, and wait for the next request.
+					conn.SetResponse(rsp)
+				} else {
+					// If a request is abandoned, the response must be set.
+					// If abandoned before receiving response from Lambda, the rsp is generated in types.Request and
+					// Wait() will return immiediately. We have to close the data link to prevent the link from being reused and
+					// serve next request ASAP.
+					conn.CloseWithReason("Abandon in sendRequest", false) // Can peeking, close asynchrously.
+				}
 			} else {
 				// Wait for response to finalize or connection to close.
 				rsp.Wait()
@@ -430,7 +435,7 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 		close(conn.done)
 	}
 
-	closeConn := func() {
+	closeConn := func(check bool) {
 		// Wait for peeking to unblock.
 		// On peeking, we block and read the connection, which can only be unblocked from the other side.
 		// Closing from this side will only make the zombie connection.
@@ -439,7 +444,9 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 		// 2. For data link, a request is sent and waiting for response.
 		// 3. On lambda return, the other side close the connection.
 		// NOTE: It could leads to forever wait if we try to close the connection from our side without sending any request.
-		go conn.warnAfter(time.Second, conn.isClosed, "Failed to close.")
+		if check {
+			go conn.warnAfter(time.Second, conn.isClosed, "Failed to close.")
+		}
 		conn.peeking.Wait()
 
 		// Disconnect connection to trigger close()
@@ -459,9 +466,9 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 	}
 
 	if block {
-		closeConn()
+		closeConn(false)
 	} else {
-		go closeConn()
+		go closeConn(true)
 	}
 
 	return nil
@@ -483,7 +490,7 @@ func (conn *Connection) close() {
 	defer conn.mu.Unlock()
 
 	// Call signal function to avoid duplicated close.
-	conn.CloseWithReason("", true)
+	conn.CloseAndWait()
 
 	// Clear pending requests after TCP connection closed, so current request got chance to return first.
 	conn.ClearResponses()
@@ -491,14 +498,9 @@ func (conn *Connection) close() {
 	var w, r interface{}
 	conn.w, w = nil, conn.w
 	conn.r, r = nil, conn.r
-	// If peeking repsonse, don't reuse the reader
-	// if !conn.peeking {
 	// Ensure peeking get unblocked.
 	conn.peeking.Wait()
 	readerPool.Put(r)
-	// } else {
-	// 	conn.log.Warn("Blocking read: connection may not properly closed.")
-	// }
 	writerPool.Put(w)
 	conn.lm = nil
 	// Don't reset instance to nil, we may need it to resend request.
@@ -913,7 +915,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	// Close will block until the stream is flushed.
-	if err := rsp.WaitFlush(); err != nil {
+	if err := rsp.WaitFlush(!conn.control); err != nil {
 		if err != context.Canceled {
 			conn.log.Warn("Failed to stream %s: %v", reqId, err)
 		} else {
