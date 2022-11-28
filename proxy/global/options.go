@@ -75,7 +75,7 @@ func (o *CommandlineOptions) GetInstanceChunkThreshold() int {
 }
 
 func (o *CommandlineOptions) GetLambdaLogLevel() int {
-	if config.LambdaLogLevel > logger.LOG_LEVEL_ALL {
+	if config.LambdaLogLevel > logger.LOG_LEVEL_ALL && config.LambdaLogLevel < Log.GetLevel() {
 		return config.LambdaLogLevel
 	}
 
