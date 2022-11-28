@@ -162,8 +162,8 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 		t2 := time.Now()
 		Server.AddResponses(response, client)
 		if err := response.Flush(); err != nil {
-			log.Error("Error on flush(get %s %s): %v", key, reqId, err)
-			return
+			// Error is ignored here, since the client may simply discard late response.
+			log.Warn("Error on flush(get %s %s): %v", key, reqId, err)
 		}
 		d2 := time.Since(t2)
 

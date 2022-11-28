@@ -1145,6 +1145,8 @@ func (s *LineageStorage) doReplayLineage(meta *types.LineageMeta, terms []*types
 		// Remove servingKey from the download list if it is not new and no reset is required.
 		if servingKey != "" && tbds[0].IsAvailable() {
 			tbds = tbds[1:]
+			// Clear serveringKey to prevent it from being removed again.
+			servingKey = ""
 		}
 
 		// Passing by, update local snapshot

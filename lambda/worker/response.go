@@ -94,7 +94,12 @@ func (r *BaseResponse) Prepare() {
 func (r *BaseResponse) Flush() error {
 	// Timeout added here, sometimes redeo may not handle all responses.
 	r.done.SetTimeout(r.getTimeout())
-	return r.done.Timeout()
+	err := r.done.Timeout()
+	if err != nil {
+		return err
+	} else {
+		return r.done.Error()
+	}
 }
 
 func (r *BaseResponse) Size() int64 {
@@ -216,7 +221,8 @@ func (r *BaseResponse) close() {
 }
 
 func (r *BaseResponse) resolve() {
-	r.done.Resolve(&struct{}{})
+	// Resolve with last error.
+	r.done.Resolve(nil, r.err)
 }
 
 type SimpleResponse struct {
