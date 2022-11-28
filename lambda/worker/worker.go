@@ -28,6 +28,7 @@ const (
 	RetrialBackoffFactor = 2
 	MinDataLinks         = 1
 	MaxDataLinks         = 10
+	MaxDataLinkRetrial   = 3
 )
 
 var (
@@ -38,7 +39,8 @@ var (
 	ErrInvalidShortcut  = errors.New("invalid shortcut connection")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 
-	RetrialDelayStartFrom = 200 * time.Millisecond
+	DialTimeout           = 20 * time.Millisecond
+	RetrialDelayStartFrom = 100 * time.Millisecond
 	RetrialMaxDelay       = 10 * time.Second
 )
 
@@ -307,9 +309,10 @@ func (wrk *Worker) ensureConnection(link *Link, proxyAddr sysnet.Addr, opts *Wor
 
 func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions, started *sync.WaitGroup) {
 	var once sync.Once
+	defer wrk.readyToClose.Done()
 	defer once.Do(started.Done)
 
-	delay := RetrialDelayStartFrom
+	timeout := DialTimeout
 	link.addr = proxyAddr.String() // To be compatibile with shortcut QueueAddr, keep a copy of string address.
 	hbFlags := protocol.PONG_FOR_CTRL
 	if !link.IsControl() {
@@ -323,33 +326,50 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 		if opts.DryRun {
 			shortcuts, ok := net.Shortcut.Dial(link.addr)
 			if !ok {
-				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", delay)
-				delay = wrk.waitDelay(delay)
+				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", timeout)
+				<-time.After(timeout)
 				continue
+			} else {
+				conn = shortcuts[0].Client
+				remoteAddr = shortcuts[0].String()
 			}
-			conn = shortcuts[0].Client
-			remoteAddr = shortcuts[0].String()
 		} else {
-			cn, err := sysnet.Dial("tcp", link.addr)
-			if err != nil {
-				wrk.log.Error("Failed to connect proxy %s, retry after %v: %v", proxyAddr, delay, err)
-				delay = wrk.waitDelay(delay)
-				continue
+			dailer := &sysnet.Dialer{Timeout: timeout}
+			cn, err := dailer.Dial("tcp", link.addr)
+			if err == nil {
+				conn = cn
+				remoteAddr = cn.RemoteAddr().String()
+			} else if netErr, ok := err.(sysnet.Error); ok && netErr.Timeout() {
+				wrk.log.Warn("Failed to connect proxy %s: %v, retry.", proxyAddr, err)
+			} else {
+				wrk.log.Warn("Failed to connect proxy %s: %v, retry after %v", proxyAddr, err, timeout)
+				<-time.After(timeout)
 			}
-			conn = cn
-			remoteAddr = cn.RemoteAddr().String()
 		}
-		delay = RetrialDelayStartFrom
-
-		wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
 
 		// Recheck if server closed in mutex
 		if wrk.IsClosed() {
-			conn.Close()
-			wrk.readyToClose.Done()
+			if conn != nil {
+				conn.Close()
+			}
 			return
 		}
-		link.Reset(conn)
+
+		// Check connecting status.
+		if conn != nil {
+			timeout = DialTimeout
+			link.Reset(conn)
+			wrk.log.Info("Connection(%s:%v) to %v established.", util.Ifelse(link.IsControl(), "c", "d").(string), link.ID(), remoteAddr)
+		}
+
+		// Flag started after first connecting trial.
+		once.Do(started.Done)
+
+		if conn == nil {
+			// retry
+			timeout = wrk.nextDelay(timeout)
+			continue
+		}
 
 		// Send a heartbeat on the link immediately to confirm store information.
 		// The heartbeat will be queued and send once worker started.
@@ -363,7 +383,6 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 				}
 			}(link)
 		}
-		once.Do(started.Done)
 
 		// Serve the client.
 		err := wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
@@ -384,7 +403,6 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 			fallthrough
 		case WorkerClosing:
 			wrk.log.Info("Connection(%v) closed.", link.ID())
-			wrk.readyToClose.Done()
 			return
 		}
 
@@ -393,7 +411,6 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 		} else {
 			// Closed by the proxy, stop worker.
 			wrk.log.Info("Connection(%v) closed from proxy. Closing worker...", link.ID())
-			wrk.readyToClose.Done() // Close() will wait for readyToClose
 			wrk.Close()
 			return
 		}
@@ -415,49 +432,68 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr sysnet.Addr, op
 			// The number of spare links exceeds the limit, abandon the token.
 			// This is useful for token returning since we may borrow tokens during VerifyDataLinks().
 			continue
-		} else if err := wrk.serveOnce(link, proxyAddr, opts); err != nil {
-			// Failed to connect, exit.
-			break
-		} else {
+		} else if err := wrk.serveOnce(link, proxyAddr, opts); err == nil {
 			wrk.addDataLink(link)
+		} else if err == ErrWorkerClosed {
+			link.Close()
+			// continue to drain the channel
+		} else {
+			// Failed to connect, return token and retry.
+			wrk.flagReservationUsed(link)
+			link.Close()
 		}
 	}
+	wrk.log.Info("Data link reservation stopped.")
 }
 
 // serveOnce establishes the link and serves the link in a goroutine. No reconnecting will be performed.
 // Token associated with the link will be returned on disconnecting if it has not been consumed (e.g. Not being used to serve any request).
-func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions) error {
+func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions) (err error) {
 	// Connect to proxy.
 	var conn sysnet.Conn
 	var remoteAddr string
-	if opts.DryRun {
-		proxyAddr.(*net.QueueAddr).Pop()
-		wrk.log.Debug("Ready to connect %v", proxyAddr)
-		link.addr = proxyAddr.String()
-		shortcuts, ok := net.Shortcut.Dial(proxyAddr.String())
-		if !ok {
-			wrk.log.Error("Oops, no shortcut connection available for dry running")
-			return ErrInvalidShortcut
+	timeout := DialTimeout
+	for i := 0; i < MaxDataLinkRetrial; i++ {
+		if opts.DryRun {
+			proxyAddr.(*net.QueueAddr).Pop()
+			wrk.log.Debug("Ready to connect %v", proxyAddr)
+			link.addr = proxyAddr.String()
+			shortcuts, ok := net.Shortcut.Dial(proxyAddr.String())
+			if !ok {
+				// Dail to shortcut should not fail and will not retry.
+				wrk.log.Error("Oops, no shortcut connection available for dry running")
+				return ErrInvalidShortcut
+			}
+			conn = shortcuts[0].Client
+			remoteAddr = shortcuts[0].String()
+		} else {
+			wrk.log.Debug("Ready to connect %v, attempt %d", proxyAddr, i+1)
+			link.addr = proxyAddr.String()
+			dialer := &sysnet.Dialer{Timeout: timeout}
+			conn, err = dialer.Dial("tcp", proxyAddr.String())
+			if err != nil {
+				if netErr, ok := err.(sysnet.Error); ok && netErr.Timeout() {
+					wrk.log.Warn("Failed to connect proxy %s, attempt %d: %v", proxyAddr, i+1, err)
+				} else {
+					wrk.log.Warn("Failed to connect proxy %s, attempt %d: %v, retry after %v", proxyAddr, i+1, err, DialTimeout)
+					<-time.After(timeout)
+				}
+				timeout = wrk.nextDelay(timeout)
+				continue
+			}
+			remoteAddr = conn.RemoteAddr().String()
 		}
-		conn = shortcuts[0].Client
-		remoteAddr = shortcuts[0].String()
-	} else {
-		wrk.log.Debug("Ready to connect %v", proxyAddr)
-		link.addr = proxyAddr.String()
-		cn, err := sysnet.Dial("tcp", proxyAddr.String())
-		if err != nil {
-			wrk.log.Error("Failed to connect proxy %s: %v", proxyAddr, err)
-			return err
-		}
-		conn = cn
-		remoteAddr = cn.RemoteAddr().String()
 	}
-	// Log with len+1, will add to the link if no error.
-	wrk.log.Info("Connection(%v) to %v established(total: %d).", link, remoteAddr, wrk.dataLinks.Len()+1)
+	if err != nil {
+		wrk.log.Error("Stop attempts to connect to proxy %s", proxyAddr)
+		return err
+	} else {
+		// Log with len+1, will add to the link if no error.
+		wrk.log.Info("Connection(%v) to %v established(total: %d).", link, remoteAddr, wrk.dataLinks.Len()+1)
+	}
 
 	// Recheck if server closed in mutex
 	if wrk.IsClosed() {
-		conn.Close()
 		return ErrWorkerClosed
 	}
 	link.Reset(conn)
@@ -468,7 +504,6 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 	wrk.log.Debug("Invoke heartbeater(%v)", link.ID())
 	if err := wrk.heartbeater.SendToLink(link, protocol.PONG_FOR_DATA); err != nil {
 		wrk.log.Warn("Heartbeat(%v) err: %v", link.ID(), err)
-		link.Close()
 		return err
 	}
 
@@ -591,7 +626,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 		}
 
 		left := rsp.markAttempt()
-		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(rsp.maxAttempts()-left-1)))
+		retryIn := DialTimeout * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(rsp.maxAttempts()-left-1)))
 		if left > 0 {
 			wrk.log.Warn("Error on flush response(%v), retry in %v: %v", rsp, retryIn, err)
 			go func() {
@@ -610,8 +645,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	rsp.close()
 }
 
-func (wrk *Worker) waitDelay(delay time.Duration) time.Duration {
-	<-time.After(delay)
+func (wrk *Worker) nextDelay(delay time.Duration) time.Duration {
 	after := delay * RetrialBackoffFactor
 	if after > RetrialMaxDelay {
 		after = RetrialMaxDelay
@@ -667,6 +701,7 @@ func (wrk *Worker) clearDataLinksLocked() {
 		link.Close()
 		wrk.log.Debug("%v cleared", link)
 	}
+	wrk.log.Info("Data links cleared.")
 }
 
 func (wrk *Worker) updateSpareDLs(change int32, reports ...time.Time) int32 {
