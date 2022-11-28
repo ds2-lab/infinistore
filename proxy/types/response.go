@@ -134,6 +134,10 @@ func (rsp *Response) WaitFlush(cancelable bool) error {
 		case <-rsp.ctx.Done():
 			rsp.abandon = true
 			rsp.lastError = context.Canceled
+			// Register finalizer to wait for the close of the stream.
+			rsp.OnFinalize(func() {
+				<-chWait
+			})
 		}
 		rsp.cancel()
 	}
