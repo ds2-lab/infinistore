@@ -334,6 +334,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			if rsp == nil {
 				return
 			} else if rsp.IsAbandon() {
+				conn.log.Debug("Abandoned %v", &rsp.Id)
 				if conn.control {
 					// Consume the request in the queue, unblock queue, and wait for the next request.
 					conn.SetResponse(rsp)
@@ -439,16 +440,17 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 		return ErrConnectionClosed
 	}
 
+	select {
+	case <-conn.done:
+	default:
+		close(conn.done)
+	}
+
 	// Signal closed only. This allow ongoing transmission to finish.
 	if reason != "" {
 		conn.log.Warn("Signal to close:%s.", reason)
 	} else {
 		conn.log.Debug("Signal to close.")
-	}
-	select {
-	case <-conn.done:
-	default:
-		close(conn.done)
 	}
 
 	closeConn := func(check bool) {
@@ -769,8 +771,8 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 func (conn *Connection) closeStream(stream io.Closer, prompt string, id *types.Id) {
 	// To keep the connection being resued (due to limited Lambda open files), avoid close the connnection.
 	if err := stream.Close(); err != nil && !conn.IsClosed() {
+		conn.log.Debug("%s %v: %v", prompt, id, err)
 		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
-		conn.log.Warn("%s %v: %v", prompt, id, err)
 	}
 }
 
@@ -879,7 +881,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
-		conn.log.Debug("Request not found: %s, can be fulfilled already.", reqId)
+		conn.log.Debug("Request not found: %v, can be fulfilled already.", &rsp.Id)
 		// Set response and exhaust value
 		conn.SetResponse(rsp)
 		conn.closeStream(stream, "Failed to skip bulk on request mismatch", &rsp.Id)
@@ -931,9 +933,9 @@ func (conn *Connection) getHandler(start time.Time) {
 	// Close will block until the stream is flushed.
 	if err := rsp.WaitFlush(true); err != nil {
 		if err != context.Canceled {
-			conn.log.Warn("Failed to stream %s: %v", reqId, err)
+			conn.log.Warn("Failed to stream %v: %v", &rsp.Id, err)
 		} else {
-			conn.log.Debug("Abandoned streaming %s", reqId)
+			conn.log.Debug("Abandoned streaming %v", &rsp.Id)
 		}
 	} else {
 		status := counter.AddFlushed(chunk)
