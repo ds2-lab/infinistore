@@ -14,7 +14,6 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
@@ -73,7 +72,7 @@ type Request struct {
 	leftAttempts     int
 	reason           error
 	responseTimeout  time.Duration
-	responded        promise.Promise
+	responded        unsafe.Pointer // promise.Promise
 
 	// Shared if request to be send to multiple lambdas
 	response *response
@@ -176,7 +175,7 @@ func (req *Request) PrepareForDel(conn Conn) {
 }
 
 func (req *Request) ToRecover() *Request {
-	recover := *req
+	recover := *req // Shadow copy, req.response get shared.
 	recover.Cmd = protocol.CMD_RECOVER
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
@@ -282,16 +281,16 @@ func (req *Request) IsResponse(rsp *Response) bool {
 // 2. Ignore err if the request copy is optional.
 // 3. Exclusively set response for first responder.
 func (req *Request) SetResponse(rsp interface{}) (err error) {
-	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
 	// Responsed promise has high priority because:
 	// * The response promise is associated with the sent request.
 	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
-	responded := req.responded
+	responded := promise.LoadPromise(&req.responded)
 	if responded != nil && !responded.IsResolved() {
 		req.responded = nil
-		responded.Resolve(rsp)
+		responded.Resolve(nil)
 	}
 
 	// Ignore err if request is optional
@@ -331,10 +330,17 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	if req.response.client == nil {
 		return ErrNoClient
 	}
-	ret := req.response.client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
+
+	response, ok := rsp.(*Response)
+	if ok {
+		response.request = req
+		err = req.response.client.AddResponses(response)
+	} else {
+		err = req.response.client.AddResponses(&proxyResponse{response: rsp, request: req})
+	}
 	// Release reference so chan can be garbage collected.
 	req.response.client = nil
-	return ret
+	return err
 }
 
 // Only appliable to GET so far.
@@ -355,11 +361,13 @@ func (req *Request) Abandon() error {
 }
 
 func (req *Request) Timeout(opts ...int) (err error) {
-	defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
+	// responseTimeout has been calculated in PrepareForXXX()
 	if req.responseTimeout < protocol.GetHeaderTimeout() {
 		req.responseTimeout = protocol.GetHeaderTimeout()
 	}
+
 	// Initialize promise
 	p := req.initPromise(opts...)
 	// Set timeout
@@ -370,6 +378,10 @@ func (req *Request) Timeout(opts ...int) (err error) {
 	}
 	// Wait for timeout
 	return p.Timeout()
+}
+
+func (req *Request) ResponseTimeout() time.Duration {
+	return req.responseTimeout
 }
 
 func (req *Request) Response() *Response {
@@ -385,11 +397,8 @@ func (req *Request) Response() *Response {
 }
 
 func (req *Request) initPromise(opts ...int) promise.Promise {
-	responded := req.responded
-	if responded == nil {
-		responded = promise.NewPromise()
-		req.responded = responded
-	}
+	responded := promise.InitPromise(&req.responded)
+
 	if len(opts) > 0 && opts[0]&DEBUG_INITPROMISE_WAIT > 0 {
 		<-time.After(50 * time.Millisecond)
 	}
