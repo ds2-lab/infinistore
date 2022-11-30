@@ -212,11 +212,19 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	cmd := c.Name
 	finalize := func(ret *types.OpRet, ds ...time.Duration) {
 		Server.WaitAck(c.Name, func() {
-			if ret != nil && ret.IsDelayed() {
+			// Wait if the ret has not been concluded.
+			if ret.IsDelayed() {
 				ret.Wait()
+			}
+
+			// Output experiment data.
+			if err := ret.Error(); err == nil {
 				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
 			} else {
-				// Only if error
+				// If the setstream err is net error (timeout), cut the line.
+				if util.IsConnectionFailed(err) {
+					Server.SetFailure(client, err)
+				}
 				collector.AddRequest(t, types.OP_SET, "500", reqId, chunkId, 0, 0, time.Since(t), 0, session.Id)
 			}
 			session.Timeout.DoneBusyWithReset(extension, cmd)
@@ -233,8 +241,9 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		Server.AddResponses(errRsp, client)
 		if err := errRsp.Flush(); err != nil {
 			log.Error("Error on flush(error 500): %v", err)
+			// Ignore, network error will be handled by redeo.
 		}
-		finalize(nil)
+		finalize(types.OpError(err))
 		return
 	}
 
@@ -247,18 +256,11 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	err = ret.Error()
 	if err != nil {
 		errRsp.Error = err
-		log.Error("%v", err)
 		Server.AddResponses(errRsp, client)
-
 		if err := errRsp.Flush(); err != nil {
 			log.Error("Error on flush(error 500): %v", err)
 			// Ignore, network error will be handled by redeo.
 		}
-		// If the setstream err is net error (timeout), cut the line.
-		if util.IsConnectionFailed(err) {
-			Server.SetFailure(client, "set streaming error", err)
-		}
-
 		finalize(ret)
 		return
 	}
@@ -276,14 +278,11 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		err := ret.Wait()
 		if err != nil {
 			errRsp.Error = err
-			log.Error("%v", err)
 			Server.AddResponses(errRsp, client)
-
 			if err := errRsp.Flush(); err != nil {
 				log.Error("Error on flush(error 500): %v", err)
 				// Ignore, network error will be handled by redeo.
 			}
-
 			finalize(ret)
 			return
 		}
@@ -295,8 +294,8 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		log.Error("Error on set::flush(set key %s): %v", key, err)
 		// Ignore
 	}
-
 	dt := time.Since(t)
+
 	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, dt, d1, d2)
 	finalize(ret, d1, d2, dt)
 }

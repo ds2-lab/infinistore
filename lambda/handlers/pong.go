@@ -27,7 +27,7 @@ var (
 
 type pong func(*worker.Link, int64, []byte) error
 
-type fail func(*worker.Link, string, error)
+type fail func(*worker.Link, error)
 
 type PongHandler struct {
 	// Pong limiter prevent pong being sent duplicatedly on launching lambda while a ping arrives
@@ -164,7 +164,7 @@ func (p *PongHandler) sendImpl(flags int64, payload []byte, link *worker.Link, r
 		go func() {
 			if p.requested.Timeout() != nil {
 				log.Warn("PONG timeout, disconnect")
-				p.fail(link, "pong timoeut", &PongError{error: errPongTimeout, flags: flags})
+				p.fail(link, &PongError{error: errPongTimeout, flags: flags})
 			}
 		}()
 	}
@@ -209,6 +209,6 @@ func sendPong(link *worker.Link, flags int64, payload []byte) error {
 	return nil
 }
 
-func setFailure(link *worker.Link, msg string, err error) {
-	store.Server.SetFailure(link, msg, err)
+func setFailure(link *worker.Link, err error) {
+	store.Server.SetFailure(link, err)
 }
