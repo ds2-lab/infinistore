@@ -285,6 +285,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	conn.prePushRequest(req)
 	if req.IsResponded() {
 		conn.popRequest(req)
+		conn.log.Debug("Abandon requesting %v: responded.", &req.Id)
 		return
 	}
 
@@ -339,9 +340,20 @@ func (conn *Connection) sendRequest(req *types.Request) {
 				} else {
 					// If a request is abandoned, the response must be set.
 					// If abandoned before receiving response from Lambda, the rsp is generated in types.Request and
-					// Wait() will return immiediately. We have to close the data link to prevent the link from being reused and
-					// serve next request ASAP.
-					conn.CloseWithReason("Abandon in sendRequest", false) // Can peeking, close asynchrously.
+					// Wait() will return immiediately.
+					// To keep reusing and avoid disconnection the connection (due to Lambda open files limit),
+					// we wait for the response by tring inserting a new dummy request to the wait queue. Other reasons are:
+					// 1: The response are this link has already been late, keep pushing request on this link will only make next request worse.
+					// 2: By keep instance busy, we encourage other requests to find a better instance.
+					select {
+					case conn.chanWait <- &types.Request{}:
+						// Once the queue is free (because we can inserted into it), consume it to allow next request.
+						// This approach can be only used for data link, because no request will be sent on data link before it is returned to the link manager.
+						<-conn.chanWait
+					// Guarded by the same timeout for original request. It is avaiable after we call the req.Timeout() before.
+					case <-time.After(req.ResponseTimeout()):
+						conn.CloseWithReason("timeout on waiting for response of abandoned request", false)
+					}
 				}
 			} else {
 				// Wait for response to finalize or connection to close.
@@ -428,7 +440,11 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 	}
 
 	// Signal closed only. This allow ongoing transmission to finish.
-	conn.log.Debug("Signal to close:%s.", reason)
+	if reason != "" {
+		conn.log.Warn("Signal to close:%s.", reason)
+	} else {
+		conn.log.Debug("Signal to close.")
+	}
 	select {
 	case <-conn.done:
 	default:
@@ -751,10 +767,8 @@ func (conn *Connection) closeIfError(prompt string, err error) bool {
 }
 
 func (conn *Connection) closeStream(stream io.Closer, prompt string, id *types.Id) {
-	if !conn.control {
-		// For data link, close directly so next request can be served.
-		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
-	} else if err := stream.Close(); err != nil && !conn.IsClosed() { // For control link, skip stream will be faster.
+	// To keep the connection being resued (due to limited Lambda open files), avoid close the connnection.
+	if err := stream.Close(); err != nil && !conn.IsClosed() {
 		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
 		conn.log.Warn("%s %v: %v", prompt, id, err)
 	}
@@ -915,13 +929,12 @@ func (conn *Connection) getHandler(start time.Time) {
 	}
 
 	// Close will block until the stream is flushed.
-	if err := rsp.WaitFlush(!conn.control); err != nil {
+	if err := rsp.WaitFlush(true); err != nil {
 		if err != context.Canceled {
 			conn.log.Warn("Failed to stream %s: %v", reqId, err)
 		} else {
-			conn.log.Debug("Abandon streaming %s", reqId)
+			conn.log.Debug("Abandoned streaming %s", reqId)
 		}
-		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
 	} else {
 		status := counter.AddFlushed(chunk)
 		// conn.log.Debug("Flushed %v. Fulfilled: %v(%x), %v", rsp.Id, counter.IsFulfilled(status), status, counter.IsAllFlushed(status))

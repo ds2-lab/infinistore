@@ -6,32 +6,38 @@ import (
 	"fmt"
 	"sync"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
 type ResponseFinalizer func()
 
-type ProxyResponse struct {
-	Response interface{}
-	Request  *Request
+type ProxyResponse interface {
+	redeo.Contextable
+	Request() *Request
+	Response() interface{}
+}
 
-	ctx context.Context
+type proxyResponse struct {
+	protocol.Contextable
+	response interface{}
+	request  *Request
 }
 
 // Context return the response context
-func (r *ProxyResponse) Context() context.Context {
-	if r.ctx != nil {
-		return r.ctx
-	}
-	return context.Background()
+func (r *proxyResponse) Response() interface{} {
+	return r.response
 }
 
 // SetContext sets the client's context
-func (r *ProxyResponse) SetContext(ctx context.Context) {
-	r.ctx = ctx
+func (r *proxyResponse) Request() *Request {
+	return r.request
 }
 
 type Response struct {
+	protocol.Contextable
+
 	Id         Id
 	Cmd        string
 	Size       string
@@ -39,14 +45,13 @@ type Response struct {
 	bodyStream resp.AllReadCloser
 	Status     int64 // Customized status. For GET: 1 - recovered
 
+	request   *Request
 	finalizer ResponseFinalizer
 	abandon   bool // Abandon flag, set in Request class.
 
-	w         resp.ResponseWriter
-	done      sync.WaitGroup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	lastError error
+	w      resp.ResponseWriter
+	done   sync.WaitGroup
+	cancel context.CancelFunc
 }
 
 func NewResponse(cmd string) *Response {
@@ -55,12 +60,22 @@ func NewResponse(cmd string) *Response {
 	return rsp
 }
 
+func (rsp *Response) Response() interface{} {
+	return rsp
+}
+
+func (rsp *Response) Request() *Request {
+	return rsp.request
+}
+
 func (rsp *Response) String() string {
 	return fmt.Sprintf("%s %v", rsp.Cmd, &rsp.Id)
 }
 
 func (rsp *Response) SetBodyStream(stream resp.AllReadCloser) {
-	rsp.ctx, rsp.cancel = context.WithCancel(context.Background())
+	var ctx context.Context
+	ctx, rsp.cancel = context.WithCancel(rsp.Context())
+	rsp.SetContext(ctx)
 	rsp.bodyStream = stream
 }
 
@@ -78,6 +93,15 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
 	w.AppendBulkString(rsp.Size)
 	if rsp.Body == nil && rsp.bodyStream == nil {
 		w.AppendBulkString("-1")
+	} else if rsp.Context().Err() != nil { // Here is a good place to test the cancellation again if the rsp was cancelled before the client is available.
+		// Cancelled request is treated as abandon.
+		w.AppendBulkString("-1")
+		// Clear body
+		rsp.Body = nil
+		if holdable, ok := rsp.bodyStream.(resp.Holdable); ok {
+			holdable.Unhold()
+		}
+		rsp.bodyStream = nil
 	} else {
 		w.AppendBulkString(rsp.Id.ChunkId)
 	}
@@ -102,16 +126,20 @@ func (rsp *Response) Flush() error {
 				holdable.Unhold()
 			}
 			// If error is cause by the CancelFlush, override the return error.
-			if rsp.lastError != nil {
-				return rsp.lastError
+			if rsp.Context().Err() != nil {
+				return rsp.Context().Err()
 			} else {
 				return err
 			}
 		}
 	}
 
-	// If body streaming is successful, we are good.
-	return w.Flush()
+	// Override the error if the response is abandoned and err occurred.
+	err := w.Flush()
+	if err != nil && rsp.Context().Err() != nil {
+		err = rsp.Context().Err()
+	}
+	return err
 }
 
 func (rsp *Response) IsAbandon() bool {
@@ -129,19 +157,28 @@ func (rsp *Response) WaitFlush(cancelable bool) error {
 		go func() {
 			chWait <- rsp.bodyStream.Close()
 		}()
+		defer rsp.cancel()
+
 		select {
-		case rsp.lastError = <-chWait:
-		case <-rsp.ctx.Done():
+		case <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
+			rsp.CancelFlush()
+			// break
+		case <-rsp.Context().Done():
 			rsp.abandon = true
-			rsp.lastError = context.Canceled
+			// Disconnect the client if it's available.
+			client := redeo.GetClient(rsp.Context())
+			if client != nil {
+				client.Conn().Close()
+			} // else test cancellation after client is available.
+
 			// Register finalizer to wait for the close of the stream.
 			rsp.OnFinalize(func() {
 				<-chWait
 			})
+			return rsp.Context().Err()
 		}
-		rsp.cancel()
 	}
-	return rsp.lastError
+	return nil
 }
 
 func (rsp *Response) CancelFlush() {
@@ -154,8 +191,8 @@ func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {
 	if rsp.finalizer != nil {
 		finalizer = func(oldFinalizer ResponseFinalizer, newFinalizer ResponseFinalizer) ResponseFinalizer {
 			return func() {
-				oldFinalizer()
 				newFinalizer()
+				oldFinalizer()
 			}
 		}(rsp.finalizer, finalizer)
 	}

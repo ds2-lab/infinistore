@@ -15,6 +15,11 @@ import (
 const (
 	LinkBucketSize       = 10
 	UnlimitedActiveLinks = 0
+	// Max spare links
+	// Set to 2 to reserve 1 for ready and 1 for buffering.
+	// Set to MAX_CONCURRENCY + 1 to avoid links being frenquently closed and re-created.
+	// Can be override dynamically by instance.SetMaxActiveDataLinks().
+	ActiveLinks = 2
 )
 
 var (
@@ -22,11 +27,6 @@ var (
 	ErrLinkRequestTimeout = &LambdaError{error: errors.New("link request timeout"), typ: LambdaErrorTimeout}
 	ErrLinkManagerReset   = &LambdaError{error: errors.New("link manager reset")}
 	ErrNilLink            = &LambdaError{error: errors.New("unexpected nil link")}
-
-	// Max spare links
-	// Set to MAX_CONCURRENCY to reserve 1 for ready and 1 for buffering.
-	// Set to MAX_CONCURRENCY + 1 to avoid links being frenquently closed and re-created.
-	ActiveLinks = MAX_CONCURRENCY + 1
 
 	// Keep following variables as false. They are only for unit tests.
 	UnitTestMTC1 = false

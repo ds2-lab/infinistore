@@ -275,29 +275,29 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 
 // HandleCallback callback handler
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
-	wrapper := r.(*types.ProxyResponse)
+	wrapper := r.(types.ProxyResponse)
 	client := redeo.GetClient(wrapper.Context())
 
-	switch rsp := wrapper.Response.(type) {
+	switch rsp := wrapper.Response().(type) {
 	case *types.Response:
 		t := time.Now()
-		switch wrapper.Request.Cmd {
+		switch wrapper.Request().Cmd {
 		case protocol.CMD_RECOVER:
 			// on GET request from reclaimed instances, it will get recovered from new instances,
 			// the response of this cmd_recover's behavior is the same as cmd_get
 			fallthrough
 		case protocol.CMD_GET:
-			rsp.Size = strconv.FormatInt(wrapper.Request.Info.(*metastore.Meta).Size, 10)
-			rsp.PrepareForGet(w, wrapper.Request.Seq)
+			rsp.Size = strconv.FormatInt(wrapper.Request().Info.(*metastore.Meta).Size, 10)
+			rsp.PrepareForGet(w, wrapper.Request().Seq)
 		case protocol.CMD_SET:
-			rsp.PrepareForSet(w, wrapper.Request.Seq)
+			rsp.PrepareForSet(w, wrapper.Request().Seq)
 			// Added by Tianium 20221102
 			// Confirm the meta
-			if wrapper.Request.AllSucceeded {
-				wrapper.Request.Info.(*metastore.Meta).ConfirmCreated()
+			if wrapper.Request().AllSucceeded {
+				wrapper.Request().Info.(*metastore.Meta).ConfirmCreated()
 			}
 		default:
-			rsp := server.NewErrorResponse(w, wrapper.Request.Seq, "unable to respond unsupport command %s", wrapper.Request.Cmd)
+			rsp := server.NewErrorResponse(w, wrapper.Request().Seq, "unable to respond unsupport command %s", wrapper.Request().Cmd)
 			if err := rsp.Flush(); err != nil {
 				client.Conn().Close()
 			}
@@ -322,47 +322,47 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		//	"Server Flush time is", time2,
 		//	"Chunk body len is ", len(rsp.Body))
 		tgg := time.Now()
-		if _, err := collector.CollectRequest(collector.LogRequestProxyResponse, wrapper.Request.CollectorEntry,
+		if _, err := collector.CollectRequest(collector.LogRequestProxyResponse, wrapper.Request().CollectorEntry,
 			int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano()); err != nil {
 			p.log.Warn("LogRequestProxyResponse err %v", err)
 		}
 
 		// Async logic
-		if wrapper.Request.Cmd == protocol.CMD_GET {
+		if wrapper.Request().Cmd == protocol.CMD_GET {
 			// Build control command
 			recoverReqId := uuid.New().String()
 			control := &types.Control{
 				Cmd: protocol.CMD_RECOVER,
 				Request: &types.Request{
-					Id: types.Id{ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId},
+					Id: types.Id{ReqId: recoverReqId, ChunkId: wrapper.Request().Id.ChunkId},
 					// InsId:      wrapper.Request,      // Leave empty, the cluster will set it on relocating.
 					Cmd:        protocol.CMD_RECOVER,
 					RetCommand: protocol.CMD_RECOVER,
-					BodySize:   wrapper.Request.BodySize,
-					Key:        wrapper.Request.Key,
-					Info:       wrapper.Request.Info,
+					BodySize:   wrapper.Request().BodySize,
+					Key:        wrapper.Request().Key,
+					Info:       wrapper.Request().Info,
 					Changes:    types.CHANGE_PLACEMENT,
 				},
 			}
 
 			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
-			instance, triggered, err := p.cluster.TryRelocate(wrapper.Request.Info, wrapper.Request.Id.Chunk(), control)
+			instance, triggered, err := p.cluster.TryRelocate(wrapper.Request().Info, wrapper.Request().Id.Chunk(), control)
 			if !triggered {
 				// pass
 			} else if err != nil {
-				p.log.Debug("Relocation triggered. Failed to relocate %s(%d): %v", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), err)
+				p.log.Debug("Relocation triggered. Failed to relocate %s(%d): %v", wrapper.Request().Key, p.getPlacementFromRequest(wrapper.Request()), err)
 			} else {
-				p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request.Key, p.getPlacementFromRequest(wrapper.Request), instance.Id())
+				p.log.Debug("Relocation triggered. Relocating %s(%d) to %d", wrapper.Request().Key, p.getPlacementFromRequest(wrapper.Request()), instance.Id())
 			}
 		}
 		// Use more general way to deal error
 	default:
-		collector.CollectRequest(collector.LogRequestAbandon, wrapper.Request.CollectorEntry)
-		r := server.NewErrorResponse(w, wrapper.Request.Seq, "%v", rsp)
+		collector.CollectRequest(collector.LogRequestAbandon, wrapper.Request().CollectorEntry)
+		r := server.NewErrorResponse(w, wrapper.Request().Seq, "%v", rsp)
 		// Added by Tianium 20221102
 		// Fail the meta
-		if wrapper.Request.Cmd == protocol.CMD_SET {
-			wrapper.Request.Info.(*metastore.Meta).Invalidate()
+		if wrapper.Request().Cmd == protocol.CMD_SET {
+			wrapper.Request().Info.(*metastore.Meta).Invalidate()
 		}
 		if err := r.Flush(); err != nil {
 			client.Conn().Close()

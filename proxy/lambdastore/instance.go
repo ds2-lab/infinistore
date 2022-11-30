@@ -229,7 +229,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.instance = ins
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
-	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY)
+	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY + 1)
 	return ins
 }
 
@@ -333,8 +333,9 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 	}
 
-	ins.log.Debug("Dispatching %v, %d queued", cmd, len(ins.chanCmd))
-	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && ins.IsBusy(cmd) {
+	n, busy := ins.IsBusy(cmd)
+	ins.log.Debug("Dispatching %v, %d queued", cmd, n)
+	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && busy {
 		return ErrInstanceBusy
 	}
 
@@ -363,15 +364,16 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	return nil
 }
 
-func (ins *Instance) IsBusy(cmd types.Command) bool {
+func (ins *Instance) IsBusy(cmd types.Command) (int, bool) {
 	numOutBound := atomic.LoadInt32(&ins.numOutbound)
 	numInBound := atomic.LoadInt32(&ins.numInbound)
-	if int(numOutBound+numInBound)+len(ins.chanCmd) >= MAX_CONCURRENCY {
-		return true
+	n := int(numOutBound+numInBound) + len(ins.chanCmd)
+	if n >= MAX_CONCURRENCY {
+		return n, true
 	} else if cmd.String() == protocol.CMD_SET {
-		return numOutBound > 0
+		return n, numOutBound > 0
 	} else {
-		return false
+		return n, false
 	}
 }
 

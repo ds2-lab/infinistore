@@ -242,7 +242,8 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	client.Conn().SetReadDeadline(protocol.GetBodyDeadline(valReader.Len()))
 	ret := Store.SetStream(key, chunkId, valReader)
 	client.Conn().SetReadDeadline(time.Time{})
-	d1 := time.Since(t)
+	t2 := time.Now()
+	d1 := t2.Sub(t)
 	err = ret.Error()
 	if err != nil {
 		errRsp.Error = err
@@ -255,7 +256,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		}
 		// If the setstream err is net error (timeout), cut the line.
 		if util.IsConnectionFailed(err) {
-			Server.SetFailure(client, err)
+			Server.SetFailure(client, "set streaming error", err)
 		}
 
 		finalize(ret)
@@ -272,19 +273,31 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	BuildPiggyback(response)
 
 	if !session.Input.IsWaitForCOSDisabled() {
-		ret.Wait()
-	}
+		err := ret.Wait()
+		if err != nil {
+			errRsp.Error = err
+			log.Error("%v", err)
+			Server.AddResponses(errRsp, client)
 
-	t2 := time.Now()
+			if err := errRsp.Flush(); err != nil {
+				log.Error("Error on flush(error 500): %v", err)
+				// Ignore, network error will be handled by redeo.
+			}
+
+			finalize(ret)
+			return
+		}
+	}
+	d2 := time.Since(t2)
+
 	Server.AddResponses(response, client)
 	if err := response.Flush(); err != nil {
 		log.Error("Error on set::flush(set key %s): %v", key, err)
 		// Ignore
 	}
-	d2 := time.Since(t2)
 
 	dt := time.Since(t)
-	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v", link, key, chunkId, dt, d1)
+	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, dt, d1, d2)
 	finalize(ret, d1, d2, dt)
 }
 
