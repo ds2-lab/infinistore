@@ -120,7 +120,7 @@ var _ = Describe("PongHandler", func() {
 
 		pong := newTestPongHandler(succeedPong)
 		pong.pong = getTimeoutPong(pong, 1)
-		pong.fail = func(_ *worker.Link, msg string, err error) {
+		pong.fail = func(_ *worker.Link, err error) {
 			defer GinkgoRecover()
 
 			errPong, ok := err.(*PongError)
@@ -150,7 +150,7 @@ var _ = Describe("PongHandler", func() {
 
 		pong := newTestPongHandler(succeedPong)
 		pong.pong = getTimeoutPong(pong, 1)
-		pong.fail = func(_ *worker.Link, msg string, err error) {
+		pong.fail = func(_ *worker.Link, err error) {
 			defer GinkgoRecover()
 
 			Fail("should not fail")
