@@ -49,9 +49,10 @@ type Response struct {
 	finalizer ResponseFinalizer
 	abandon   bool // Abandon flag, set in Request class.
 
-	w      resp.ResponseWriter
-	done   sync.WaitGroup
-	cancel context.CancelFunc
+	w         resp.ResponseWriter
+	done      sync.WaitGroup
+	ctxCancel context.CancelFunc
+	ctxDone   <-chan struct{}
 }
 
 func NewResponse(cmd string) *Response {
@@ -74,7 +75,8 @@ func (rsp *Response) String() string {
 
 func (rsp *Response) SetBodyStream(stream resp.AllReadCloser) {
 	var ctx context.Context
-	ctx, rsp.cancel = context.WithCancel(rsp.Context())
+	ctx, rsp.ctxCancel = context.WithCancel(rsp.Context())
+	rsp.ctxDone = ctx.Done() // There is bug to laziliy call the ctx.Done() in highly parallelized settings. Initiate and cache the done channel to avoid the bug.
 	rsp.SetContext(ctx)
 	rsp.bodyStream = stream
 }
@@ -93,7 +95,7 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
 	w.AppendBulkString(rsp.Size)
 	if rsp.Body == nil && rsp.bodyStream == nil {
 		w.AppendBulkString("-1")
-	} else if rsp.Context().Err() != nil { // Here is a good place to test the cancellation again if the rsp was cancelled before the client is available.
+	} else if rsp.Context().Err() != nil { // Here is a good place to test the ctxCancellation again if the rsp was ctxCancelled before the client is available.
 		// Cancelled request is treated as abandon.
 		w.AppendBulkString("-1")
 		// Clear body
@@ -146,13 +148,13 @@ func (rsp *Response) IsAbandon() bool {
 	return rsp.abandon
 }
 
-func (rsp *Response) WaitFlush(cancelable bool) error {
+func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 	if rsp.bodyStream != nil {
-		if !cancelable {
+		if !ctxCancelable {
 			return rsp.bodyStream.Close()
 		}
 
-		// Allow the wait be canceled.
+		// Allow the wait be ctxCanceled.
 		chWait := make(chan error)
 		go func() {
 			chWait <- rsp.bodyStream.Close()
@@ -163,13 +165,13 @@ func (rsp *Response) WaitFlush(cancelable bool) error {
 		case err := <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
 			return err
 			// break
-		case <-rsp.Context().Done():
+		case <-rsp.ctxDone:
 			rsp.abandon = true
 			// Disconnect the client if it's available.
 			client := redeo.GetClient(rsp.Context())
 			if client != nil {
 				client.Conn().Close()
-			} // else test cancellation after client is available.
+			} // else test ctxCancellation after client is available.
 
 			// Register finalizer to wait for the close of the stream.
 			rsp.OnFinalize(func() {
@@ -182,8 +184,8 @@ func (rsp *Response) WaitFlush(cancelable bool) error {
 }
 
 func (rsp *Response) CancelFlush() {
-	if rsp.cancel != nil {
-		rsp.cancel()
+	if rsp.ctxCancel != nil {
+		rsp.ctxCancel()
 	}
 }
 
