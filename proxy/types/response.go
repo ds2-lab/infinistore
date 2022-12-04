@@ -157,11 +157,11 @@ func (rsp *Response) WaitFlush(cancelable bool) error {
 		go func() {
 			chWait <- rsp.bodyStream.Close()
 		}()
-		defer rsp.cancel()
+		defer rsp.CancelFlush()
 
 		select {
-		case <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
-			rsp.CancelFlush()
+		case err := <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
+			return err
 			// break
 		case <-rsp.Context().Done():
 			rsp.abandon = true
