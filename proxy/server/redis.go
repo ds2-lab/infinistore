@@ -73,9 +73,11 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 
 // from client
 func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.CommandStream) {
-	client := a.getClient(redeo.GetClient(c.Context()))
+	client, rid := a.getClient(redeo.GetClient(c.Context()))
 
 	key, _ := c.NextArg().String()
+	a.log.Warn("Client(%d), setting key %s", rid, key)
+
 	bodyReader, err := c.Next()
 	if err != nil {
 		w.AppendError(err.Error())
@@ -99,14 +101,17 @@ func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		w.AppendInlineString("OK")
 		w.Flush()
 	}
+
+	a.log.Warn("Client(%d), set key %s: %s", rid, key, util.Ifelse(err == nil, "200", "500"))
 	collector.Collect(collector.LogEndtoEnd, protocol.CMD_SET, util.Ifelse(err == nil, "200", "500"),
 		int64(len(body)), t.UnixNano(), int64(dt))
 }
 
 func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
-	client := a.getClient(redeo.GetClient(c.Context()))
+	client, rid := a.getClient(redeo.GetClient(c.Context()))
 
 	key := c.Arg(0).String()
+	a.log.Warn("Client(%d), getting key %s", rid, key)
 
 	t := time.Now()
 	_, reader, err := client.EcGet(key)
@@ -128,10 +133,13 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 		reader.Close()
 		code = "200"
 	}
+	a.log.Warn("Client(%d), got key %s: %s", rid, key, code)
 	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, code, int64(size), t.UnixNano(), int64(dt))
 }
 
-func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
+func (a *RedisAdapter) getClient(redeoClient *redeo.Client) (*infinicache.Client, uint64) {
+	id := redeoClient.ID()
+	a.log.Warn("Client(%d), start serving request", id)
 	shortcut := net.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d+a.p)
 	if shortcut.Client == nil {
 		var addresses []string
@@ -158,7 +166,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 			net.Shortcut.Invalidate(shortcut)
 		}()
 	}
-	return shortcut.Client.(*infinicache.Client)
+	return shortcut.Client.(*infinicache.Client), id
 }
 
 func (a *RedisAdapter) Close() {
