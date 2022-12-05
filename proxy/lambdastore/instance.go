@@ -131,6 +131,7 @@ type InstanceManager interface {
 	Recycle(types.LambdaDeployment) error
 	GetBackupCandidates() mapreduce.Iterator
 	GetDelegates() []*Instance
+	GetServePort(uint64) int
 }
 
 type Relocator interface {
@@ -162,6 +163,7 @@ type Instance struct {
 	*Deployment
 	Meta
 
+	port         int // The port the instance can connect to.
 	chanCmd      chan types.Command
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
@@ -230,6 +232,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
 	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY + 1)
+	ins.port = CM.GetServePort(id)
 	return ins
 }
 
@@ -836,7 +839,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		if triggered {
 			// Pass to timeout check.
 			ins.validated.SetTimeout(TriggerTimeout)
-			connectTimeout /= time.Duration(BackoffFactor) // Deduce by factor, so the timeout of next attempt (ping) start from DefaultConnectTimeout.
+			connectTimeout = DefaultConnectTimeout // Reset timeout to defaultConnectTimeout.
 		} else if opt.WarmUp && !global.IsWarmupWithFixedInterval() {
 			// Instance is warm, skip unnecssary warming up.
 			return ins.flagValidatedLocked(ins.lm.GetControl()) // Skip any check in the "FlagValidated".
@@ -1039,7 +1042,7 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 		Sid:     ins.initSession(),
 		Cmd:     protocol.CMD_PING,
 		Id:      ins.Id(),
-		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
+		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, ins.port),
 		Prefix:  global.Options.Prefix,
 		Log:     global.Options.GetLambdaLogLevel(),
 		Flags:   global.LambdaFlags | localFlags,

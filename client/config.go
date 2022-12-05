@@ -15,7 +15,4 @@ var (
 
 	// Timeout The timeout for sending header fields, and reading response headers.
 	HeaderTimeout = 3 * time.Second
-
-	// Timeout The timeout for sending header fields, and reading response headers.
-	PreflightTimeout = 20 * time.Millisecond
 )

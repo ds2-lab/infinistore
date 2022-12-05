@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	ErrUnsupported = errors.New("unsupported")
+	ErrUnsupported   = errors.New("unsupported")
 	ErrClusterClosed = errors.New("err cluster closed")
 )
 
@@ -22,4 +22,8 @@ type Cluster interface {
 	GetPlacer() metastore.Placer
 	CollectData()
 	Close()
+}
+
+type ServerProvider interface {
+	GetServePort(uint64) int
 }

@@ -89,12 +89,7 @@ func main() {
 		log.Error("Failed to listen clients: %v", err)
 		return
 	}
-	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
-	if err != nil {
-		log.Error("Failed to listen lambdas: %v", err)
-		return
-	}
-	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
+	log.Info("Start listening to clients(port 6378)")
 
 	// Start Dashboard
 	if !options.NoDashboard {
@@ -140,7 +135,7 @@ func main() {
 		// log.Info("Collecting data...")
 		// prxy.CollectData()
 
-		prxy.Close(lambdaLis)
+		prxy.Close()
 		redis.Close()
 		done.Done()
 	}()
@@ -148,7 +143,7 @@ func main() {
 	// initiate lambda store proxy
 	go func() {
 		defer finalize(true)
-		prxy.Serve(lambdaLis)
+		prxy.Wait()
 	}()
 	prxy.WaitReady()
 	if dash != nil {

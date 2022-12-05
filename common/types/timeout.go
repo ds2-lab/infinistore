@@ -6,7 +6,7 @@ var (
 	HeaderTimeout     = 1 * time.Second
 	MinBodyTimeout    = 1 * time.Second
 	BandwidthFactor   = int64(100) // 1/bandwidth, while bandwidth = 10MB/s = 0.01B/ns for single connection
-	BodyTimeoutFactor = int64(5)
+	BodyTimeoutFactor = int64(10)
 )
 
 func GetDeadline(d time.Duration) time.Time {
