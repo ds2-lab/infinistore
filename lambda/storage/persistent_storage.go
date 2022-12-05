@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	// "strings"
@@ -18,11 +19,12 @@ import (
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 const (
-	CHUNK_KEY = "%schunks/%s"
+	CHUNK_KEY = "%schunks/%s%s"
 
 	// StorageSignalFlagForceCommit Indicate a PersistentStorage to commit regardless of any queued operations.
 	StorageSignalFlagForceCommit = 0x0001
@@ -31,6 +33,8 @@ const (
 var (
 	Concurrency = types.DownloadConcurrency
 	Buckets     = 1
+	Hasher      = &util.Hasher{}
+	Segmentor   = regexp.MustCompile(`[0-9a-f]{2}`)
 
 	ErrTrackerNotStarted = errors.New("tracker not started")
 )
@@ -203,7 +207,7 @@ func (s *PersistentStorage) SetRecovery(key string, chunkId string, size uint64,
 	ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
 	if err := downloader.Download(ctx, func(input *mys3.BatchDownloadObject) {
 		input.Object.Bucket = s.bucket(&chunk.Bucket)
-		input.Object.Key = aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, key))
+		input.Object.Key = aws.String(s.getS3Key(key))
 		input.Size = size
 		input.Writer = aws.NewWriteAtBuffer(chunk.Body)
 		input.After = func() error {
@@ -363,7 +367,7 @@ func (s *PersistentStorage) StartTracker() {
 
 						upParams := &s3manager.UploadInput{
 							Bucket: s.bucket(&op.LineageOp.Bucket),
-							Key:    aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, op.LineageOp.Key)),
+							Key:    aws.String(s.getS3Key(op.LineageOp.Key)),
 							Body:   bytes.NewReader(op.Body),
 						}
 						// Perform an upload.
@@ -476,6 +480,12 @@ func (s *PersistentStorage) onSignalTracker(signal StorageSignal) bool {
 		close(s.trackerStopped)
 	}
 	return true
+}
+
+func (s *PersistentStorage) getS3Key(key string) string {
+	hash := Hasher.Sum64([]byte(key))
+	segmented := string(Segmentor.ReplaceAll([]byte(strconv.FormatUint(hash, 16)), []byte("$0/")))
+	return fmt.Sprintf(CHUNK_KEY, s.s3prefix, segmented, key)
 }
 
 func (s *PersistentStorage) StopTracker() error {
