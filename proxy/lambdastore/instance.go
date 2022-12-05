@@ -130,7 +130,7 @@ type InstanceManager interface {
 	Recycle(types.LambdaDeployment) error
 	GetBackupCandidates() mapreduce.Iterator
 	GetDelegates() []*Instance
-	GetServePort() int
+	GetServePort(uint64) int
 }
 
 type Relocator interface {
@@ -230,7 +230,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	ins.backups.log = ins.log
 	ins.lm = NewLinkManager(ins)
 	ins.lm.SetMaxActiveDataLinks(MAX_CONCURRENCY + 1)
-	ins.port = CM.GetServePort()
+	ins.port = CM.GetServePort(id)
 	return ins
 }
 

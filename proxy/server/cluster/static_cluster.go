@@ -81,6 +81,9 @@ func NewStaticCluster(server ServerProvider, size int) *StaticCluster {
 		return c.group.All()
 	})
 
+	// Setup CM before instancelize instances.
+	lambdastore.CM = c
+
 	// Initialize instances
 	for i := c.group.StartIndex(); i < c.group.EndIndex(); i = i.Next() {
 		ins := pool.GetForGroup(c.group, i)

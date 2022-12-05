@@ -25,5 +25,5 @@ type Cluster interface {
 }
 
 type ServerProvider interface {
-	GetServePort() int
+	GetServePort(uint64) int
 }

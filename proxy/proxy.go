@@ -143,7 +143,7 @@ func main() {
 	// initiate lambda store proxy
 	go func() {
 		defer finalize(true)
-		prxy.Serve()
+		prxy.Wait()
 	}()
 	prxy.WaitReady()
 	if dash != nil {

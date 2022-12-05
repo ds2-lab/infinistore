@@ -55,7 +55,7 @@ func (im *TestInstanceManager) GetSlice(int) Slice {
 
 func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
 
-func (im *TestInstanceManager) GetServePort() int {
+func (im *TestInstanceManager) GetServePort(uint64) int {
 	return 0
 }
 

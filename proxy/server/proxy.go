@@ -34,6 +34,8 @@ type Proxy struct {
 	ports             int // Number of ports to listen
 	listeners         []net.Listener
 	roundRobinCounter uint64
+
+	done sync.WaitGroup
 }
 
 // initial lambda group
@@ -44,6 +46,9 @@ func New() *Proxy {
 		ports:     global.LambdaServePorts,
 		listeners: make([]net.Listener, global.LambdaServePorts),
 	}
+
+	p.Serve()
+
 	switch global.Options.GetClusterType() {
 	case config.StaticCluster:
 		p.cluster = cluster.NewStaticCluster(p, global.Options.GetNumFunctions())
@@ -52,13 +57,14 @@ func New() *Proxy {
 	}
 	p.placer = p.cluster.GetPlacer()
 
+	// Set CM before starting the cluster.
+	lambdastore.CM = p.cluster
+
 	// first group init
 	err := p.cluster.Start()
 	if err != nil {
 		p.log.Error("Failed to start cluster: %v", err)
 	}
-
-	lambdastore.CM = p.cluster
 
 	return p
 }
@@ -68,12 +74,15 @@ func (p *Proxy) GetStatsProvider() interface{} {
 }
 
 func (p *Proxy) Serve() {
-	var done sync.WaitGroup
+	p.log.Info("Initiating lambda servers")
 	for i := 0; i < p.ports; i++ {
-		done.Add(1)
-		go p.serve(p.port+i, &done)
+		p.done.Add(1)
+		go p.serve(p.port+i, &p.done)
 	}
-	done.Wait()
+}
+
+func (p *Proxy) Wait() {
+	p.done.Wait()
 }
 
 func (p *Proxy) serve(port int, done *sync.WaitGroup) {
@@ -86,6 +95,7 @@ func (p *Proxy) serve(port int, done *sync.WaitGroup) {
 		return
 	}
 	p.listeners[port-p.port] = lis
+	p.log.Info("Listening lambdas on %d", port)
 
 	for {
 		cn, err := lis.Accept()
@@ -99,17 +109,19 @@ func (p *Proxy) serve(port int, done *sync.WaitGroup) {
 }
 
 // GetServePort round-robin select a port to serve
-func (p *Proxy) GetServePort() int {
+func (p *Proxy) GetServePort(id uint64) int {
 	if p.ports == 1 {
 		return p.port
 	}
 
-	for {
+	for failed := 0; failed < p.ports; failed++ {
 		port := (atomic.AddUint64(&p.roundRobinCounter, 1) - 1) % uint64(p.ports)
 		if p.listeners[port] != nil {
 			return int(port) + p.port
 		}
 	}
+	// If no ports is available, simply return a port.
+	return 0
 }
 
 func (p *Proxy) WaitReady() {
