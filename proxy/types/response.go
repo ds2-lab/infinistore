@@ -149,15 +149,16 @@ func (rsp *Response) IsAbandon() bool {
 }
 
 func (rsp *Response) WaitFlush(ctxCancelable bool) error {
-	if rsp.bodyStream != nil {
+	stream := rsp.bodyStream
+	if stream != nil {
 		if !ctxCancelable {
-			return rsp.bodyStream.Close()
+			return stream.Close()
 		}
 
 		// Allow the wait be ctxCanceled.
 		chWait := make(chan error)
 		go func() {
-			chWait <- rsp.bodyStream.Close()
+			chWait <- stream.Close()
 		}()
 		defer rsp.CancelFlush()
 
