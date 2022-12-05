@@ -37,8 +37,12 @@ var (
 func init() {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	global.Log = log
-	logger.LevelProvider = func(_ logger.ILogger) int {
-		return log.Level
+	logger.LevelProvider = func(ori logger.ILogger) int {
+		if ori.GetLevel() > log.Level {
+			return ori.GetLevel()
+		} else {
+			return log.Level
+		}
 	}
 	if config.ServerPublicIp != "" {
 		global.ServerIp = config.ServerPublicIp
