@@ -19,7 +19,7 @@ var (
 	ReqCoordinator   = NewRequestCoordinator(1024)
 	Migrator         types.MigrationScheduler
 	BasePort         = 6378
-	LambdaServePorts = 1
+	LambdaServePorts = 10
 	BaseMigratorPort = 6400
 	ServerIp         string
 	LambdaFlags      uint64

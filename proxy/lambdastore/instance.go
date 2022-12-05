@@ -744,7 +744,7 @@ func (ins *Instance) closeLocked() {
 	}
 
 	// We can't reset components to nil, for lambda can still running.
-	ins.log.Info("[%v]Closed", ins)
+	ins.log.Debug("[%v]Closed", ins)
 
 	// Recycle instance
 	CM.Recycle(ins)
@@ -816,7 +816,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 && // Lambda extended long enough to ignore ping.
 		ins.reconcilingWorker == 0 { // Reconcilation is required.
 		ins.mu.Unlock()
-		ins.log.Info("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
+		ins.log.Debug("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
 	}
 
@@ -909,9 +909,9 @@ func (ins *Instance) tryTriggerLambda(opt *ValidateOption) bool {
 	}
 
 	if opt.WarmUp {
-		ins.log.Info("[%v]Warming up...", ins)
+		ins.log.Debug("[%v]Warming up...", ins)
 	} else {
-		ins.log.Info("[%v]Activating...", ins)
+		ins.log.Debug("[%v]Activating...", ins)
 	}
 	go ins.triggerLambda(opt)
 
@@ -930,7 +930,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 		// Handle reclaimation
 		if err != nil && err == ErrInstanceReclaimed {
 			atomic.StoreUint32(&ins.phase, PHASE_RECLAIMED)
-			ins.log.Info("Reclaimed")
+			ins.log.Debug("Reclaimed")
 
 			// Initiate delegation.
 			ins.StartDelegation()
@@ -972,7 +972,7 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 			// Added by Tianium: Since lambda is stopped, do some cleanup
 			ins.lm.Reset()
 
-			ins.log.Info("[%v]Reactivateing...", ins)
+			ins.log.Debug("[%v]Reactivateing...", ins)
 			err = ins.doTriggerLambda(ins.validated.Options().(*ValidateOption))
 			awakeness = atomic.LoadUint32(&ins.awakeness)
 		}
@@ -1027,9 +1027,9 @@ func (ins *Instance) doTriggerLambda(opt *ValidateOption) error {
 	// Check extra one time store status (eg. delegate store)
 	ins.log.Debug("invoke with command: %v", opt.Command)
 	if opt.Command != nil {
-		// ins.log.Info("command with info: %v", opt.Command.GetInfo())
+		// ins.log.Debug("command with info: %v", opt.Command.GetInfo())
 		if meta, ok := opt.Command.GetInfo().(*protocol.Meta); ok {
-			// ins.log.Info("meta added: %v", meta)
+			// ins.log.Debug("meta added: %v", meta)
 			status.Metas = append(status.Metas, *meta)
 		}
 	}
@@ -1243,7 +1243,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		} else if (flags&protocol.PONG_ON_INVOKING > 0) && ins.IsRecovering() {
 			// If flags indicate it is from function invocation without recovery request, the service is resumed but somehow we missed it.
 			ins.resumeServingLocked()
-			ins.log.Info("Function invoked without data loss, assuming parallel recovered and service resumed.")
+			ins.log.Debug("Function invoked without data loss, assuming parallel recovered and service resumed.")
 		}
 
 		if flags&protocol.PONG_RECLAIMED > 0 {
@@ -1253,11 +1253,11 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 			ins.startDelegationLocked()
 			// We can close the instance if it is not backing any instance.
 			if !ins.IsBacking(true) {
-				ins.log.Info("Reclaimed")
+				ins.log.Debug("Reclaimed")
 				validConn, _ := ins.flagValidatedLocked(conn, ErrInstanceReclaimed)
 				return validConn, nil
 			} else {
-				ins.log.Info("Reclaimed, keep running because the instance is backing another instance.")
+				ins.log.Debug("Reclaimed, keep running because the instance is backing another instance.")
 			}
 		}
 	}
@@ -1309,7 +1309,7 @@ func (ins *Instance) bye(conn *Connection) {
 	}
 
 	if atomic.CompareAndSwapUint32(&ins.awakeness, INSTANCE_MAYBE, INSTANCE_SLEEPING) {
-		ins.log.Info("[%v]Bye from unmanaged instance, flag as sleeping.", ins)
+		ins.log.Debug("[%v]Bye from unmanaged instance, flag as sleeping.", ins)
 	}
 	// } else {
 	// 	ins.log.Debug("[%v]Bye ignored, waiting for return of synchronous invocation.", ins)
@@ -1333,7 +1333,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
 		if lastErr != nil {
-			ins.log.Info("Attempt %d: %v", types.MAX_ATTEMPTS-leftAttempts+1, cmd)
+			ins.log.Debug("Attempt %d: %v", types.MAX_ATTEMPTS-leftAttempts+1, cmd)
 		}
 		// Check lambda status first
 		validateStart := time.Now()
@@ -1422,7 +1422,7 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	select {
 	case backup.chanPriorCmd <- req: // Rerouted request should not be queued again.
 	default:
-		ins.log.Info("We will not try to overload backup node, stop reroute %v", req)
+		ins.log.Debug("We will not try to overload backup node, stop reroute %v", req)
 		return false
 	}
 

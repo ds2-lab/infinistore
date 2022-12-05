@@ -26,7 +26,7 @@ import (
 
 var (
 	options  = &global.Options
-	log      = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_WARN}
+	log      = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
 	sig      = make(chan os.Signal, 1)
 	dash     *dashboard.Dashboard
 	logFile  *os.File
