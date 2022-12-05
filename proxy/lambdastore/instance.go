@@ -70,7 +70,7 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 0
+	MAX_CMD_QUEUE_LEN = 1
 	MAX_CONCURRENCY   = 2
 	// ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
 	TEMP_MAP_SIZE    = 10
@@ -1497,9 +1497,6 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 	case *types.Request:
 		collector.CollectRequest(collector.LogRequestValidation, req.CollectorEntry, int64(validateDuration))
 
-		// Select link
-		useDataLink := req.Size() > MaxControlRequestSize // Changes: will fallback to ctrl link.
-
 		// Record write operations
 		switch cmdName {
 		case protocol.CMD_SET:
@@ -1510,7 +1507,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				ins.writtens.Store(req.Key, &struct{}{})
 			}
 		}
-		return ctrlLink.SendRequest(req, useDataLink, ins.lm) // Offer lm, so SendRequest is ctrl link free. (We still need to get ctrl link first to confirm lambda status.)
+		return ctrlLink.SendRequest(req, ins.shouldUseDataLink(req), ins.lm) // Offer lm, so SendRequest is ctrl link free. (We still need to get ctrl link first to confirm lambda status.)
 
 	case *types.Control:
 		isDataRequest := false
@@ -1643,4 +1640,13 @@ func (ins *Instance) reconcileStatus(conn *Connection, meta *protocol.ShortMeta)
 		ins.Meta.Reconcile(meta)
 	}
 	ins.reconcilingWorker = conn.workerId // Track the worker that is reconciling.
+}
+
+func (ins *Instance) shouldUseDataLink(req *types.Request) bool {
+	// If WAIT_FOR_COS is enabled, SET must use data link.
+	if req.Cmd == protocol.CMD_SET && global.LambdaFlags&protocol.FLAG_DISABLE_WAIT_FOR_COS == 0 {
+		return true
+	} else {
+		return req.Size() > MaxControlRequestSize
+	}
 }
