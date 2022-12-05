@@ -1632,10 +1632,12 @@ func (ins *Instance) reconcileStatus(conn *Connection, meta *protocol.ShortMeta)
 }
 
 func (ins *Instance) shouldUseDataLink(req *types.Request) bool {
-	// If WAIT_FOR_COS is enabled, SET must use data link.
-	if req.Cmd == protocol.CMD_SET && global.LambdaFlags&protocol.FLAG_DISABLE_WAIT_FOR_COS == 0 {
-		return true
-	} else {
-		return req.Size() > MaxControlRequestSize
-	}
+	// Always use data link for better performance.
+	return true
+	// // If WAIT_FOR_COS is enabled, SET must use data link.
+	// if req.Cmd == protocol.CMD_SET && global.LambdaFlags&protocol.FLAG_DISABLE_WAIT_FOR_COS == 0 {
+	// 	return true
+	// } else {
+	// 	return req.Size() > MaxControlRequestSize
+	// }
 }

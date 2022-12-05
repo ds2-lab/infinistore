@@ -1349,7 +1349,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 			}
 
 			bucket := s.bucket(&tbds[i].Bucket)
-			key := aws.String(fmt.Sprintf(CHUNK_KEY, s.s3prefix, tbds[i].Key))
+			key := aws.String(s.getS3Key(tbds[i].Key))
 			tbds[i].Body = make([]byte, tbds[i].Size) // Pre-allocate fixed sized buffer.
 
 			if num, err := downloader.Schedule(inputs, func(input *mys3.BatchDownloadObject) {

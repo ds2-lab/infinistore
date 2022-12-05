@@ -14,12 +14,12 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cespare/xxhash"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/redeo/client"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -46,11 +46,8 @@ func init() {
 }
 
 type hasher struct {
+	util.Hasher
 	partitionCount uint64
-}
-
-func (h *hasher) Sum64(data []byte) uint64 {
-	return xxhash.Sum64(data)
 }
 
 func (h *hasher) PartitionID(key []byte) int {
@@ -383,6 +380,11 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 	// defer cn.conn.SetReadDeadline(time.Time{})
 
 	cn := req.Conn()
+	if cn == nil {
+		log.Warn("Connection is nil")
+	} else if cn.Meta == nil {
+		log.Warn("Connection meta is nil")
+	}
 	cm := cn.Meta.(*ClientConnMeta)
 
 	// Read header fields
