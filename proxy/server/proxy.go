@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,21 +27,28 @@ import (
 )
 
 type Proxy struct {
-	log     logger.ILogger
-	cluster cluster.Cluster
-	placer  metastore.Placer
+	log               logger.ILogger
+	cluster           cluster.Cluster
+	placer            metastore.Placer
+	port              int // Starting listen port
+	ports             int // Number of ports to listen
+	listeners         []net.Listener
+	roundRobinCounter uint64
 }
 
 // initial lambda group
 func New() *Proxy {
 	p := &Proxy{
-		log: global.GetLogger("Proxy: "),
+		log:       global.GetLogger("Proxy: "),
+		port:      global.BasePort + 1,
+		ports:     global.LambdaServePorts,
+		listeners: make([]net.Listener, global.LambdaServePorts),
 	}
 	switch global.Options.GetClusterType() {
 	case config.StaticCluster:
-		p.cluster = cluster.NewStaticCluster(global.Options.GetNumFunctions())
+		p.cluster = cluster.NewStaticCluster(p, global.Options.GetNumFunctions())
 	default:
-		p.cluster = cluster.NewMovingWindow()
+		p.cluster = cluster.NewMovingWindow(p)
 	}
 	p.placer = p.cluster.GetPlacer()
 
@@ -58,7 +67,26 @@ func (p *Proxy) GetStatsProvider() interface{} {
 	return p.cluster
 }
 
-func (p *Proxy) Serve(lis net.Listener) {
+func (p *Proxy) Serve() {
+	var done sync.WaitGroup
+	for i := 0; i < p.ports; i++ {
+		done.Add(1)
+		go p.serve(p.port+i, &done)
+	}
+	done.Wait()
+}
+
+func (p *Proxy) serve(port int, done *sync.WaitGroup) {
+	defer done.Done()
+
+	// Create listener
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		p.log.Error("Failed to listen lambdas on %d: %v", port, err)
+		return
+	}
+	p.listeners[port-p.port] = lis
+
 	for {
 		cn, err := lis.Accept()
 		if err != nil {
@@ -70,13 +98,32 @@ func (p *Proxy) Serve(lis net.Listener) {
 	}
 }
 
+// GetServePort round-robin select a port to serve
+func (p *Proxy) GetServePort() int {
+	if p.ports == 1 {
+		return p.port
+	}
+
+	for {
+		port := (atomic.AddUint64(&p.roundRobinCounter, 1) - 1) % uint64(p.ports)
+		if p.listeners[port] != nil {
+			return int(port) + p.port
+		}
+	}
+}
+
 func (p *Proxy) WaitReady() {
 	p.cluster.WaitReady()
 	p.log.Info("[Proxy is ready]")
 }
 
-func (p *Proxy) Close(lis net.Listener) {
-	lis.Close()
+func (p *Proxy) Close() {
+	for i, lis := range p.listeners {
+		if lis != nil {
+			lis.Close()
+			p.listeners[i] = nil
+		}
+	}
 }
 
 func (p *Proxy) Release() {

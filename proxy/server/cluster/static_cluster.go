@@ -51,6 +51,8 @@ func (s *Slice) get() {
 }
 
 type StaticCluster struct {
+	ServerProvider
+
 	log       logger.ILogger
 	group     *Group
 	placer    *metastore.LRUPlacer
@@ -61,7 +63,7 @@ type StaticCluster struct {
 }
 
 // initial lambda group
-func NewStaticCluster(size int) *StaticCluster {
+func NewStaticCluster(server ServerProvider, size int) *StaticCluster {
 	initPool(size)
 
 	extra := 0
@@ -69,9 +71,10 @@ func NewStaticCluster(size int) *StaticCluster {
 		extra = global.Options.NumBackups
 	}
 	c := &StaticCluster{
-		log:   global.GetLogger("StaticCluster: "),
-		cap:   size + extra,
-		group: NewGroup(size + extra),
+		ServerProvider: server,
+		log:            global.GetLogger("StaticCluster: "),
+		cap:            size + extra,
+		group:          NewGroup(size + extra),
 	}
 	c.placer = metastore.NewLRUPlacer(metastore.New(), c)
 	c.instances.Producer = cache.InlineProducer0(func() interface{} {

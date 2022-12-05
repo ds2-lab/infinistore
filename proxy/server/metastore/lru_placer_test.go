@@ -55,6 +55,10 @@ func (im *TestInstanceManager) GetSlice(int) Slice {
 
 func (im *TestInstanceManager) Trigger(int, ...interface{}) {}
 
+func (im *TestInstanceManager) GetServePort() int {
+	return 0
+}
+
 func newTestMeta(i int) *Meta {
 	return &Meta{
 		key:        strconv.Itoa(i),

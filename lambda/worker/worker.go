@@ -328,7 +328,6 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 			if !ok {
 				wrk.log.Error("Oops, no shortcut connection available for dry running, retry after %v", timeout)
 				<-time.After(timeout)
-				continue
 			} else {
 				conn = shortcuts[0].Client
 				remoteAddr = shortcuts[0].String()
@@ -411,7 +410,8 @@ func (wrk *Worker) serve(link *Link, proxyAddr sysnet.Addr, opts *WorkerOptions,
 		} else {
 			// Closed by the proxy, stop worker.
 			wrk.log.Info("Connection(%v) closed from proxy. Closing worker...", link.ID())
-			wrk.Close()
+			// Trigger close asynchoronously.
+			go wrk.Close()
 			return
 		}
 	}

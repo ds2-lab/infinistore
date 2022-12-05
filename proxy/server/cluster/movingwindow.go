@@ -28,6 +28,8 @@ var (
 
 // reuse window and interval should be MINUTES
 type MovingWindow struct {
+	ServerProvider
+
 	numFuncSteps   int // Minimum number of functions scale at a time.
 	numBufferFuncs int // Number of functions initialized as the buffer.
 
@@ -51,14 +53,16 @@ type MovingWindow struct {
 	numActives int
 }
 
-func NewMovingWindow() *MovingWindow {
-	return NewMovingWindowWithOptions(global.Options.GetNumFunctions())
+func NewMovingWindow(server ServerProvider) *MovingWindow {
+	return NewMovingWindowWithOptions(server, global.Options.GetNumFunctions())
 }
 
-func NewMovingWindowWithOptions(numFuncSteps int) *MovingWindow {
+func NewMovingWindowWithOptions(server ServerProvider, numFuncSteps int) *MovingWindow {
 	initPool(numFuncSteps)
 
 	cluster := &MovingWindow{
+		ServerProvider: server,
+
 		numFuncSteps:   numFuncSteps,
 		numBufferFuncs: numFuncSteps * (config.BackupsPerInstance/MaxBackingNodes - 1),
 
