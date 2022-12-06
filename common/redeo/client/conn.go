@@ -46,8 +46,6 @@ type Conn struct {
 	routings  sync.WaitGroup
 	wMu       sync.Mutex   // Mutex to avoid concurrent writing to the connection.
 	wReq      *RequestMeta // Request that is writing to the connection now.
-
-	reader resp.ResponseParser
 }
 
 func NewShortcut(cn *net.MockConn, configs ...ConnConfig) *Conn {
@@ -63,7 +61,6 @@ func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
 		rseq: make(chan interface{}),
 		done: make(chan struct{}),
 	}
-	conn.reader = conn.Resp
 	for _, config := range configs {
 		config(conn)
 	}
