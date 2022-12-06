@@ -22,4 +22,5 @@ type ClientRequest struct {
 	Cmd    string
 	ReqId  string
 	Cancel context.CancelFunc
+	cn     *client.Conn
 }
