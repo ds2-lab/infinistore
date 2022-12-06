@@ -269,7 +269,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		retries := req.MarkError(ErrConnectionClosed)
 		conn.log.Warn("Unexpected closed connection when sending request: %v, %d retries left.", req, retries)
 		if retries > 0 {
-			ins.chanPriorCmd <- req
+			ins.mustDispatch(req)
 		} else {
 			req.SetResponse(ErrConnectionClosed)
 		}
@@ -309,7 +309,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	if err := req.Flush(); err != nil {
 		conn.log.Warn("Flush request error: %v - %v", req, err)
 		if req.MarkError(err) > 0 {
-			conn.instance.chanPriorCmd <- req
+			ins.mustDispatch(req)
 		} else {
 			conn.SetErrorResponse(err)
 		}
