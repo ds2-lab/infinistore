@@ -217,9 +217,6 @@ func (conn *Conn) handleResponses() {
 	defer conn.routings.Done()
 
 	for {
-		// Got response, reset read deadline.
-		conn.SetReadDeadline(time.Time{})
-
 		// Peek Response
 		go conn.readSeq()
 		var read interface{}
@@ -275,6 +272,9 @@ func (conn *Conn) readSeq() {
 	if conn.IsClosed() {
 		return
 	}
+
+	// Got response, reset read deadline.
+	conn.SetReadDeadline(time.Time{})
 
 	ret, err := conn.PeekType()
 	// ret, err := conn.ReadInt()
