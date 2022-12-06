@@ -70,13 +70,12 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 1
-	MAX_CONCURRENCY   = 2
-	TEMP_MAP_SIZE     = 10
-	BACKING_DISABLED  = 0
-	BACKING_RESERVED  = 1
-	BACKING_ENABLED   = 2
-	BACKING_FORBID    = 3
+	MAX_CONCURRENCY  = 2
+	TEMP_MAP_SIZE    = 10
+	BACKING_DISABLED = 0
+	BACKING_RESERVED = 1
+	BACKING_ENABLED  = 2
+	BACKING_FORBID   = 3
 
 	DESCRIPTION_UNSTARTED  = "unstarted"
 	DESCRIPTION_CLOSED     = "closed"
@@ -88,6 +87,12 @@ const (
 
 	DISPATCH_OPT_BUSY_CHECK = 0x0001
 	DISPATCH_OPT_RELOCATED  = 0x0002
+
+	NUM_REQUEST_UNIT       = 0x0000000000000001
+	NUM_WRITE_REQUEST_UNIT = 0x0000000100000000
+	NUM_REQUEST_MASK       = 0x00000000FFFFFFFF
+	NUM_WRITE_REQUEST_MASK = 0xFFFFFFFF00000000
+	NUM_WRITE_REQUEST_BITS = 32
 )
 
 var (
@@ -169,8 +174,7 @@ type Instance struct {
 	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
 	validated       promise.Promise
-	numOutbound     int32
-	numInbound      int32
+	numRequests     uint64
 	mu              sync.Mutex
 	closed          chan struct{}
 	coolTimer       *time.Timer
@@ -215,7 +219,7 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 			Term: 1,
 		}, // Term start with 1 to avoid uninitialized term ambigulous.
 		awakeness:    INSTANCE_SLEEPING,
-		chanCmd:      make(chan types.Command, MAX_CMD_QUEUE_LEN),
+		chanCmd:      make(chan types.Command, MAX_CONCURRENCY-1),
 		chanPriorCmd: make(chan types.Command, 1),
 		validated:    promise.Resolved(), // Initialize with a resolved promise.
 		closed:       make(chan struct{}),
@@ -325,8 +329,8 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 	}
 
-	n, busy := ins.IsBusy(cmd)
-	ins.log.Debug("Dispatching %v, %d queued", cmd, n)
+	n, busy := ins.setBusy(cmd.GetRequest())
+	ins.log.Debug("Dispatching %v, %d queued, busy: %v", cmd, ins.numBusying(n), busy)
 	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && busy {
 		return ErrInstanceBusy
 	}
@@ -356,17 +360,24 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 	return nil
 }
 
-func (ins *Instance) IsBusy(cmd types.Command) (int, bool) {
-	numOutBound := atomic.LoadInt32(&ins.numOutbound)
-	numInBound := atomic.LoadInt32(&ins.numInbound)
-	n := int(numOutBound+numInBound) + len(ins.chanCmd)
-	if n >= MAX_CONCURRENCY {
-		return n, true
-	} else if cmd.String() == protocol.CMD_SET {
-		return n, numOutBound > 0
-	} else {
-		return n, false
+func (ins *Instance) mustDispatch(cmd types.Command) {
+	ins.addBusy(cmd.GetRequest())
+	ins.chanPriorCmd <- cmd
+}
+
+func (ins *Instance) shouldDispatch(cmd types.Command) bool {
+	ins.addBusy(cmd.GetRequest())
+	select {
+	case ins.chanPriorCmd <- cmd:
+		return true
+	default:
+		ins.doneBusy(cmd.GetRequest())
+		return false
 	}
+}
+
+func (ins *Instance) IsBusy(cmd types.Command) (uint64, bool) {
+	return ins.isBusy(atomic.LoadUint64(&ins.numRequests), cmd.String() == protocol.CMD_SET)
 }
 
 func (ins *Instance) WarmUp() {
@@ -601,10 +612,10 @@ func (ins *Instance) StartBacking(bakIns *Instance, bakId int, total int) bool {
 	if err != nil {
 		ins.log.Warn("Failed to prepare payload to trigger recovery: %v", err)
 	} else {
-		ins.chanPriorCmd <- &types.Control{
+		ins.mustDispatch(&types.Control{
 			Cmd:     protocol.CMD_PING,
 			Payload: payload,
-		}
+		})
 	}
 	return true
 }
@@ -1309,15 +1320,14 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	req := cmd.GetRequest()
 	if req != nil && req.IsResponded() {
 		// Request is responded
+		ins.doneBusy(req)
 		return
 	} else if req != nil && req.Cmd == protocol.CMD_GET &&
 		ins.IsRecovering() && ins.rerouteGetRequest(req) {
 		// On parallel recovering, we will try reroute get requests.
+		ins.doneBusy(req)
 		return
 	}
-
-	// Set instance busy on request.
-	ins.busy(req)
 
 	leftAttempts, lastErr := cmd.LastError()
 	for leftAttempts > 0 {
@@ -1408,9 +1418,8 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	select {
-	case backup.chanPriorCmd <- req: // Rerouted request should not be queued again.
-	default:
+	// Rerouted request should not be queued again.
+	if !backup.shouldDispatch(req) {
 		ins.log.Debug("We will not try to overload backup node, stop reroute %v", req)
 		return false
 	}
@@ -1566,16 +1575,47 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 	}
 }
 
-func (ins *Instance) busy(req *types.Request) {
+func (ins *Instance) isBusy(counter uint64, write bool) (uint64, bool) {
+	if write && ins.numBusyingWrites(counter) > 1 {
+		return counter, true
+	} else if ins.numBusying(counter) > MAX_CONCURRENCY {
+		return counter, true
+	} else {
+		return counter, false
+	}
+}
+
+func (ins *Instance) numBusying(counter uint64) uint64 {
+	return counter & NUM_REQUEST_MASK
+}
+
+func (ins *Instance) numBusyingWrites(counter uint64) uint64 {
+	return (counter & NUM_WRITE_REQUEST_MASK) >> NUM_WRITE_REQUEST_BITS
+}
+
+func (ins *Instance) setBusy(req *types.Request) (uint64, bool) {
+	if req == nil {
+		return atomic.LoadUint64(&ins.numRequests), false
+	}
+
+	unit := ins.getBusyUnit(req)
+	counter, busy := ins.isBusy(atomic.AddUint64(&ins.numRequests, unit), unit > NUM_REQUEST_UNIT)
+	if busy {
+		// Rollback
+		counter = atomic.AddUint64(&ins.numRequests, ^(unit - 1))
+	} else {
+		// Restore the counter before added.
+		counter -= unit
+	}
+	return counter, busy
+}
+
+func (ins *Instance) addBusy(req *types.Request) {
 	if req == nil {
 		return
 	}
 
-	if req.String() == protocol.CMD_SET {
-		atomic.AddInt32(&ins.numOutbound, 1)
-	} else {
-		atomic.AddInt32(&ins.numInbound, 1)
-	}
+	atomic.AddUint64(&ins.numRequests, ins.getBusyUnit(req))
 }
 
 func (ins *Instance) doneBusy(req *types.Request) {
@@ -1583,11 +1623,15 @@ func (ins *Instance) doneBusy(req *types.Request) {
 		return
 	}
 
+	atomic.AddUint64(&ins.numRequests, ^(ins.getBusyUnit(req) - 1))
+}
+
+func (ins *Instance) getBusyUnit(req *types.Request) uint64 {
+	unit := uint64(NUM_REQUEST_UNIT)
 	if req.String() == protocol.CMD_SET {
-		atomic.AddInt32(&ins.numOutbound, -1)
-	} else {
-		atomic.AddInt32(&ins.numInbound, -1)
+		unit += NUM_WRITE_REQUEST_UNIT
 	}
+	return unit
 }
 
 func (ins *Instance) CollectData() {

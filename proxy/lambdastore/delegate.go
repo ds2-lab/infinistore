@@ -18,11 +18,11 @@ func (ins *Delegate) StartBacking(deleIns *Instance, bakId int, total int) bool 
 	if err != nil {
 		ins.log.Warn("Failed to prepare payload to trigger delegation: %v", err)
 	} else {
-		ins.chanPriorCmd <- &types.Control{
+		ins.mustDispatch(&types.Control{
 			Cmd:     protocol.CMD_PING,
 			Info:    meta,
 			Payload: payload,
-		}
+		})
 	}
 	return true
 }
