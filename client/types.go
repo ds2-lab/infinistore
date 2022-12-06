@@ -22,4 +22,13 @@ type ClientRequest struct {
 	Cmd    string
 	ReqId  string
 	Cancel context.CancelFunc
+	cn     *client.Conn
+}
+
+func (r *ClientRequest) Conn() *client.Conn {
+	return r.cn
+}
+
+func (r *ClientRequest) SetConn(cn *client.Conn) {
+	r.cn = cn
 }

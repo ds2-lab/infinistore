@@ -327,6 +327,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			return
 		}
 
+		req.SetConn(cn)
 		err = cn.StartRequest(req, func(_ client.Request) error {
 			cn.SetWriteDeadline(time.Now().Add(HeaderTimeout)) // Set deadline for request
 			defer cn.SetWriteDeadline(time.Time{})             // One defered reset is enough.
@@ -380,11 +381,6 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 	// defer cn.conn.SetReadDeadline(time.Time{})
 
 	cn := req.Conn()
-	if cn == nil {
-		log.Warn("Connection is nil")
-	} else if cn.Meta == nil {
-		log.Warn("Connection meta is nil")
-	}
 	cm := cn.Meta.(*ClientConnMeta)
 
 	// Read header fields
@@ -581,6 +577,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		return
 	}
 
+	req.SetConn(cn)
 	err = cn.StartRequest(req, func(_ client.Request) error {
 		// cmd seq key reqId chunkId
 		cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
