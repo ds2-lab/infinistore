@@ -17,6 +17,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/redeo/server"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/cache"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
@@ -34,8 +35,10 @@ type Proxy struct {
 	ports             int // Number of ports to listen
 	listeners         []net.Listener
 	roundRobinCounter uint64
+	cache             types.PersistCache
 
-	done sync.WaitGroup
+	initListeners sync.WaitGroup
+	done          sync.WaitGroup
 }
 
 // initial lambda group
@@ -48,6 +51,7 @@ func New() *Proxy {
 	}
 
 	p.Serve()
+	p.initListeners.Wait()
 
 	switch global.Options.GetClusterType() {
 	case config.StaticCluster:
@@ -56,6 +60,12 @@ func New() *Proxy {
 		p.cluster = cluster.NewMovingWindow(p)
 	}
 	p.placer = p.cluster.GetPlacer()
+
+	// Enable persist cache.
+	if global.IsLocalCacheEnabled() {
+		p.cache = cache.NewPersistCache()
+		p.placer.RegisterHandler(metastore.PlacerEventBeforePlacing, p.beforePlacingHandler)
+	}
 
 	// Set CM before starting the cluster.
 	lambdastore.CM = p.cluster
@@ -75,8 +85,9 @@ func (p *Proxy) GetStatsProvider() interface{} {
 
 func (p *Proxy) Serve() {
 	p.log.Info("Initiating lambda servers")
+	p.done.Add(p.ports)
+	p.initListeners.Add(p.ports)
 	for i := 0; i < p.ports; i++ {
-		p.done.Add(1)
 		go p.serve(p.port+i, &p.done)
 	}
 }
@@ -92,10 +103,12 @@ func (p *Proxy) serve(port int, done *sync.WaitGroup) {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		p.log.Error("Failed to listen lambdas on %d: %v", port, err)
+		p.initListeners.Done()
 		return
 	}
 	p.listeners[port-p.port] = lis
 	p.log.Info("Listening lambdas on %d", port)
+	p.initListeners.Done()
 
 	for {
 		cn, err := lis.Accept()
@@ -122,6 +135,10 @@ func (p *Proxy) GetServePort(id uint64) int {
 	}
 	// If no ports is available, simply return a port.
 	return 0
+}
+
+func (p *Proxy) GetPersistCache() types.PersistCache {
+	return p.cache
 }
 
 func (p *Proxy) WaitReady() {
@@ -165,8 +182,6 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		return
 	}
 
-	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
-
 	p.log.Debug("HandleSet %s: %d@%s", reqId, dChunkId, key)
 
 	// Start counting time.
@@ -183,22 +198,28 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	// req.Key will not be set until we get meta and have information about the version.
 	req := types.GetRequest(client)
 	req.Seq = seq
-	req.Id = types.Id{ReqId: reqId, ChunkId: chunkId}
+	req.Id.ReqId = reqId
+	req.Id.ChunkId = chunkId
 	req.InsId = uint64(lambdaId)
 	req.Cmd = protocol.CMD_SET
 	req.BodyStream = bodyStream
+	req.BodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
 	req.CollectorEntry = collectEntry
 	req.Info = prepared
 	// Added by Tianium: 20221102
 	// Add counter support.
 	req.Cleanup = counter // Set cleanup so the counter can always be released.
 	counter.Requests[dChunkId] = req
+	bodyStream = nil // Don't use bodyStream anymore, req.BodyStream can be updated in InsertAndPlace().
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
+	if req.PersistChunk != nil {
+		defer req.BodyStream.Close()
+	}
 	if err != nil && err == metastore.ErrConcurrentCreation {
 		// Later concurrent setting will be automatically abandoned and return the same result as the earlier one.
-		bodyStream.(resp.Holdable).Unhold() // bodyStream now will automatically be closed.
+		req.BodyStream.(resp.Holdable).Unhold() // bodyStream now will automatically be closed.
 		meta.Wait()
 		if meta.IsValid() {
 			rsp := &types.Response{Cmd: protocol.CMD_SET, Id: req.Id, Body: []byte(strconv.FormatUint(meta.Placement[dChunkId], 10))}
@@ -208,9 +229,11 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 		}
 		return
 	} else if err != nil {
+		req.BodyStream.(resp.Holdable).Unhold()
 		server.NewErrorResponse(w, seq, err.Error()).Flush()
 		return
 	} else if meta.IsDeleted() {
+		req.BodyStream.(resp.Holdable).Unhold()
 		// Object may be deleted during PUT in a rare case in cache mode (COS is disabled) such as:
 		// T1: Some chunks are set.
 		// T2: The placer decides to evict this object (in rare case) by DELETE it.
@@ -281,17 +304,31 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// Update counter
 	counter.Requests[dChunkId] = req
 
-	p.log.Debug("HandleGet %s: %s from %d", reqId, chunkKey, lambdaDest)
+	p.log.Debug("HandleGet %v: %s from %d", reqId, chunkKey, lambdaDest)
+
+	if p.cache != nil {
+		// Query the persist cache.
+		cached, first := p.cache.GetOrCreate(meta.ChunkKey(int(dChunkId)), meta.ChunkSize)
+		if first {
+			// Only the first of concurrent requests will be sent to lambda.
+			req.PersistChunk = cached
+		} else {
+			p.log.Debug("Serving %v from cache", &req.Id)
+			go p.waitForCache(req, cached, counter)
+			return
+		}
+	}
 
 	// Validate the status of meta. If evicted, replace. All chunks will be replaced, so fulfill shortcut is not applicable here.
 	// Not all placers support eviction.
+	// NOTE: Since no delete request is provided, delection will only happen in cache mode.
 	if meta.IsDeleted() {
 		// Unlikely, just to be safe
 		p.log.Debug("replace evicted chunk %s", chunkKey)
 
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
-			p.log.Warn("Failed to replace %v: %v", &req.Id, err)
+			p.log.Warn("Failed to re-place %v: %v", &req.Id, err)
 			req.SetResponse(err)
 			return
 		}
@@ -301,8 +338,8 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		return
 	}
 
-	// Check late chunk request.
-	if counter.IsFulfilled() {
+	// Check late chunk request. Continue if persist chunk is available.
+	if counter.IsFulfilled() && req.PersistChunk == nil {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
 		req.Abandon() // counter will be released on abandoning (req.Cleanup set).
@@ -460,4 +497,60 @@ func (p *Proxy) relocate(req *types.Request, meta *metastore.Meta, chunk int, ke
 		p.log.Debug("%s Requesting to relocate and recover %s: %d", reason, key, instance.Id())
 	}
 	return instance, err
+}
+
+func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd types.Command) {
+	// Initiate persist cache
+	req := cmd.(*types.Request)
+	key := meta.ChunkKey(chunkId)
+	pChunk, _ := p.cache.GetOrCreate(key, req.BodyStream.Len())
+	bodyStream, err := pChunk.Store(req.BodyStream)
+	if err != nil {
+		p.log.Warn("Failed to initiate persist cache on setting %s: %v", key, err)
+		return
+	}
+	req.BodyStream = bodyStream
+	req.BodyStream.(resp.Holdable).Hold()
+	req.PersistChunk = pChunk
+}
+
+func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, counter *global.RequestCounter) {
+	stream, err := cached.Load()
+	if err != nil {
+		req.SetResponse(fmt.Errorf("failed to load from persist cache: %v", err))
+		return
+	}
+
+	// Update counter
+	counter.AddSucceeded(req.Id.Chunk(), false)
+
+	// Prepare response
+	rsp := req.ToGetResponse()
+	rsp.SetBodyStream(stream)
+	stream.(resp.Holdable).Hold()
+	defer rsp.Close()
+
+	// Set response
+	if err := req.SetResponse(rsp); err != nil {
+		stream.(resp.Holdable).Unhold()
+		stream.Close()
+		return
+	}
+
+	// Close will block until the stream is flushed.
+	if err := rsp.WaitFlush(true); err == nil {
+		status := counter.AddFlushed(req.Id.Chunk())
+		if counter.IsFulfilled(status) && !counter.IsAllFlushed(status) {
+			p.log.Debug("Request fulfilled: %v(%x), abandon unflushed chunks.", &rsp.Id, status)
+			for _, req := range counter.Requests {
+				if req != nil {
+					req.Abandon()
+				}
+			}
+		}
+	} else if err != context.Canceled {
+		p.log.Warn("Unexpected error on streaming %v: %v", &rsp.Id, err)
+	} else {
+		p.log.Debug("Abandoned streaming cached %v", &rsp.Id)
+	}
 }

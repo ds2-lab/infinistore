@@ -285,7 +285,7 @@ func (r *ecRet) PrintErrors(prompts string, args ...interface{}) {
 
 	// Print errors
 	if r.NumOK() < len(r.reqs) {
-		log.Warn("%s:%v, details:", prompts, r.Err)
+		log.Warn("%s:%v, details(%d):", prompts, r.Err, r.NumOK())
 	} else {
 		log.Warn("%s:%v", prompts, r.Err)
 	}

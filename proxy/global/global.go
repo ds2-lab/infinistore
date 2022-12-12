@@ -48,6 +48,10 @@ func IsClientsideFirstDOptimization() bool {
 	return config.ProxyFeatures&config.FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION > 0
 }
 
+func IsLocalCacheEnabled() bool {
+	return config.ProxyFeatures&config.FLAG_ENABLE_LOCAL_CACHE > 0
+}
+
 func GetLogger(prefix string) logger.ILogger {
 	return &logger.ColorLogger{
 		Prefix: prefix,

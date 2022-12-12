@@ -208,13 +208,38 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	t := time.Now()
 	log.Debug("In SET handler(link:%v)", link)
 
-	var reqId, chunkId string
+	var reqId, chunkId, key string
 	cmd := c.Name
+	committed := false
 	finalize := func(ret *types.OpRet, ds ...time.Duration) {
 		Server.WaitAck(c.Name, func() {
 			// Wait if the ret has not been concluded.
 			if ret.IsDelayed() {
 				ret.Wait()
+			}
+
+			// Confirm the object is persisted.
+			if committed && session.Input.IsWaitForCOSDisabled() {
+				var rsp worker.Response
+				if err := ret.Error(); err == nil {
+					log.Debug("Sending persisted notification: %s", key)
+					// Notification will send using control link.
+					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSISTED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+						w.AppendBulkString(rsp.Cmd)
+						w.AppendBulkString(key)
+					})
+				} else {
+					log.Debug("Sending persist failure notification: %s", key)
+					// Notification will send using control link.
+					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSIST_FAILED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+						w.AppendBulkString(rsp.Cmd)
+						w.AppendBulkString(key)
+					})
+				}
+				if err := rsp.Flush(); err != nil {
+					log.Error("Error on flush(persist key %s): %v", key, err)
+					// Ignore, network error will be handled by redeo.
+				}
 			}
 
 			// Output experiment data.
@@ -234,7 +259,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	errRsp := &worker.ErrorResponse{}
 	reqId, _ = c.NextArg().String()
 	chunkId, _ = c.NextArg().String()
-	key, _ := c.NextArg().String()
+	key, _ = c.NextArg().String()
 	valReader, err := c.Next()
 	if err != nil {
 		errRsp.Error = NewResponseError(500, "Error on get value reader: %v", err)
@@ -295,6 +320,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		// Ignore
 	}
 	dt := time.Since(t)
+	committed = true
 
 	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, dt, d1, d2)
 	finalize(ret, d1, d2, dt)

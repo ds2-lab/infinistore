@@ -65,6 +65,7 @@ type Request struct {
 	Changes        int
 	CollectorEntry interface{}
 	Option         int64
+	PersistChunk   PersistChunk
 
 	conn             Conn
 	streamingStarted bool
@@ -163,6 +164,17 @@ func (req *Request) PrepareForGet(conn Conn) {
 	conn.Writer().WriteBulkString(strconv.FormatInt(req.Option, 10))
 	req.conn = conn
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
+}
+
+func (req *Request) ToGetResponse() *Response {
+	rsp := &Response{
+		Id:  req.Id,
+		Cmd: req.Cmd,
+	}
+	if req.RetCommand != "" {
+		rsp.Cmd = req.RetCommand
+	}
+	return rsp
 }
 
 func (req *Request) PrepareForDel(conn Conn) {
@@ -337,6 +349,13 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 		err = req.response.client.AddResponses(response)
 	} else {
 		err = req.response.client.AddResponses(&proxyResponse{response: rsp, request: req})
+		if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
+			err, ok := rsp.(error)
+			if !ok {
+				err = fmt.Errorf("%v", rsp)
+			}
+			req.PersistChunk.CloseWithError(err)
+		}
 	}
 	// Release reference so chan can be garbage collected.
 	req.response.client = nil

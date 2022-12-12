@@ -28,17 +28,17 @@ type InstanceManager interface {
 type Placer interface {
 	// Parameters: key, size, dChunks, pChunks, chunkId, chunkSize, lambdaId, sliceSize
 	NewMeta(string, string, int64, int, int, int, int64, uint64, int) *Meta
-	InsertAndPlace(string, *Meta, types.Command) (*Meta, MetaPostProcess, error)
-	Place(*Meta, int, types.Command) (*lambdastore.Instance, MetaPostProcess, error)
+	InsertAndPlace(key string, prepared *Meta, req types.Command) (meta *Meta, postProcess MetaPostProcess, err error)
+	Place(meta *Meta, chunkId int, req types.Command) (ins *lambdastore.Instance, postProcess MetaPostProcess, err error)
 	Get(string, int) (*Meta, bool)
 	GetByVersion(string, int, int) (*Meta, bool)
 	Dispatch(*lambdastore.Instance, types.Command) error
 	MetaStats() types.MetaStoreStats
+	RegisterHandler(event PlacerEvent, handler PlacerHandler)
 }
 
-type MetaInitializer func(meta *Meta)
-
 type DefaultPlacer struct {
+	*PlacerEvents
 	metaStore *MetaStore
 	cluster   InstanceManager
 	log       logger.ILogger
@@ -46,9 +46,10 @@ type DefaultPlacer struct {
 
 func NewDefaultPlacer(store *MetaStore, cluster InstanceManager) *DefaultPlacer {
 	placer := &DefaultPlacer{
-		metaStore: store,
-		cluster:   cluster,
-		log:       global.GetLogger("DefaultPlacer: "),
+		PlacerEvents: newPlacerEvents(),
+		metaStore:    store,
+		cluster:      cluster,
+		log:          global.GetLogger("DefaultPlacer: "),
 	}
 	return placer
 }
@@ -73,6 +74,9 @@ func (l *DefaultPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Comm
 	}
 	cmd.GetRequest().Key = meta.ChunkKey(chunkId)
 	cmd.GetRequest().Info = meta
+
+	// Trigger before placing event.
+	l.beforePlacing(meta, chunkId, cmd)
 
 	instance, post, err := l.Place(meta, chunkId, cmd)
 	if err != nil {

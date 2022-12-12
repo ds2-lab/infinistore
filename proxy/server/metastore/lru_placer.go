@@ -68,6 +68,7 @@ func (pm *LRUPlacerMeta) allConfirmed() bool {
 // eviction of another object (older). In this case, we evict the older in whole based on Clock LRU algorithm, and set the
 // original position of the newer to nil, which a compact operation is needed later. We use a secondary array for online compact.
 type LRUPlacer struct {
+	*PlacerEvents
 	log         logger.ILogger
 	store       *MetaStore
 	cluster     InstanceManager
@@ -81,10 +82,11 @@ type LRUPlacer struct {
 
 func NewLRUPlacer(store *MetaStore, cluster InstanceManager) *LRUPlacer {
 	placer := &LRUPlacer{
-		log:       global.GetLogger("LRUPlacer: "),
-		store:     store,
-		cluster:   cluster,
-		secondary: 1,
+		PlacerEvents: newPlacerEvents(),
+		log:          global.GetLogger("LRUPlacer: "),
+		store:        store,
+		cluster:      cluster,
+		secondary:    1,
 	}
 	placer.objects[0] = make([]*Meta, 1, INIT_LRU_CAPACITY)
 	return placer
@@ -119,6 +121,9 @@ func (p *LRUPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Command)
 	}
 	cmd.GetRequest().Key = meta.ChunkKey(chunkId)
 	cmd.GetRequest().Info = meta
+
+	// Trigger before placement event.
+	p.beforePlacing(meta, chunkId, cmd)
 
 	_, post, err := p.Place(meta, chunkId, cmd)
 	return meta, post, err

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -36,6 +36,7 @@ func (r *proxyResponse) Request() *Request {
 }
 
 type Response struct {
+	util.Closer
 	protocol.Contextable
 
 	Id         Id
@@ -50,14 +51,13 @@ type Response struct {
 	abandon   bool // Abandon flag, set in Request class.
 
 	w         resp.ResponseWriter
-	done      sync.WaitGroup
 	ctxCancel context.CancelFunc
 	ctxDone   <-chan struct{}
 }
 
 func NewResponse(cmd string) *Response {
 	rsp := &Response{Cmd: cmd}
-	rsp.done.Add(1)
+	rsp.Closer.Init()
 	return rsp
 }
 
@@ -202,17 +202,17 @@ func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {
 	rsp.finalizer = finalizer
 }
 
-func (rsp *Response) Done() {
+func (rsp *Response) Close() {
 	if rsp.finalizer != nil {
 		rsp.finalizer()
 		rsp.finalizer = nil
 	}
 
-	rsp.done.Done()
+	rsp.Closer.Close()
 }
 
 // Close will block and wait for the stream to be flushed.
 // Don't clean any fields if it can't be blocked until flushed.
 func (rsp *Response) Wait() {
-	rsp.done.Wait()
+	rsp.Closer.Wait()
 }

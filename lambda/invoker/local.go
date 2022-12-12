@@ -41,9 +41,26 @@ type LocalInvoker struct {
 	mu               sync.Mutex
 	closed           chan struct{}
 	rsp              chan []byte
+	process          *os.Process
 }
 
 func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lambda.InvokeInput, opts ...request.Option) (*lambda.InvokeOutput, error) {
+	waitInvocation := make(chan struct{})
+	defer close(waitInvocation)
+
+	go func(ctx context.Context, waitInvocation chan struct{}) {
+		select {
+		case <-ctx.Done():
+			if ivk.process != nil {
+				ivk.process.Kill()
+				ivk.process = nil
+			}
+			log.Printf("Killing lambda process...\n")
+		case <-waitInvocation:
+			// ok
+		}
+	}(ctx, waitInvocation)
+
 	// Do some initialization for first invocation.
 	if ivk.rsp == nil {
 		ivk.rsp = make(chan []byte, 1)
@@ -52,7 +69,6 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 		}
 	}
 
-	log.Printf("invoking lambda %s...\n", *invokeInput.FunctionName)
 	cached := ivk.nodeCached
 	if cached == nil {
 		ivk.mu.Lock()
@@ -67,6 +83,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 				ivk.closed = make(chan struct{})
 			}
 
+			log.Printf("launching lambda process %s...\n", *invokeInput.FunctionName)
 			if err := ivk.execLocked(ctx, invokeInput); err != nil {
 				ivk.mu.Unlock()
 				return nil, err
@@ -77,6 +94,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 		ivk.mu.Unlock()
 	}
 	if cached != nil {
+		log.Printf("invoking lambda by shm %s...\n", *invokeInput.FunctionName)
 		if ivk.nodeName != *invokeInput.FunctionName {
 			ivk.close()
 			return nil, ErrNodeMismatched
@@ -105,6 +123,7 @@ func (ivk *LocalInvoker) InvokeWithContext(ctx context.Context, invokeInput *lam
 }
 
 func (ivk *LocalInvoker) Close() {
+	log.Printf("Closing lambda process...\n")
 	cached := ivk.nodeCached
 	if cached != nil {
 		cached.Seek(0, io.SeekStart)
@@ -122,6 +141,7 @@ func (ivk *LocalInvoker) Close() {
 			ivk.close()
 			return
 		}
+
 		// Wait for confirming closing.
 		<-ivk.closed
 	}
@@ -176,6 +196,7 @@ func (ivk *LocalInvoker) execLocked(ctx context.Context, invokeInput *lambda.Inv
 		return err
 	}
 
+	ivk.process = cmd.Process
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			log.Printf("lambda %s exited with error: %v\n", *invokeInput.FunctionName, err)
@@ -197,5 +218,8 @@ func (ivk *LocalInvoker) closeLocked() {
 	if ivk.nodeCached != nil {
 		ivk.nodeCached.Close()
 		ivk.nodeCached = nil
+
+		close(ivk.rsp)
+		ivk.rsp = nil
 	}
 }

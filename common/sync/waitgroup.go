@@ -35,6 +35,10 @@ func (wg *WaitGroup) IsWaiting() bool {
 	return atomic.LoadInt32(&wg.waiting) > 0
 }
 
+func (wg *WaitGroup) NumWaiting() int {
+	return int(atomic.LoadInt32(&wg.waiting))
+}
+
 func (wg *WaitGroup) Reset() {
 	if atomic.LoadInt32(&wg.waiting) < 0 {
 		atomic.StoreInt32(&wg.waiting, int32(0))
