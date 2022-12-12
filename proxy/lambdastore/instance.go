@@ -71,8 +71,9 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CONCURRENCY = 2
-	// ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
+	MAX_CONCURRENCY  = 2
+	IN_CONCURRENCY   = 1
+	OUT_CONCURRENCY  = 2
 	TEMP_MAP_SIZE    = 10
 	BACKING_DISABLED = 0
 	BACKING_RESERVED = 1
@@ -170,21 +171,20 @@ type Instance struct {
 	*Deployment
 	Meta
 
-	port         int // The port the instance can connect to.
-	chanCmd      chan types.Command
-	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
-	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
-	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
-	phase        uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
-	validated    promise.Promise
-	numRequests  uint64
-	mu           sync.Mutex
-	closed       chan struct{}
-	coolTimer    *time.Timer
-	coolTimeout  time.Duration
-	coolReset    chan struct{}
-	numFailure   uint32 // # of continues validation failure, which means to node may stop resonding.
-	// numInsFailure   int    // # of continues instance failure.
+	port            int // The port the instance can connect to.
+	chanCmd         chan types.Command
+	chanPriorCmd    chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	status          uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
+	awakeness       uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
+	phase           uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
+	validated       promise.Promise
+	numRequests     uint64
+	mu              sync.Mutex
+	closed          chan struct{}
+	coolTimer       *time.Timer
+	coolTimeout     time.Duration
+	coolReset       chan struct{}
+	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
 	client          invoker.FunctionInvoker
 	lambdaCanceller context.CancelFunc
 
@@ -192,6 +192,7 @@ type Instance struct {
 	lm                *LinkManager
 	sessions          hashmap.HashMap
 	due               int64
+	delayedDue        int64 // Cached due that will not be set until there is no serving request.
 	reconcilingWorker int32 // The worker id of reconciling function.
 
 	// Backup fields
@@ -268,15 +269,6 @@ func (ins *Instance) Status() uint64 {
 	if ins.IsBacking(true) {
 		backing += INSTANCE_BACKING
 	}
-	// if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
-	// 	failure += FAILURE_MAX_QUEUE_REACHED
-	// 	ins.numInsFailure++
-	// 	if ins.numInsFailure >= ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES {
-	// 		global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
-	// 	}
-	// } else {
-	// 	ins.numInsFailure = 0
-	// }
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +
 		(uint64(atomic.LoadUint32(&ins.awakeness)) << 4) +
@@ -342,7 +334,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 	}
 
-	n, busy := ins.setBusy(cmd.GetRequest())
+	n, busy := ins.setBusy(cmd)
 	ins.log.Debug("Dispatching %v, %d queued, busy: %v", cmd, ins.numBusying(n), busy)
 	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && busy {
 		return ErrInstanceBusy
@@ -390,7 +382,14 @@ func (ins *Instance) shouldDispatch(cmd types.Command) bool {
 }
 
 func (ins *Instance) IsBusy(cmd types.Command) (uint64, bool) {
-	return ins.isBusy(atomic.LoadUint64(&ins.numRequests), cmd.String() == protocol.CMD_SET)
+	status := atomic.LoadUint64(&ins.numRequests)
+	// Validate if the command is a request, control commands that wraps a request will be ignored.
+	req, _ := cmd.(*types.Request)
+	if req == nil {
+		return status, false
+	}
+
+	return ins.isBusy(status, req.Cmd == protocol.CMD_SET)
 }
 
 func (ins *Instance) WarmUp() {
@@ -824,10 +823,11 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	lastOpt, _ := ins.validated.Options().(*ValidateOption)
 	goodDue := time.Duration(ins.due - time.Now().Add(RTT).UnixNano())
 	if ctrlLink := ins.lm.GetControl(); ctrlLink != nil &&
-		(opt.Command == nil || opt.Command.Name() != protocol.CMD_PING) && // Time critical immediate ping
-		ins.validated.Error() == nil && lastOpt != nil && !lastOpt.WarmUp && // Lambda extended not thanks to warmup
+		(opt.Command == nil || opt.Command.Name() != protocol.CMD_PING) && // Except time-critical immediate ping.
+		ins.validated.Error() == nil && // Last validation succeeded.
+		lastOpt != nil && !lastOpt.WarmUp && // Lambda extended not thanks to warmup.
 		atomic.LoadUint32(&ins.awakeness) == INSTANCE_ACTIVE && goodDue > 0 && // Lambda extended long enough to ignore ping.
-		ins.reconcilingWorker == 0 { // Reconcilation is required.
+		ins.reconcilingWorker == 0 { // Reconcilation is not required.
 		ins.mu.Unlock()
 		ins.log.Debug("Validation skipped. due in %v", time.Duration(goodDue)+RTT)
 		return ctrlLink, nil // ctrl link can be replaced.
@@ -1280,7 +1280,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		ins.log.Debug("[%v]Already validated", ins)
 		return validConn, ErrInstanceValidated
 	} else {
-		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano()) // Set MinValidationInterval
+		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano(), false) // Set due after MinValidationInterval immediately.
 		return validConn, nil
 	}
 }
@@ -1385,12 +1385,12 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
-			ins.ResetDue() // Force ping on error
+			ins.ResetDue(false) // Force ping on error
 			ins.log.Warn("Failed to %v: %v, %d attempts remaining.", cmd, lastErr, leftAttempts)
 		}
 	}
 	if lastErr != nil {
-		ins.ResetDue() // Force ping on error
+		ins.ResetDue(false) // Force ping on error
 		if leftAttempts == 0 {
 			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		} else {
@@ -1602,7 +1602,7 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 }
 
 func (ins *Instance) isBusy(counter uint64, write bool) (uint64, bool) {
-	if write && ins.numBusyingWrites(counter) > 1 {
+	if write && ins.numBusyingWrites(counter) > IN_CONCURRENCY {
 		return counter, true
 	} else if ins.numBusying(counter) > MAX_CONCURRENCY {
 		return counter, true
@@ -1619,7 +1619,9 @@ func (ins *Instance) numBusyingWrites(counter uint64) uint64 {
 	return (counter & NUM_WRITE_REQUEST_MASK) >> NUM_WRITE_REQUEST_BITS
 }
 
-func (ins *Instance) setBusy(req *types.Request) (uint64, bool) {
+func (ins *Instance) setBusy(cmd types.Command) (uint64, bool) {
+	// Validate if the command is a request, control commands that wraps a request will be ignored.
+	req, _ := cmd.(*types.Request)
 	if req == nil {
 		return atomic.LoadUint64(&ins.numRequests), false
 	}
@@ -1636,7 +1638,9 @@ func (ins *Instance) setBusy(req *types.Request) (uint64, bool) {
 	return counter, busy
 }
 
-func (ins *Instance) addBusy(req *types.Request) {
+func (ins *Instance) addBusy(cmd types.Command) {
+	// Validate if the command is a request, control commands that wraps a request will be ignored.
+	req, _ := cmd.(*types.Request)
 	if req == nil {
 		return
 	}
@@ -1644,12 +1648,17 @@ func (ins *Instance) addBusy(req *types.Request) {
 	atomic.AddUint64(&ins.numRequests, ins.getBusyUnit(req))
 }
 
-func (ins *Instance) doneBusy(req *types.Request) {
+func (ins *Instance) doneBusy(cmd types.Command) {
+	// Validate if the command is a request, control commands that wraps a request will be ignored.
+	req, _ := cmd.(*types.Request)
 	if req == nil {
 		return
 	}
 
-	atomic.AddUint64(&ins.numRequests, ^(ins.getBusyUnit(req) - 1))
+	status := atomic.AddUint64(&ins.numRequests, ^(ins.getBusyUnit(req) - 1))
+	if ins.numBusying(status) == 0 {
+		ins.SetDue(ins.delayedDue, false)
+	}
 }
 
 func (ins *Instance) getBusyUnit(req *types.Request) uint64 {
@@ -1678,12 +1687,15 @@ func (ins *Instance) FlagDataCollected(ok string) {
 	global.DataCollected.Done()
 }
 
-func (ins *Instance) SetDue(due int64) {
-	ins.due = due
+func (ins *Instance) SetDue(due int64, delay bool) {
+	ins.delayedDue = due
+	if !delay {
+		ins.due = due
+	}
 }
 
-func (ins *Instance) ResetDue() {
-	ins.due = time.Now().UnixNano()
+func (ins *Instance) ResetDue(delay bool) {
+	ins.SetDue(time.Now().UnixNano(), delay)
 }
 
 func (ins *Instance) getRerouteThreshold() uint64 {
