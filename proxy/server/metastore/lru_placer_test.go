@@ -59,6 +59,10 @@ func (im *TestInstanceManager) GetServePort(uint64) int {
 	return 0
 }
 
+func (im *TestInstanceManager) GetPersistCache() types.PersistCache {
+	return nil
+}
+
 func newTestMeta(i int) *Meta {
 	return &Meta{
 		key:        strconv.Itoa(i),

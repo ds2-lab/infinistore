@@ -5,6 +5,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 var (
@@ -26,4 +27,5 @@ type Cluster interface {
 
 type ServerProvider interface {
 	GetServePort(uint64) int
+	GetPersistCache() types.PersistCache
 }

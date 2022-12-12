@@ -25,23 +25,6 @@ const (
 	REQCNT_BITS_FLUSHED     uint64 = 48
 )
 
-var (
-	emptySlice = make([]*types.Request, 100) // Large enough to cover most cases.
-	mu         sync.Mutex
-)
-
-func getEmptySlice(size int) []*types.Request {
-	if size <= len(emptySlice) {
-		return emptySlice[:size]
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if size > len(emptySlice) {
-		emptySlice = make([]*types.Request, len(emptySlice)*((size-1)/len(emptySlice)+1))
-	}
-	return emptySlice[:size]
-}
-
 type RequestCoordinator struct {
 	pool     *sync.Pool
 	registry hashmap.HashMap
@@ -78,7 +61,7 @@ func (c *RequestCoordinator) Register(reqId string, cmd string, d int, p int, me
 	} else {
 		// Release unused lock
 		prepared.initialized.Done()
-		c.pool.Put(prepared)
+		c.pool.Put(prepared) // Only put back the counter if it is not used.
 
 		// Wait for counter to be initalized.
 		counter.initialized.Wait()
@@ -104,16 +87,6 @@ func (c *RequestCoordinator) Load(reqId string) interface{} {
 
 func (c *RequestCoordinator) Clear(reqId string) {
 	c.registry.Delete(reqId)
-}
-
-func (c *RequestCoordinator) Recycle(item interface{}) bool {
-	counter, ok := item.(*RequestCounter)
-	if ok {
-		copy(counter.Requests, getEmptySlice(len(counter.Requests))) // reset to nil and release memory
-		c.pool.Put(counter)
-	}
-
-	return ok
 }
 
 // Counter for returned requests.
@@ -286,7 +259,9 @@ func (c *RequestCounter) Close() {
 func (c *RequestCounter) close() bool {
 	cnt := atomic.AddInt32(&c.refs, -1)
 	if c.ReleaseIfAllReturned() && cnt == 0 {
-		c.coordinator.Recycle(c)
+		// The counter will be recleased if all requests are all returned. However, for GET requests, the counter
+		// can only be recycled after all requests are flushed to client.
+		// To simplify the counter state machine, we will not try to recycle the counter after released.
 		return true
 	} else {
 		return false

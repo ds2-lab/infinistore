@@ -35,6 +35,7 @@ var (
 	ErrMaxPreflightsReached    = errors.New("max preflight attempts reached")
 	ErrAbandonRequest          = errors.New("abandon request")
 	ErrKeyNotFound             = errors.New("key not found")
+	ErrEmptyChunk              = errors.New("empty chunk")
 	ErrUnknown                 = errors.New("unknown error")
 	RequestAttempts            = 3
 
@@ -644,7 +645,9 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 		return err
 	}
 	if valReader.Len() == 0 {
-		log.Warn("Got empty chunk %s(%d)", req.ReqId, cm.AddrIdx)
+		req.SetResponse(fmt.Errorf("got empty chunk."))
+		valReader.ReadAll()
+		return ErrEmptyChunk
 	}
 
 	val, err := valReader.ReadAll()

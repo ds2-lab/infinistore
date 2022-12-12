@@ -8,6 +8,7 @@ import (
 
 	"github.com/mason-leap-lab/redeo/resp"
 
+	"github.com/mason-leap-lab/infinicache/common/redeo/server"
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
@@ -193,7 +194,7 @@ func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
 	}
 
 	// Intercept stream
-	interceptor := NewInterceptReader(cmd.bodyStream)
+	interceptor := server.NewInterceptReader(cmd.bodyStream)
 	interceptor.AllReadCloser.(resp.Holdable).Hold() // Enable wait on closing.
 	cmd.bodyStream = interceptor
 
@@ -215,7 +216,7 @@ func (a *StorageAdapter) getHandler(cmd *storageAdapterCommand) {
 
 func (a *StorageAdapter) setHandler(cmd *storageAdapterCommand) {
 	// Intercept stream
-	interceptor := NewInterceptReader(cmd.bodyStream)
+	interceptor := server.NewInterceptReader(cmd.bodyStream)
 	interceptor.AllReadCloser.(resp.Holdable).Hold() // Enable wait on closing.
 	cmd.bodyStream = interceptor
 

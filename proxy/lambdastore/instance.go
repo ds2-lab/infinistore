@@ -30,6 +30,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
 const (
@@ -136,6 +137,7 @@ type InstanceManager interface {
 	GetBackupCandidates() mapreduce.Iterator
 	GetDelegates() []*Instance
 	GetServePort(uint64) int
+	GetPersistCache() types.PersistCache
 }
 
 type Relocator interface {
@@ -1487,6 +1489,19 @@ func (ins *Instance) tryRerouteDelegateRequest(req *types.Request, opts int) boo
 		ins.log.Debug("Delegate %s to node %d as %d of %d.", req.Key, delegate.Id(), loc, total)
 		return true // fallbacked || true
 	}
+}
+
+func (ins *Instance) retryPersist(persisted types.PersistChunk) {
+	req := persisted.Context().Value(types.CtxKeyRequest).(*types.Request)
+	if !persisted.IsStored() {
+		// Simply give up
+		ins.log.Debug("The persist chunk(%v) has no sufficient data, can failed to set.", &req.Id)
+		return
+	}
+
+	body, _ := persisted.LoadAll() // Use LoadAll to avoid hold a reference count.
+	req.BodyStream = resp.NewInlineReader(body)
+	ins.mustDispatch(req)
 }
 
 func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {

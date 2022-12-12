@@ -283,7 +283,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	// conn.chanWait <- req
 	// Moved end
 	conn.prePushRequest(req)
-	if req.IsResponded() {
+	// Abandon if the request is already responded. However, if persist chunk is available,
+	// all chunks can benifit later requests, and we will not abandon it.
+	if req.IsResponded() && req.PersistChunk == nil {
 		conn.popRequest(req)
 		conn.log.Debug("Abandon requesting %v: responded.", &req.Id)
 		return
@@ -292,6 +294,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	switch req.Name() {
 	case protocol.CMD_SET:
 		req.PrepareForSet(conn)
+		if req.PersistChunk != nil {
+			req.PersistChunk.StartPersist(req, protocol.PersistTimeout, ins.retryPersist)
+		}
 	case protocol.CMD_GET:
 		req.PrepareForGet(conn)
 	case protocol.CMD_DEL:
@@ -299,7 +304,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	case protocol.CMD_RECOVER:
 		req.PrepareForRecover(conn)
 	default:
-		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
+		conn.setErrorResponse(fmt.Errorf("unexpected request command: %s", req))
 		// Unrecoverable
 		return
 	}
@@ -311,7 +316,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		if req.MarkError(err) > 0 {
 			ins.mustDispatch(req)
 		} else {
-			conn.SetErrorResponse(err)
+			conn.setErrorResponse(err)
 		}
 		conn.Close()
 		return
@@ -328,6 +333,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		defer conn.doneRequest(ins, req)
 
 		// Wait for response or timeout.
+		// Noted that even the client-request can be responeded, Timeout() will wait for lambda-request.
 		err := req.Timeout()
 		if err == nil {
 			rsp := req.Response()
@@ -337,13 +343,13 @@ func (conn *Connection) sendRequest(req *types.Request) {
 				conn.log.Debug("Abandoned %v", &rsp.Id)
 				if conn.control {
 					// Consume the request in the queue, unblock queue, and wait for the next request.
-					conn.SetResponse(rsp)
+					conn.setResponse(rsp)
 				} else {
 					// If a request is abandoned, the response must be set.
 					// If abandoned before receiving response from Lambda, the rsp is generated in types.Request and
 					// Wait() will return immiediately.
 					// To keep reusing and avoid disconnection the connection (due to Lambda open files limit),
-					// we wait for the response by tring inserting a new dummy request to the wait queue. Other reasons are:
+					// we wait for the response by trying inserting a new dummy request to the wait queue. Other reasons are:
 					// 1: The response are this link has already been late, keep pushing request on this link will only make next request worse.
 					// 2: By keep instance busy, we encourage other requests to find a better instance.
 					select {
@@ -363,7 +369,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 			return
 		}
 
-		if resErr := conn.SetErrorResponse(err); resErr == nil {
+		if resErr := conn.setErrorResponse(err); resErr == nil {
 			conn.log.Warn("Request timeout: %v", req)
 		} else if resErr != types.ErrResponded && resErr != ErrMissingRequest {
 			conn.log.Warn("Request timeout: %v, error: %v", req, resErr)
@@ -406,9 +412,33 @@ func (conn *Connection) popRequest(req *types.Request) *types.Request {
 	return nil
 }
 
+// loadRequest returns the last request if it is available.
+// loadRequest will fail if the last request has been responded and removed.
+func (conn *Connection) loadRequest(rsp *types.Response) (*types.Request, error) {
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req == nil || !req.IsResponse(rsp) {
+		// ignore
+		conn.log.Debug("response discarded: %v", rsp)
+		return nil, ErrMissingRequest
+	}
+
+	return req, nil
+}
+
 // doneRequest resets instance and connection status after a request.
 func (conn *Connection) doneRequest(ins *Instance, req *types.Request) {
 	ins.doneBusy(req)
+
+	// Nil response suggests an error without proper response. Error during tranmission response will be handled differently.
+	if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
+		if req.Response() == nil {
+			req.PersistChunk.CloseWithError(types.ErrRequestFailure)
+		} else {
+			conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
+			req.PersistChunk.Close()
+		}
+	}
 
 	lm := ins.lm
 	if !conn.control && lm != nil && !conn.IsClosed() {
@@ -586,7 +616,7 @@ func (conn *Connection) ServeLambda() {
 			}
 			err = fmt.Errorf("response error: %s", strErr)
 			conn.log.Warn("%v", err)
-			conn.SetErrorResponse(err)
+			conn.setErrorResponse(err)
 		case resp.TypeBulk:
 			cmd, err := conn.r.ReadBulkString()
 			if err != nil {
@@ -611,6 +641,10 @@ func (conn *Connection) ServeLambda() {
 				conn.getHandler(start)
 			case protocol.CMD_SET:
 				conn.setHandler(start)
+			case protocol.CMD_PERSISTED:
+				conn.persistedHandler(true)
+			case protocol.CMD_PERSIST_FAILED:
+				conn.persistedHandler(false)
 			case protocol.CMD_DEL:
 				conn.delHandler()
 			case protocol.CMD_DATA:
@@ -686,38 +720,6 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 	return nil
 }
 
-// SetResponse Set response for last request.
-// If parameter release is set and no error, the connection will be flagged available.
-func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, error) {
-	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
-	req := conn.peekRequest()
-	if req == nil || !req.IsResponse(rsp) {
-		// ignore
-		conn.log.Debug("response discarded: %v", rsp)
-		return nil, ErrMissingRequest
-	}
-
-	// Lock free: double check that poped is what we peeked. Poped will be either req or nil.
-	if poped := conn.popRequest(req); poped == req {
-		conn.log.Debug("response matched: %v", req)
-		return req, req.SetResponse(rsp)
-	}
-
-	return nil, ErrMissingRequest
-}
-
-// SetErrorResponse Set response to last request as a error.
-// You may need to flag the connection as available manually depends on the error.
-func (conn *Connection) SetErrorResponse(err error) error {
-	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
-	req := conn.peekRequest()
-	if req != nil && conn.popRequest(req) == req {
-		return req.SetResponse(err)
-	}
-
-	return ErrMissingRequest
-}
-
 func (conn *Connection) ClearResponses() {
 	for req := conn.peekRequest(); req != nil; req = conn.peekRequest() {
 		if conn.popRequest(req) == req {
@@ -756,6 +758,34 @@ func (conn *Connection) peekResponse(chRsp chan interface{}) {
 	default:
 		// No consumer. The connection must be closed, abandon.
 	}
+}
+
+// setResponse Set response for last request.
+func (conn *Connection) setResponse(rsp *types.Response) (*types.Request, error) {
+	req, err := conn.loadRequest(rsp)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lock free: double check that poped is what we peeked. Poped will be either req or nil.
+	if poped := conn.popRequest(req); poped == req {
+		conn.log.Debug("response matched: %v", req)
+		return req, req.SetResponse(rsp)
+	}
+
+	return nil, ErrMissingRequest
+}
+
+// setErrorResponse Set response to last request as a error.
+// You may need to flag the connection as available manually depends on the error.
+func (conn *Connection) setErrorResponse(err error) error {
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req != nil && conn.popRequest(req) == req {
+		return req.SetResponse(err)
+	}
+
+	return ErrMissingRequest
 }
 
 func (conn *Connection) closeIfError(prompt string, err error) bool {
@@ -862,7 +892,7 @@ func (conn *Connection) getHandler(start time.Time) {
 			// The error should be logged by somewhere that close the connection.
 			return
 		}
-		conn.SetErrorResponse(err)
+		conn.setErrorResponse(err)
 		conn.log.Warn("Failed to get body reader of response: %v", err)
 		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
 		return
@@ -874,16 +904,39 @@ func (conn *Connection) getHandler(start time.Time) {
 	rsp.Id.ChunkId = chunkId
 	rsp.Status = recovered
 	chunk, _ := strconv.Atoi(chunkId)
-	// Send ack after response has been send.
+
+	// Find request first
+	req, err := conn.loadRequest(rsp)
+	if err != nil {
+		// Its too late. the request must have been timeout. Discard the response.
+		conn.closeStream(stream, "Failed to skip bulk on discard", &rsp.Id)
+		conn.finalizeCommmand(rsp.Cmd)
+		rsp.Close()
+		return
+	}
+
+	// Send ack and pop request.
+	rsp.OnFinalize(conn.getPopRequestFinalizer(req))
 	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
 	// Set rsp as closed so it can be released safely.
-	defer rsp.Done()
+	defer rsp.Close()
+
+	// Store stream if persist chunk is avaiable
+	if req.PersistChunk != nil {
+		newStream, err := req.PersistChunk.Store(stream)
+		if err != nil {
+			conn.log.Error("Unexpected error on caching chunk %v: %v", &rsp.Id, err)
+			req.PersistChunk.CloseWithError(err)
+		} else {
+			stream = newStream
+		}
+	}
 
 	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		conn.log.Debug("Request not found: %v, can be fulfilled already.", &rsp.Id)
 		// Set response and exhaust value
-		conn.SetResponse(rsp)
+		req.SetResponse(rsp)
 		conn.closeStream(stream, "Failed to skip bulk on request mismatch", &rsp.Id)
 		return
 	}
@@ -894,8 +947,8 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.log.Debug("GOT %v, abandon (duplicated: %v)", &rsp.Id, returned)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
 		// Connection will not be flagged available until SkipBulk() is executed.
-		req, _ := conn.SetResponse(rsp)
-		if req != nil && !returned {
+		req.SetResponse(rsp)
+		if !returned {
 			_, err := collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
 				conn.log.Warn("LogRequestFuncResponse err %v", err)
@@ -907,15 +960,18 @@ func (conn *Connection) getHandler(start time.Time) {
 		return
 	}
 
+	conn.log.Debug("GOT %v, confirmed. size:%d", &rsp.Id, stream.Len())
+
 	// Finish the response by setting the BodyStream
 	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 
-	conn.log.Debug("GOT %v, confirmed. size:%d", &rsp.Id, stream.Len())
 	// Connection will not be flagged available until BodyStream is closed.
-	if req, err := conn.SetResponse(rsp); err != nil {
+	if err := req.SetResponse(rsp); err != nil {
 		// Failed to set response, release hold.
 		stream.(resp.Holdable).Unhold()
+		conn.closeStream(stream, "Failed to skip bulk after setResponse", &rsp.Id)
+		return
 	} else {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 	}
@@ -960,15 +1016,19 @@ func (conn *Connection) setHandler(start time.Time) {
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 	chunk, _ := strconv.Atoi(rsp.Id.ChunkId)
-	// Ack lambda if it is supported
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
-	defer rsp.Done()
+	// Send ack
+	conn.finalizeCommmand(rsp.Cmd)
+	// Close response
+	defer rsp.Close()
 
 	counter, _ := global.ReqCoordinator.Load(rsp.Id.ReqId).(*global.RequestCounter)
+	// There are two cases that the request is not found:
+	// 1. The request timeouts.
+	// 2. This is a repeated SET for persistence retrial (See cache/persist_chunk:Store()).
 	if counter == nil {
 		// conn.log.Warn("Request not found: %s, can be cancelled already", rsp.Id.ReqId)
 		// Set response
-		conn.SetResponse(rsp)
+		conn.setResponse(rsp)
 		return
 	}
 	defer counter.Close()
@@ -977,10 +1037,30 @@ func (conn *Connection) setHandler(start time.Time) {
 	// Added by Tianium 2022-11-02
 	// Flag chunk set as succeeded.
 	counter.AddSucceeded(chunk, false)
-	req, err := conn.SetResponse(rsp)
+	req, err := conn.setResponse(rsp)
 	if err == nil {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
 	}
+}
+
+func (conn *Connection) persistedHandler(success bool) {
+	conn.log.Debug("Persisted from lambda: %v.", success)
+
+	// Exhaust all values to keep protocol aligned.
+	key, _ := conn.r.ReadBulkString()
+	persistChunk := CM.GetPersistCache().Get(key)
+	if persistChunk == nil {
+		conn.log.Error("Persisted chunk not found: %s.", key)
+		return
+	}
+
+	if success {
+		persistChunk.DonePersist()
+		return
+	}
+
+	// Trigger retry.
+	conn.instance.retryPersist(persistChunk)
 }
 
 func (conn *Connection) delHandler() {
@@ -989,12 +1069,15 @@ func (conn *Connection) delHandler() {
 	rsp := types.NewResponse(protocol.CMD_DEL)
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
-	// Ack lambda if it is supported
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
-	defer rsp.Done()
 
 	conn.log.Debug("DEL %v, confirmed.", &rsp.Id)
-	conn.SetResponse(rsp) // if del is control cmd, should return False
+
+	// Send ack.
+	conn.finalizeCommmand(rsp.Cmd)
+	// Pop request and send response.
+	conn.setResponse(rsp)
+	// All done.
+	rsp.Close()
 }
 
 func (conn *Connection) receiveData() {
@@ -1116,6 +1199,12 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 func (conn *Connection) getCommandFinalizer(cmd string) func() {
 	return func() {
 		conn.finalizeCommmand(cmd)
+	}
+}
+
+func (conn *Connection) getPopRequestFinalizer(req *types.Request) func() {
+	return func() {
+		conn.popRequest(req)
 	}
 }
 
