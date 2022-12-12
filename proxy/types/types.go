@@ -83,6 +83,10 @@ type MigrationScheduler interface {
 	GetDestination(uint64) (LambdaDeployment, error)
 }
 
+type ServerStats interface {
+	PersistCacheLen() int
+}
+
 type MetaStoreStats interface {
 	Len() int
 }

@@ -21,9 +21,10 @@ type StatusView struct {
 	*widgets.Paragraph
 	Meta types.MetaStoreStats
 
-	dash      DashControl
-	memStat   runtime.MemStats
-	maxMemory uint64
+	dash        DashControl
+	serverStats types.ServerStats
+	memStat     runtime.MemStats
+	maxMemory   uint64
 }
 
 func NewStatusView(dash DashControl) *StatusView {
@@ -31,8 +32,14 @@ func NewStatusView(dash DashControl) *StatusView {
 		Paragraph: widgets.NewParagraph(),
 		dash:      dash,
 	}
+	view.serverStats = view
 	view.Border = false
 	return view
+}
+
+// SetServerStats provides the view with server stats.
+func (v *StatusView) SetServerStats(svrStats types.ServerStats) {
+	v.serverStats = svrStats
 }
 
 func (v *StatusView) Draw(buf *ui.Buffer) {
@@ -41,9 +48,9 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 	if v.maxMemory < mem {
 		v.maxMemory = mem
 	}
-	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s, Objects: %d, Gets: %d",
+	v.Text = fmt.Sprintf("Show occupancy(m): %v, Mem: %s, Max: %s, Objects: %d, Serving: %d, PCached: %d",
 		v.dash.GetOccupancyMode(), humanize.Bytes(mem), humanize.Bytes(v.maxMemory),
-		util.Ifelse(v.Meta != nil, v.Meta.Len(), 0).(int), global.ReqCoordinator.Len())
+		util.Ifelse(v.Meta != nil, v.Meta.Len(), 0).(int), global.ReqCoordinator.Len(), v.serverStats.PersistCacheLen())
 
 	// Draw overwrite
 	v.Block.Draw(buf)
@@ -64,4 +71,9 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
 		}(v.dash)
 	}
+}
+
+// PersistCacheLen implements dummy types.ServerStats interface.
+func (v *StatusView) PersistCacheLen() int {
+	return 0
 }

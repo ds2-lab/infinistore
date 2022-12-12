@@ -268,6 +268,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	if conn.IsClosed() {
 		retries := req.MarkError(ErrConnectionClosed)
 		conn.log.Warn("Unexpected closed connection when sending request: %v, %d retries left.", req, retries)
+		ins.ResetDue(false)
 		if retries > 0 {
 			ins.mustDispatch(req)
 		} else {
@@ -311,8 +312,10 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 	// Updated by Tianium: 20210523
 	// Write timeout is added back. See comments in req.Flush()
+	due := time.Now().Add(req.ResponseTimeout())
 	if err := req.Flush(); err != nil {
 		conn.log.Warn("Flush request error: %v - %v", req, err)
+		ins.ResetDue(false)
 		if req.MarkError(err) > 0 {
 			ins.mustDispatch(req)
 		} else {
@@ -326,6 +329,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	}
 
 	conn.log.Debug("Sent %v", req)
+	ins.SetDue(due.UnixNano(), false) // Set long due until response received.
 
 	waitResponse = true
 	go func() {
@@ -897,7 +901,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
 		return
 	}
-	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano())
+	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano(), false)
 
 	rsp := types.NewResponse(protocol.CMD_GET)
 	rsp.Id.ReqId = reqId
@@ -1154,10 +1158,10 @@ func (conn *Connection) readAndSetDue(ins *Instance) error {
 	due, err := conn.r.ReadInt()
 	if conn.closeIfError("Failed to read due: %v.", err) {
 		// Reset possible optimistic estimation.
-		ins.ResetDue()
+		ins.ResetDue(true)
 		return err
 	}
-	ins.SetDue(due)
+	ins.SetDue(due, true) // As long as any connection is busy, delay the update of due.
 
 	flags, err := conn.r.ReadInt()
 	if conn.closeIfError("Failed to read piggyback flags: %v.", err) {
@@ -1183,7 +1187,7 @@ func (conn *Connection) ackCommand(cmd string) error {
 
 func (conn *Connection) finalizeCommmand(cmd string) error {
 	if conn.IsClosed() {
-		conn.instance.ResetDue()
+		conn.instance.ResetDue(true)
 		return ErrConnectionClosed
 	} else if err := conn.readAndSetDue(conn.instance); err != nil {
 		// The connection will be closed if error occurs.
@@ -1196,14 +1200,14 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 	return nil
 }
 
-func (conn *Connection) getCommandFinalizer(cmd string) func() {
-	return func() {
+func (conn *Connection) getCommandFinalizer(cmd string) types.ResponseFinalizer {
+	return func(_ *types.Response) {
 		conn.finalizeCommmand(cmd)
 	}
 }
 
-func (conn *Connection) getPopRequestFinalizer(req *types.Request) func() {
-	return func() {
+func (conn *Connection) getPopRequestFinalizer(req *types.Request) types.ResponseFinalizer {
+	return func(_ *types.Response) {
 		conn.popRequest(req)
 	}
 }

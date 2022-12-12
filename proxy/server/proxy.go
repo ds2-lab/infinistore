@@ -121,7 +121,7 @@ func (p *Proxy) serve(port int, done *sync.WaitGroup) {
 	}
 }
 
-// GetServePort round-robin select a port to serve
+// GetServePort implements cluster.ServerProvider interface. It round-robin selects a port to serve
 func (p *Proxy) GetServePort(id uint64) int {
 	if p.ports == 1 {
 		return p.port
@@ -137,8 +137,14 @@ func (p *Proxy) GetServePort(id uint64) int {
 	return 0
 }
 
+// GetPersistCache implements cluster.ServerProvider interface.
 func (p *Proxy) GetPersistCache() types.PersistCache {
 	return p.cache
+}
+
+// PersistCacheLen implements types.ServerStats interface.
+func (p *Proxy) PersistCacheLen() int {
+	return p.cache.Len()
 }
 
 func (p *Proxy) WaitReady() {

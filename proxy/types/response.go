@@ -11,7 +11,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
-type ResponseFinalizer func()
+type ResponseFinalizer func(*Response)
 
 type ProxyResponse interface {
 	redeo.Contextable
@@ -175,7 +175,7 @@ func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 			} // else test ctxCancellation after client is available.
 
 			// Register finalizer to wait for the close of the stream.
-			rsp.OnFinalize(func() {
+			rsp.OnFinalize(func(_ *Response) {
 				<-chWait
 			})
 			return rsp.Context().Err()
@@ -193,9 +193,9 @@ func (rsp *Response) CancelFlush() {
 func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {
 	if rsp.finalizer != nil {
 		finalizer = func(oldFinalizer ResponseFinalizer, newFinalizer ResponseFinalizer) ResponseFinalizer {
-			return func() {
-				newFinalizer()
-				oldFinalizer()
+			return func(rsp *Response) {
+				newFinalizer(rsp)
+				oldFinalizer(rsp)
 			}
 		}(rsp.finalizer, finalizer)
 	}
@@ -204,7 +204,7 @@ func (rsp *Response) OnFinalize(finalizer ResponseFinalizer) {
 
 func (rsp *Response) Close() {
 	if rsp.finalizer != nil {
-		rsp.finalizer()
+		rsp.finalizer(rsp)
 		rsp.finalizer = nil
 	}
 

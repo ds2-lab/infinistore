@@ -65,12 +65,12 @@ func NewDashboard() *Dashboard {
 	return dashboard
 }
 
-// func (dash *Dashboard) ConfigCluster(cluster types.ClusterStats, cols int) {
-// 	dash.ClusterView.Cluster = cluster
-// 	dash.ClusterView.Cols = cols
-// 	dash.ClusterView.Update()
-// }
+// ConfigServer configures the dashboard to display server stats.
+func (dash *Dashboard) ConfigServer(server types.ServerStats) {
+	dash.StatusView.SetServerStats(server)
+}
 
+// ConfigCluster configures the dashboard to display cluster stats.
 func (dash *Dashboard) ConfigCluster(cluster interface{}, cols int) {
 	switch stats := cluster.(type) {
 	case types.ClusterStats:
