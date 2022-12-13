@@ -1,5 +1,8 @@
 DATE = $(shell date "+%Y%m%d%H%M")
 
+all: build
+	GOMAXPROCS=72 ./bin/proxy -log=proxy.log -enable-dashboard $(PARAMS) 2>error.log
+
 deploy:
 	aws configure
 	aws s3api put-bucket-policy --bucket jzhang33.default --policy file://${GOPATH}/src/github.com/mason-leap-lab/infinicache/evaluation/cloudwatch/policy.json
