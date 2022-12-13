@@ -16,6 +16,7 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/net"
 	"github.com/mason-leap-lab/infinicache/common/redeo/client"
 	"github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/mason-leap-lab/infinicache/common/util"
 )
 
 var (
@@ -215,7 +216,7 @@ func (r *ecRet) Request(i int) *ClientRequest {
 				req.Cancel()
 			}
 			// In case of deadline exceeded, we don't know what blocks the connection. Close it to force a new connection to be created next time.
-			if err == context.DeadlineExceeded {
+			if err == context.DeadlineExceeded || util.IsConnectionFailed(err) {
 				req.Conn().Close()
 			}
 

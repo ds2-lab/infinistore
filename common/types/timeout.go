@@ -5,7 +5,7 @@ import "time"
 var (
 	HeaderTimeout     = 1 * time.Second
 	MinBodyTimeout    = 1 * time.Second
-	BandwidthFactor   = int64(100) // 1/bandwidth, while bandwidth = 10MB/s = 0.01B/ns for single connection
+	BandwidthFactor   = int64(100) // ns/B. 1/bandwidth, while bandwidth = 10MB/s = 100ns/B for single connection.
 	BodyTimeoutFactor = int64(10)
 	PersistTimeout    = 10 * time.Second
 )

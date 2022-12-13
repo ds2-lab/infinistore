@@ -41,23 +41,24 @@ type RequestMeta struct {
 }
 
 // IsTimeout returns if the request is timeout given the status of the request's context.
-func (m *RequestMeta) IsTimeout(t time.Time) bool {
+func (m *RequestMeta) testTimeout(t time.Time) error {
 	if m.Acked || m.Notifier.IsWaiting() {
-		return false
+		return nil
 	}
 
 	// To avoid using lock, ensure the Request is stll avaiable.
 	req := m.Request
 	if req == nil {
 		// If the request is not available, it must be acked.
-		return false
+		return nil
 	}
 
-	dl, ok := req.Context().Deadline()
-	if !ok {
-		dl = m.Deadline
+	if dl, ok := req.Context().Deadline(); ok && dl.Before(t) {
+		return context.DeadlineExceeded
+	} else if !ok && m.Deadline.Before(t) {
+		return ErrTimeout
 	}
-	return dl.Before(t)
+	return nil
 }
 
 type ReqBucket struct {
@@ -450,8 +451,10 @@ func (wnd *Window) cleanUp() {
 				meta := bucket.requests[i]
 				wnd.mu.RUnlock()
 
-				if meta != nil && meta.IsTimeout(t) {
-					_ = meta.SetResponse(context.DeadlineExceeded)
+				if meta == nil {
+					continue
+				} else if err := meta.testTimeout(t); err != nil {
+					meta.SetResponse(err)
 					req := meta.Request
 					if req != nil {
 						_, _ = wnd.AckRequest(req.Seq())
