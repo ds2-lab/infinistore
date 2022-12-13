@@ -206,6 +206,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	t := time.Now()
+	var t2 time.Time
 	log.Debug("In SET handler(link:%v)", link)
 
 	var reqId, chunkId, key string
@@ -217,6 +218,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 			if ret.IsDelayed() {
 				ret.Wait()
 			}
+			d2 := time.Since(t2)
 
 			// Confirm the object is persisted.
 			if committed && session.Input.IsWaitForCOSDisabled() {
@@ -240,6 +242,10 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 					log.Error("Error on flush(persist key %s): %v", key, err)
 					// Ignore, network error will be handled by redeo.
 				}
+			}
+
+			if session.Input.IsWaitForCOSDisabled() {
+				log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, ds[2], ds[0], d2)
 			}
 
 			// Output experiment data.
@@ -276,7 +282,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	client.Conn().SetReadDeadline(protocol.GetBodyDeadline(valReader.Len()))
 	ret := Store.SetStream(key, chunkId, valReader)
 	client.Conn().SetReadDeadline(time.Time{})
-	t2 := time.Now()
+	t2 = time.Now()
 	d1 := t2.Sub(t)
 	err = ret.Error()
 	if err != nil {
@@ -322,7 +328,9 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	dt := time.Since(t)
 	committed = true
 
-	log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, dt, d1, d2)
+	if !session.Input.IsWaitForCOSDisabled() {
+		log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, dt, d1, d2)
+	}
 	finalize(ret, d1, d2, dt)
 }
 

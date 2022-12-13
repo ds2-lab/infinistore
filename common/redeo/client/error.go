@@ -3,7 +3,8 @@ package client
 import "errors"
 
 var (
-	ErrWindow = errors.New("windoe error")
+	ErrWindow  = errors.New("windoe error")
+	ErrTimeout = &timeoutError{}
 )
 
 type windowError struct {
@@ -19,3 +20,9 @@ func (e *windowError) Is(target error) bool { return target == ErrWindow }
 func IsWindoeError(err error) bool {
 	return errors.Is(err, ErrWindow)
 }
+
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string   { return "i/o timeout" }
+func (e *timeoutError) Timeout() bool   { return true }
+func (e *timeoutError) Temporary() bool { return true }
