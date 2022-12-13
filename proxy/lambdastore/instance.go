@@ -1506,13 +1506,13 @@ func (ins *Instance) retryPersist(persisted types.PersistChunk) {
 	req := persisted.Context().Value(types.CtxKeyRequest).(*types.Request)
 	if !persisted.IsStored() {
 		// Simply give up
-		ins.log.Debug("The persist chunk(%v) has no sufficient data, can failed to set.", &req.Id)
+		ins.log.Warn("Retrying persisting chunk(%v) with no sufficient data, can failed to set.", &req.Id)
 		return
 	}
 
+	ins.log.Info("Retry persisting chunk(%v)...", &req.Id)
 	body, _ := persisted.LoadAll() // Use LoadAll to avoid hold a reference count.
-	req.BodyStream = resp.NewInlineReader(body)
-	ins.mustDispatch(req)
+	ins.mustDispatch(req.ToSetRetrial(resp.NewInlineReader(body)))
 }
 
 func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDuration time.Duration) error {

@@ -1054,7 +1054,7 @@ func (conn *Connection) persistedHandler(success bool) {
 	key, _ := conn.r.ReadBulkString()
 	persistChunk := CM.GetPersistCache().Get(key)
 	if persistChunk == nil {
-		conn.log.Error("Persisted chunk not found: %s.", key)
+		conn.log.Warn("Persisted chunk not found: %s.", key)
 		return
 	}
 
