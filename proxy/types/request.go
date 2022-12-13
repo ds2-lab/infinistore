@@ -145,6 +145,18 @@ func (req *Request) Size() int64 {
 	}
 }
 
+func (req *Request) ToSetRetrial(stream resp.AllReadCloser) *Request {
+	// Initiate a request with no response needed.
+	retrial := GetRequest(nil)
+	retrial.Key = req.Key
+	retrial.Id = req.Id
+	retrial.InsId = req.InsId
+	retrial.Cmd = req.Cmd
+	retrial.BodyStream = stream
+	retrial.Info = req.Info
+	return retrial
+}
+
 func (req *Request) PrepareForSet(conn Conn) {
 	conn.Writer().WriteMultiBulkSize(5)
 	conn.Writer().WriteBulkString(req.Cmd)
@@ -302,7 +314,7 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	responded := promise.LoadPromise(&req.responded)
 	if responded != nil && !responded.IsResolved() {
 		req.responded = nil
-		responded.Resolve(nil)
+		responded.Resolve(rsp)
 	}
 
 	// Ignore err if request is optional
@@ -340,7 +352,8 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 
 	// Asynchronously send the response.
 	if req.response.client == nil {
-		return ErrNoClient
+		// Skip if client is nil or reset.
+		return nil
 	}
 
 	response, ok := rsp.(*Response)
@@ -404,11 +417,16 @@ func (req *Request) ResponseTimeout() time.Duration {
 }
 
 func (req *Request) Response() *Response {
-	if !req.IsResponded() {
-		return nil
+	// Read from shared response first.
+	if req.IsResponded() {
+		rsp, _ := req.response.rsp.(*Response)
+		return rsp
 	}
 
-	if rsp, ok := req.response.rsp.(*Response); ok {
+	// Read from promise.
+	promise := promise.LoadPromise(&req.responded)
+	if promise != nil && promise.IsResolved() {
+		rsp, _ := promise.Value().(*Response)
 		return rsp
 	}
 
