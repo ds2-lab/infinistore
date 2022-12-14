@@ -436,10 +436,10 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request) {
 
 	// Nil response suggests an error without proper response. Error during tranmission response will be handled differently.
 	if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
-		if req.Response() == nil {
-			req.PersistChunk.CloseWithError(types.ErrRequestFailure)
+		conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
+		if err := req.Error(); err != nil {
+			req.PersistChunk.CloseWithError(err)
 		} else {
-			conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
 			req.PersistChunk.Close()
 		}
 	}

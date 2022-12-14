@@ -437,6 +437,23 @@ func (req *Request) Response() *Response {
 	return nil
 }
 
+func (req *Request) Error() error {
+	// Read from shared response first.
+	if response := req.response.Load(); response != nil {
+		rsp, _ := (*(response.(*interface{}))).(error)
+		return rsp
+	}
+
+	// Read from promise.
+	promise := promise.LoadPromise(&req.responded)
+	if promise != nil && promise.IsResolved() {
+		rsp, _ := promise.Value().(error)
+		return rsp
+	}
+
+	return nil
+}
+
 func (req *Request) initPromise(opts ...int) promise.Promise {
 	responded := promise.InitPromise(&req.responded)
 
