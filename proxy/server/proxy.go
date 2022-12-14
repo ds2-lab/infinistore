@@ -231,7 +231,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 			rsp := &types.Response{Cmd: protocol.CMD_SET, Id: req.Id, Body: []byte(strconv.FormatUint(meta.Placement[dChunkId], 10))}
 			req.SetResponse(rsp)
 		} else {
-			req.SetResponse(types.ErrMaxAttemptsReached)
+			req.SetErrorResponse(types.ErrMaxAttemptsReached)
 		}
 		return
 	} else if err != nil {
@@ -335,7 +335,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
 		if err != nil {
 			p.log.Warn("Failed to re-place %v: %v", &req.Id, err)
-			req.SetResponse(err)
+			req.SetErrorResponse(err)
 			return
 		}
 		if postProcess != nil {
@@ -371,7 +371,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 	if err != nil {
 		p.log.Warn("Failed to dispatch %v: %v", req.Id, err)
-		req.SetResponse(err)
+		req.SetErrorResponse(err)
 	}
 }
 
@@ -523,7 +523,7 @@ func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd type
 func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, counter *global.RequestCounter) {
 	stream, err := cached.Load()
 	if err != nil {
-		req.SetResponse(fmt.Errorf("failed to load from persist cache: %v", err))
+		req.SetErrorResponse(fmt.Errorf("failed to load from persist cache: %v", err))
 		return
 	}
 

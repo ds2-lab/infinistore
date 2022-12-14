@@ -18,9 +18,8 @@ import (
 )
 
 const (
-	REQUEST_INVOKED   = 0
-	REQUEST_RETURNED  = 1
-	REQUEST_RESPONDED = 2
+	REQUEST_INVOKED  = 0
+	REQUEST_RETURNED = 1
 
 	CHANGE_PLACEMENT = 0x0001
 	MAX_ATTEMPTS     = 3
@@ -46,9 +45,9 @@ type RequestCloser interface {
 }
 
 type response struct {
+	atomic.Value
 	status uint32
 	client *redeo.Client
-	rsp    interface{}
 }
 
 type Request struct {
@@ -280,7 +279,7 @@ func (req *Request) IsResponded() bool {
 	if req.response == nil {
 		return false
 	}
-	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
+	return req.response.Load() != nil
 }
 
 // MarkReturned marks the request as returned/response received and returns if this is the first time to mark.
@@ -297,6 +296,14 @@ func (req *Request) IsResponse(rsp *Response) bool {
 		req.Id.ChunkId == rsp.Id.ChunkId
 }
 
+func (req *Request) SetResponse(rsp *Response) error {
+	return req.setResponse(rsp)
+}
+
+func (req *Request) SetErrorResponse(err error) error {
+	return req.setResponse(err)
+}
+
 // SetResponse sets response of the request. Concurrent request dispatching is
 // supported, in which case the request will be dispatched to multiple instances,
 // one of which is required and others are optional. SetResponse ensure only one
@@ -304,7 +311,7 @@ func (req *Request) IsResponse(rsp *Response) bool {
 // 1. Cancel timeout for individual request copy.
 // 2. Ignore err if the request copy is optional.
 // 3. Exclusively set response for first responder.
-func (req *Request) SetResponse(rsp interface{}) (err error) {
+func (req *Request) setResponse(rsp interface{}) (err error) {
 	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
 	// Responsed promise has high priority because:
@@ -340,11 +347,9 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 		req.MarkReturned()
 	}
 	// Guard codes after this line will only executed once.
-	if !atomic.CompareAndSwapUint32(&req.response.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
+	if !req.response.CompareAndSwap(nil, &rsp) {
 		return ErrResponded
 	}
-	// Set response of the request
-	req.response.rsp = rsp
 
 	// Cleanup request.
 	req.close()
@@ -417,8 +422,8 @@ func (req *Request) ResponseTimeout() time.Duration {
 
 func (req *Request) Response() *Response {
 	// Read from shared response first.
-	if req.IsResponded() {
-		rsp, _ := req.response.rsp.(*Response)
+	if response := req.response.Load(); response != nil {
+		rsp, _ := (*(response.(*interface{}))).(*Response)
 		return rsp
 	}
 
