@@ -272,7 +272,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		if retries > 0 {
 			ins.mustDispatch(req)
 		} else {
-			req.SetResponse(ErrConnectionClosed)
+			req.SetErrorResponse(ErrConnectionClosed)
 		}
 		return
 	}
@@ -727,7 +727,7 @@ func (conn *Connection) skipField(t resp.ResponseType) error {
 func (conn *Connection) ClearResponses() {
 	for req := conn.peekRequest(); req != nil; req = conn.peekRequest() {
 		if conn.popRequest(req) == req {
-			req.SetResponse(ErrConnectionClosed)
+			req.SetErrorResponse(ErrConnectionClosed)
 		}
 		// Yield for pending req a chance to push.
 		runtime.Gosched()
@@ -786,7 +786,7 @@ func (conn *Connection) setErrorResponse(err error) error {
 	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
 	req := conn.peekRequest()
 	if req != nil && conn.popRequest(req) == req {
-		return req.SetResponse(err)
+		return req.SetErrorResponse(err)
 	}
 
 	return ErrMissingRequest

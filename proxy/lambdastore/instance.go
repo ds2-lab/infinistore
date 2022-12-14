@@ -1397,7 +1397,7 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 			ins.log.Error("Abandon retrial: %v", lastErr)
 		}
 		if request, ok := cmd.(*types.Request); ok {
-			request.SetResponse(lastErr)
+			request.SetErrorResponse(lastErr)
 		}
 		ins.doneBusy(req)
 	}

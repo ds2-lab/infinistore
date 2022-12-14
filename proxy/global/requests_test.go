@@ -46,7 +46,7 @@ var _ = Describe("RequestCoordinator", func() {
 		counter := &TestRequestCounter{}
 		counter.reset(coordinator, "test", "get", 1, 0, nil)
 		req := newRequest(counter, "0")
-		err := req.SetResponse(errDummyResponse)
+		err := req.SetErrorResponse(errDummyResponse)
 
 		Expect(err).To(Equal(types.ErrNoClient))
 		Expect(counter.recycled).To(Equal(int32(1)))
@@ -64,7 +64,7 @@ var _ = Describe("RequestCoordinator", func() {
 		}()
 		runtime.Gosched()
 
-		req.SetResponse(errDummyResponse)
+		req.SetErrorResponse(errDummyResponse)
 
 		<-time.After(100 * time.Millisecond)
 		Expect(counter.recycled).To(Equal(int32(1)))
