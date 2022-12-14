@@ -63,7 +63,7 @@ type PersistChunk interface {
 	IsStored() bool
 
 	// Store stores the chunk by intercepting a stream.
-	Store(resp.AllReadCloser) (resp.AllReadCloser, error)
+	Store(resp.AllReadCloser, *Request) (resp.AllReadCloser, error)
 
 	// Load loads the data by returning a stream.
 	Load() (resp.AllReadCloser, error)

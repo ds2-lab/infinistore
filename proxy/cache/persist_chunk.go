@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +35,7 @@ type persistChunk struct {
 	written persistChunkBytesStoredReader
 	refs    mysync.WaitGroup
 	cancel  context.CancelFunc
+	stored  atomic.Value
 
 	// We use sync.Cond for readers' synchronization. See lab/blocker for a overhead benchmark.
 	mu       sync.Mutex
@@ -90,7 +92,13 @@ func (pc *persistChunk) IsStored() bool {
 // 2.err.1. If error occurs before getting the response, the chunk will be closed immediatly with error in lambdastore/connection:doneRequest().
 //          And all Load()ing requests will be notified with error.
 // 2.err.2. If error occurs during reading(getting), all Load()ing requests will be notified with error.
-func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, error) {
+func (pc *persistChunk) Store(reader resp.AllReadCloser, req *types.Request) (resp.AllReadCloser, error) {
+	if !pc.stored.CompareAndSwap(nil, req) {
+		last := pc.stored.Load().(*types.Request)
+		pc.cache.log.Warn("%s: Store called multiple times. Last: %s, New: %s", pc.Key(), last, req)
+		return pc.Load()
+	}
+
 	pc.cache.log.Debug("%s: Storing initiated.", pc.Key())
 	if reader.Len() != pc.size {
 		return nil, types.ErrInvalidChunkSize

@@ -927,7 +927,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	// Store stream if persist chunk is avaiable
 	if req.PersistChunk != nil {
-		newStream, err := req.PersistChunk.Store(stream)
+		newStream, err := req.PersistChunk.Store(stream, req)
 		if err != nil {
 			conn.log.Error("Unexpected error on caching chunk %v: %v", &rsp.Id, err)
 			req.PersistChunk.CloseWithError(err)
