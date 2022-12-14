@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	REQUEST_INVOKED  = 0
-	REQUEST_RETURNED = 1
+	REQUEST_INVOKED   = 0
+	REQUEST_RETURNED  = 1
+	REQUEST_RESPONDED = 2
 
 	CHANGE_PLACEMENT = 0x0001
 	MAX_ATTEMPTS     = 3
@@ -45,9 +47,26 @@ type RequestCloser interface {
 }
 
 type response struct {
-	atomic.Value
 	status uint32
 	client *redeo.Client
+	rsp    interface{}
+	mu     sync.Mutex
+}
+
+func (r *response) set(rsp interface{}) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !atomic.CompareAndSwapUint32(&r.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
+		return ErrResponded
+	}
+	r.rsp = rsp
+	return nil
+}
+
+func (r *response) get() interface{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rsp
 }
 
 type Request struct {
@@ -279,7 +298,7 @@ func (req *Request) IsResponded() bool {
 	if req.response == nil {
 		return false
 	}
-	return req.response.Load() != nil
+	return atomic.LoadUint32(&req.response.status) >= REQUEST_RESPONDED
 }
 
 // MarkReturned marks the request as returned/response received and returns if this is the first time to mark.
@@ -347,7 +366,7 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 		req.MarkReturned()
 	}
 	// Guard codes after this line will only executed once.
-	if !req.response.CompareAndSwap(nil, &rsp) {
+	if err := req.response.set(rsp); err != nil {
 		return ErrResponded
 	}
 
@@ -422,8 +441,8 @@ func (req *Request) ResponseTimeout() time.Duration {
 
 func (req *Request) Response() *Response {
 	// Read from shared response first.
-	if response := req.response.Load(); response != nil {
-		rsp, _ := (*(response.(*interface{}))).(*Response)
+	if req.IsResponded() {
+		rsp, _ := req.response.get().(*Response)
 		return rsp
 	}
 
@@ -431,6 +450,23 @@ func (req *Request) Response() *Response {
 	promise := promise.LoadPromise(&req.responded)
 	if promise != nil && promise.IsResolved() {
 		rsp, _ := promise.Value().(*Response)
+		return rsp
+	}
+
+	return nil
+}
+
+func (req *Request) Error() error {
+	// Read from shared response first.
+	if req.IsResponded() {
+		rsp, _ := req.response.get().(error)
+		return rsp
+	}
+
+	// Read from promise.
+	promise := promise.LoadPromise(&req.responded)
+	if promise != nil && promise.IsResolved() {
+		rsp, _ := promise.Value().(error)
 		return rsp
 	}
 
