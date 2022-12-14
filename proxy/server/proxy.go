@@ -510,7 +510,7 @@ func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd type
 	req := cmd.(*types.Request)
 	key := meta.ChunkKey(chunkId)
 	pChunk, _ := p.cache.GetOrCreate(key, req.BodyStream.Len())
-	bodyStream, err := pChunk.Store(req.BodyStream, cmd.(*types.Request))
+	bodyStream, err := pChunk.Store(req.BodyStream)
 	if err != nil {
 		p.log.Warn("Failed to initiate persist cache on setting %s: %v", key, err)
 		return

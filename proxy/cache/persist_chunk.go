@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/redeo/resp"
 
 	"github.com/mason-leap-lab/infinicache/common/redeo/server"
-	mysync "github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/mason-leap-lab/infinicache/common/sync/atomic"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -33,13 +32,13 @@ type persistChunk struct {
 	data    []byte
 	size    int64
 	written persistChunkBytesStoredReader
-	refs    mysync.WaitGroup
+	refs    atomic.Int32
 	cancel  context.CancelFunc
-	stored  atomic.Value
 
 	// We use sync.Cond for readers' synchronization. See lab/blocker for a overhead benchmark.
 	mu       sync.Mutex
 	notifier *sync.Cond
+	once     sync.Once
 	err      error
 }
 
@@ -92,13 +91,7 @@ func (pc *persistChunk) IsStored() bool {
 // 2.err.1. If error occurs before getting the response, the chunk will be closed immediatly with error in lambdastore/connection:doneRequest().
 //          And all Load()ing requests will be notified with error.
 // 2.err.2. If error occurs during reading(getting), all Load()ing requests will be notified with error.
-func (pc *persistChunk) Store(reader resp.AllReadCloser, req *types.Request) (resp.AllReadCloser, error) {
-	if !pc.stored.CompareAndSwap(nil, req) {
-		last := pc.stored.Load().(*types.Request)
-		pc.cache.log.Warn("%s: Store called multiple times. Last: %s, New: %s", pc.Key(), last, req)
-		return pc.Load()
-	}
-
+func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, error) {
 	pc.cache.log.Debug("%s: Storing initiated.", pc.Key())
 	if reader.Len() != pc.size {
 		return nil, types.ErrInvalidChunkSize
@@ -113,9 +106,6 @@ func (pc *persistChunk) Store(reader resp.AllReadCloser, req *types.Request) (re
 	interceptor.OnIntercept(pc.notifyData)
 	interceptor.OnClose(pc.waitInterceptor)
 
-	// Store should be called once only.
-	go pc.close()
-
 	return interceptor, nil
 	// TODO: Add support to read from break point
 }
@@ -129,7 +119,7 @@ func (pc *persistChunk) Load() (resp.AllReadCloser, error) {
 
 func (pc *persistChunk) LoadAll() (data []byte, err error) {
 	pc.refs.Add(1)
-	defer pc.refs.Done()
+	defer pc.doneRefs()
 
 	stored := pc.bytesStored()
 	for stored < pc.Size() {
@@ -189,8 +179,8 @@ func (pc *persistChunk) DonePersist() {
 
 	pc.cancel()
 	pc.cancel = nil
-	pc.refs.Done()
-	pc.cache.log.Debug("%s: Persisted, ref counter: %d", pc.Key(), pc.refs.NumWaiting())
+	left := pc.doneRefs()
+	pc.cache.log.Debug("%s: Persisted, ref counter: %d", pc.Key(), left)
 }
 
 func (pc *persistChunk) Error() error {
@@ -203,12 +193,19 @@ func (pc *persistChunk) Close() {
 
 func (pc *persistChunk) CloseWithError(err error) {
 	pc.DonePersist()
-	pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.NumWaiting())
+	pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
 	pc.notifyError(err)
 }
 
+func (pc *persistChunk) doneRefs() int32 {
+	left := pc.refs.Add(-1)
+	if left == 0 {
+		pc.once.Do(pc.close)
+	}
+	return left
+}
+
 func (pc *persistChunk) close() {
-	pc.refs.Wait()
 	key := pc.Key()
 	if global.Options.Debug {
 		key = debugIDRemover.ReplaceAllString(key, "")
@@ -231,7 +228,7 @@ func (pc *persistChunk) notifyError(err error) {
 func (pc *persistChunk) notifyData(interceptor *server.InterceptReader) {
 	err := interceptor.LastError()
 	if err != nil {
-		pc.cache.log.Warn("%s: Storing with error: %v, affected: %d", pc.Key(), err, pc.refs.NumWaiting())
+		pc.cache.log.Warn("%s: Storing with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
 		err = types.ErrChunkStoreFailed
 	}
 	pc.mu.Lock()
@@ -251,13 +248,13 @@ func (pc *persistChunk) waitData(nRead int64) (int64, error) {
 }
 
 func (pc *persistChunk) waitInterceptor(interceptor *server.InterceptReader) {
-	pc.refs.Done()
-	pc.cache.log.Debug("%s: Stored(%v), ref counter: %d", pc.Key(), pc.IsStored(), pc.refs.NumWaiting())
+	left := pc.doneRefs()
+	pc.cache.log.Debug("%s: Stored(%v), ref counter: %d", pc.Key(), pc.IsStored(), left)
 }
 
 func (pc *persistChunk) waitReader(reader resp.AllReadCloser, allLoaded bool) {
-	pc.refs.Done()
-	pc.cache.log.Debug("%s: Loaded(%v), ref counter: %d", pc.Key(), allLoaded, pc.refs.NumWaiting())
+	left := pc.doneRefs()
+	pc.cache.log.Debug("%s: Loaded(%v), ref counter: %d", pc.Key(), allLoaded, left)
 }
 
 func (pc *persistChunk) waitPersistTimeout(ctx context.Context, retry types.PersistRetrier) {
