@@ -313,7 +313,6 @@ func (req *Request) SetResponse(rsp interface{}) (err error) {
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
 	responded := promise.LoadPromise(&req.responded)
 	if responded != nil && !responded.IsResolved() {
-		req.responded = nil
 		responded.Resolve(rsp)
 	}
 
