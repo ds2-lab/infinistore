@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
@@ -68,6 +69,22 @@ func (c *persistCache) Get(key string) (chunk types.PersistChunk) {
 
 func (c *persistCache) Restore() error {
 	return types.ErrUnimplemented
+}
+
+func (c *persistCache) Report() {
+	c.log.Info("Total keys: %d", c.hashmap.Len())
+	if c.hashmap.Len() == 0 {
+		return
+	}
+	c.log.Debug("Remaining keys:%v", logger.NewFunc(func() string {
+		var msg strings.Builder
+		c.hashmap.Range(func(key, _ interface{}) bool {
+			msg.WriteString(key.(string))
+			msg.WriteString(" ")
+			return true
+		})
+		return msg.String()
+	}))
 }
 
 func (c *persistCache) remove(key string) {

@@ -998,6 +998,7 @@ func (conn *Connection) getHandler(start time.Time) {
 			conn.log.Debug("Abandoned streaming %v", &rsp.Id)
 		}
 	} else {
+		conn.log.Debug("Flushed streaming %v", &rsp.Id)
 		status := counter.AddFlushed(chunk)
 		// conn.log.Debug("Flushed %v. Fulfilled: %v(%x), %v", rsp.Id, counter.IsFulfilled(status), status, counter.IsAllFlushed(status))
 		// Abandon rest chunks.

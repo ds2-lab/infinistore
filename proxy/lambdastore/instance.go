@@ -1511,7 +1511,7 @@ func (ins *Instance) retryPersist(persisted types.PersistChunk) {
 	}
 
 	ins.log.Info("Retry persisting chunk(%v)...", &req.Id)
-	body, _ := persisted.LoadAll() // Use LoadAll to avoid hold a reference count.
+	body, _ := persisted.LoadAll(context.Background()) // Use LoadAll to avoid hold a reference count.
 	ins.mustDispatch(req.ToSetRetrial(resp.NewInlineReader(body)))
 }
 

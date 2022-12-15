@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -9,13 +10,20 @@ import (
 )
 
 type persistChunkReader struct {
-	chunk *persistChunk
-	r     int64
-	done  util.Closer
+	chunk        *persistChunk
+	r            int64
+	done         util.Closer
+	doneWaitData chan struct{}
+	ctx          context.Context
 }
 
-func newPersistChunkReader(c *persistChunk) *persistChunkReader {
-	return &persistChunkReader{chunk: c, r: 0}
+func newPersistChunkReader(ctx context.Context, c *persistChunk) *persistChunkReader {
+	return &persistChunkReader{
+		chunk:        c,
+		r:            0,
+		doneWaitData: make(chan struct{}),
+		ctx:          ctx,
+	}
 }
 
 // String returns a description of the chunk.
@@ -31,7 +39,7 @@ func (b *persistChunkReader) Read(p []byte) (n int, err error) {
 	available := b.chunk.bytesStored()
 	if available <= b.r {
 		// Wait for the chunk to be buffered
-		available, err = b.chunk.waitData(b.r)
+		available, err = b.chunk.waitDataWithContext(b.ctx, b.r, b.doneWaitData)
 	}
 	if available <= b.r {
 		return
@@ -60,7 +68,7 @@ func (b *persistChunkReader) ReadAll() (data []byte, err error) {
 		return nil, io.EOF
 	}
 
-	ret, err := b.chunk.LoadAll()
+	ret, err := b.chunk.LoadAll(b.ctx)
 	b.Unhold()
 	if b.r > 0 {
 		data = data[b.r:]

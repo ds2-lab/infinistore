@@ -64,9 +64,9 @@ func (ir *InterceptReader) Read(p []byte) (n int, err error) {
 
 func (ir *InterceptReader) ReadAll() ([]byte, error) {
 	// Since we have allocated the buffer, we can simply read all the data into it.
-	n, err := io.ReadFull(ir.AllReadCloser, ir.buf[ir.r:])
-	ir.r += int64(n)
-	return ir.buf[:ir.r], err
+	start := ir.r
+	_, err := io.ReadFull(ir, ir.buf[start:])
+	return ir.buf[start:ir.r], err
 }
 
 func (ir *InterceptReader) Intercepted() []byte {
@@ -94,12 +94,14 @@ func (ir *InterceptReader) Unhold() {
 }
 
 // Close discards any unread data
-func (ir *InterceptReader) Close() error {
+func (ir *InterceptReader) Close() (err error) {
 	ir.done.Wait()
 	// Drain the reader
-	_, err := ir.ReadAll()
+	if ir.r < ir.Len() {
+		_, err = ir.ReadAll()
+	}
 	ir.onClose(ir)
-	return err
+	return
 }
 
 func (ir *InterceptReader) OnIntercept(handler InterceptEvent) {
