@@ -162,6 +162,9 @@ func (p *Proxy) Close() {
 }
 
 func (p *Proxy) Release() {
+	if p.cache != nil {
+		p.cache.Report()
+	}
 	p.cluster.Close()
 	cluster.CleanUpPool()
 }
@@ -317,9 +320,10 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 		cached, first := p.cache.GetOrCreate(meta.ChunkKey(int(dChunkId)), meta.ChunkSize)
 		if first {
 			// Only the first of concurrent requests will be sent to lambda.
+			p.log.Debug("Persisting %v to cache %s", &req.Id, cached.Key())
 			req.PersistChunk = cached
 		} else {
-			p.log.Debug("Serving %v from cache", &req.Id)
+			p.log.Debug("Serving %v from cache %s", &req.Id, cached.Key())
 			go p.waitForCache(req, cached, counter)
 			return
 		}
@@ -416,6 +420,8 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 				p.log.Debug("Abandon flushing %v", rsp)
 			}
 			return
+		} else {
+			p.log.Debug("Flushed response %v", rsp)
 		}
 
 		d2 := time.Since(t2)
@@ -510,6 +516,7 @@ func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd type
 	req := cmd.(*types.Request)
 	key := meta.ChunkKey(chunkId)
 	pChunk, _ := p.cache.GetOrCreate(key, req.BodyStream.Len())
+	p.log.Debug("Persisting %v to cache %s", &req.Id, pChunk.Key())
 	bodyStream, err := pChunk.Store(req.BodyStream)
 	if err != nil {
 		p.log.Warn("Failed to initiate persist cache on setting %s: %v", key, err)
@@ -521,9 +528,11 @@ func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd type
 }
 
 func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, counter *global.RequestCounter) {
-	stream, err := cached.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := cached.Load(ctx)
 	if err != nil {
 		req.SetErrorResponse(fmt.Errorf("failed to load from persist cache: %v", err))
+		cancel()
 		return
 	}
 
@@ -535,6 +544,7 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 	defer rsp.Close()
+	defer cancel()
 
 	// Set response
 	if err := req.SetResponse(rsp); err != nil {
@@ -545,6 +555,7 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 
 	// Close will block until the stream is flushed.
 	if err := rsp.WaitFlush(true); err == nil {
+		p.log.Debug("Flushed streaming cached %v", &rsp.Id)
 		status := counter.AddFlushed(req.Id.Chunk())
 		if counter.IsFulfilled(status) && !counter.IsAllFlushed(status) {
 			p.log.Debug("Request fulfilled: %v(%x), abandon unflushed chunks.", &rsp.Id, status)

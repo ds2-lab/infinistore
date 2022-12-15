@@ -110,25 +110,26 @@ func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, er
 	// TODO: Add support to read from break point
 }
 
-func (pc *persistChunk) Load() (resp.AllReadCloser, error) {
+func (pc *persistChunk) Load(ctx context.Context) (resp.AllReadCloser, error) {
 	pc.refs.Add(1)
 	pc.cache.log.Debug("%s: Loading initiated", pc.Key())
-	reader := newPersistChunkReader(pc)
+	reader := newPersistChunkReader(ctx, pc)
 	return reader, nil
 }
 
-func (pc *persistChunk) LoadAll() (data []byte, err error) {
+func (pc *persistChunk) LoadAll(ctx context.Context) (data []byte, err error) {
 	pc.refs.Add(1)
 	defer pc.doneRefs()
 
+	done := make(chan struct{})
 	stored := pc.bytesStored()
 	for stored < pc.Size() {
-		stored, err = pc.waitData(stored)
+		stored, err = pc.waitDataWithContext(ctx, stored, done)
 		if err != nil {
 			break
 		}
 	}
-	data = pc.data[:pc.written()]
+	data = pc.data[:stored]
 	return
 }
 
@@ -237,12 +238,26 @@ func (pc *persistChunk) notifyData(interceptor *server.InterceptReader) {
 	pc.mu.Unlock()
 }
 
-func (pc *persistChunk) waitData(nRead int64) (int64, error) {
+func (pc *persistChunk) waitData(nRead int64, done chan<- struct{}) (int64, error) {
 	pc.mu.Lock()
 	if pc.bytesStored() <= nRead {
 		pc.notifier.Wait()
 	}
 	pc.mu.Unlock()
+
+	if done != nil {
+		done <- struct{}{}
+	}
+	return pc.bytesStored(), pc.err
+}
+
+func (pc *persistChunk) waitDataWithContext(ctx context.Context, nRead int64, done chan struct{}) (int64, error) {
+	go pc.waitData(nRead, done)
+	select {
+	case <-ctx.Done():
+		pc.err = ctx.Err()
+	case <-done:
+	}
 
 	return pc.bytesStored(), pc.err
 }

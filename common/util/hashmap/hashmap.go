@@ -12,7 +12,7 @@ type BaseHashMap interface {
 	LoadAndDelete(interface{}) (interface{}, bool)
 	LoadOrStore(interface{}, interface{}) (interface{}, bool)
 	CompareAndSwap(interface{}, interface{}, interface{}) (interface{}, bool)
-	Range(func(interface{}, interface{}) bool)
+	Range(func(interface{}, interface{}) (contd bool))
 	Store(interface{}, interface{})
 }
 

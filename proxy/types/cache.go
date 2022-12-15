@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -47,6 +48,9 @@ type PersistCache interface {
 
 	// Restore restores the cache from local storage.
 	Restore() error
+
+	// Report outputs the cache status.
+	Report()
 }
 
 // PersistChunk offers API for a abstract chunk to support persisting.
@@ -66,10 +70,10 @@ type PersistChunk interface {
 	Store(resp.AllReadCloser) (resp.AllReadCloser, error)
 
 	// Load loads the data by returning a stream.
-	Load() (resp.AllReadCloser, error)
+	Load(context.Context) (resp.AllReadCloser, error)
 
 	// LoadAll loads the data by returning the fully loaded data, wait if not fully loaded.
-	LoadAll() ([]byte, error)
+	LoadAll(context.Context) ([]byte, error)
 
 	// StartPersist instructs the chunk to avoid from being closed before persisted to COS.
 	StartPersist(req interface{}, timeout time.Duration, retry PersistRetrier)
