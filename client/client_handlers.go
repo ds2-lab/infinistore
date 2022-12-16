@@ -645,7 +645,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 		return err
 	}
 	if valReader.Len() == 0 {
-		req.SetResponse(fmt.Errorf("got empty chunk."))
+		req.SetResponse(fmt.Errorf("got empty chunk"))
 		valReader.ReadAll()
 		return ErrEmptyChunk
 	}

@@ -196,6 +196,9 @@ func (pc *persistChunk) CloseWithError(err error) {
 	pc.DonePersist()
 	pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
 	pc.notifyError(err)
+	if pc.refs.Load() <= 0 {
+		pc.once.Do(pc.close)
+	}
 }
 
 func (pc *persistChunk) doneRefs() int32 {
