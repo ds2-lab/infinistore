@@ -1331,7 +1331,7 @@ func (ins *Instance) bye(conn *Connection) {
 
 func (ins *Instance) handleRequest(cmd types.Command) {
 	req := cmd.GetRequest()
-	if req != nil && req.IsResponded() {
+	if req != nil && !req.Validate() {
 		// Request is responded
 		ins.doneBusy(req)
 		return
