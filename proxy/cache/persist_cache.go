@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -76,10 +77,10 @@ func (c *persistCache) Report() {
 	if c.hashmap.Len() == 0 {
 		return
 	}
-	c.log.Debug("Remaining keys:%v", logger.NewFunc(func() string {
+	c.log.Warn("Remaining keys:%v", logger.NewFunc(func() string {
 		var msg strings.Builder
-		c.hashmap.Range(func(key, _ interface{}) bool {
-			msg.WriteString(key.(string))
+		c.hashmap.Range(func(_, chunk interface{}) bool {
+			msg.WriteString(chunk.(fmt.Stringer).String())
 			msg.WriteString(" ")
 			return true
 		})

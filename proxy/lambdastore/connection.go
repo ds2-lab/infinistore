@@ -286,7 +286,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	conn.prePushRequest(req)
 	// Abandon if the request is already responded. However, if persist chunk is available,
 	// all chunks can benifit later requests, and we will not abandon it.
-	if req.IsResponded() && req.PersistChunk == nil {
+	if !req.Validate() {
 		conn.popRequest(req)
 		conn.log.Debug("Abandon requesting %v: responded.", &req.Id)
 		return
@@ -979,7 +979,7 @@ func (conn *Connection) getHandler(start time.Time) {
 	} else {
 		collector.CollectRequest(collector.LogRequestFuncResponse, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 	}
-	// Abandon rest chunks.
+	// Abandon rest chunks in case of the proxy first-d optimization.
 	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
 		conn.log.Debug("Request fulfilled: %v, abandon unresponded chunks.", &rsp.Id)
 		for _, req := range counter.Requests {

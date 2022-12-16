@@ -287,6 +287,17 @@ func (req *Request) close() {
 	}
 }
 
+func (req *Request) Validate() bool {
+	return req.MarkReturned() || !req.isResponded()
+}
+
+// MustRequest indicates that the request must be sent to the Lambda.
+func (req *Request) MustRequest() bool {
+	return req.PersistChunk != nil
+}
+
+// IsReturnd indicates if a response is received, especially as one of the request set.
+// The content of the response may not available now and can change depends on the status of request set. (e.g. first-d optimization)
 func (req *Request) IsReturnd() bool {
 	if req.response == nil {
 		return false
@@ -294,7 +305,8 @@ func (req *Request) IsReturnd() bool {
 	return atomic.LoadUint32(&req.response.status) >= REQUEST_RETURNED
 }
 
-func (req *Request) IsResponded() bool {
+// IsResponded indicates if a response is available for the request.
+func (req *Request) isResponded() bool {
 	if req.response == nil {
 		return false
 	}
@@ -441,7 +453,7 @@ func (req *Request) ResponseTimeout() time.Duration {
 
 func (req *Request) Response() *Response {
 	// Read from shared response first.
-	if req.IsResponded() {
+	if req.isResponded() {
 		rsp, _ := req.response.get().(*Response)
 		return rsp
 	}
@@ -458,7 +470,7 @@ func (req *Request) Response() *Response {
 
 func (req *Request) Error() error {
 	// Read from shared response first.
-	if req.IsResponded() {
+	if req.isResponded() {
 		rsp, _ := req.response.get().(error)
 		return rsp
 	}

@@ -349,7 +349,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// Check late chunk request. Continue if persist chunk is available.
-	if counter.IsFulfilled() && req.PersistChunk == nil {
+	if counter.IsFulfilled() && !req.MustRequest() {
 		// Unlikely, just to be safe
 		p.log.Debug("late request %v", reqId)
 		req.Abandon() // counter will be released on abandoning (req.Cleanup set).
