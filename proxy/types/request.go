@@ -288,7 +288,7 @@ func (req *Request) close() {
 }
 
 func (req *Request) Validate() bool {
-	return req.MarkReturned() || !req.isResponded()
+	return req.MustRequest() || !req.isResponded()
 }
 
 // MustRequest indicates that the request must be sent to the Lambda.
