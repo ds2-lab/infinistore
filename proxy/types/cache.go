@@ -15,6 +15,7 @@ var (
 	ErrRequestFailure   = errors.New("request failed")
 	ErrChunkClosed      = errors.New("chunk closed")
 	ErrChunkStoreFailed = errors.New("failed to cache chunk")
+	ErrUnexpectedClose  = errors.New("chunk unexpected closed")
 
 	CtxKeyRequest = cacheCtxKey("request")
 )
@@ -69,6 +70,9 @@ type PersistChunk interface {
 	// Store stores the chunk by intercepting a stream.
 	Store(resp.AllReadCloser) (resp.AllReadCloser, error)
 
+	// WaitStored waits for the chunk to be stored or error occurred.
+	WaitStored() error
+
 	// Load loads the data by returning a stream.
 	Load(context.Context) (resp.AllReadCloser, error)
 
@@ -89,4 +93,10 @@ type PersistChunk interface {
 
 	// Close closes the chunk with specified error.
 	CloseWithError(err error)
+
+	// CanClose returns true if there is no Load() pending.
+	CanClose() bool
+
+	// IsClosed returns true if the chunk is closed.
+	IsClosed() bool
 }

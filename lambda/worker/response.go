@@ -92,6 +92,9 @@ func (r *BaseResponse) Prepare() {
 }
 
 func (r *BaseResponse) Flush() error {
+	if r.err != nil {
+		return r.err
+	}
 	// Timeout added here, sometimes redeo may not handle all responses.
 	r.done.SetTimeout(r.getTimeout())
 	err := r.done.Timeout()

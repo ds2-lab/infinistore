@@ -20,11 +20,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
+	"github.com/mason-leap-lab/go-utils/promise"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/invoker"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
@@ -1331,7 +1331,7 @@ func (ins *Instance) bye(conn *Connection) {
 
 func (ins *Instance) handleRequest(cmd types.Command) {
 	req := cmd.GetRequest()
-	if req != nil && !req.Validate() {
+	if req != nil && !req.Validate(false) {
 		// Request is responded
 		ins.doneBusy(req)
 		return

@@ -7,6 +7,7 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 
+	"github.com/mason-leap-lab/go-utils/promise"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
@@ -38,6 +39,7 @@ func init() {
 	}
 
 	LambdaFlags = config.LambdaFeatures
+	promise.InitPool(10000)
 }
 
 func IsWarmupWithFixedInterval() bool {

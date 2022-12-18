@@ -87,9 +87,7 @@ func (ir *InterceptReader) Hold() {
 }
 
 func (ir *InterceptReader) Unhold() {
-	if holdable, ok := ir.AllReadCloser.(resp.Holdable); ok {
-		holdable.Unhold()
-	}
+	// No need to call AllReadCloser.Unhold() since ir.Close() should be called and it will drain the AllReadCloser and Unhold() it.
 	ir.done.Close()
 }
 

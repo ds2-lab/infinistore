@@ -34,6 +34,7 @@ type persistChunk struct {
 	written persistChunkBytesStoredReader
 	refs    atomic.Int32
 	cancel  context.CancelFunc
+	closed  bool
 
 	// We use sync.Cond for readers' synchronization. See lab/blocker for a overhead benchmark.
 	mu       sync.Mutex
@@ -108,6 +109,12 @@ func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, er
 
 	return interceptor, nil
 	// TODO: Add support to read from break point
+}
+
+// WaitStored will wait until the chunk is stored or error occurs.
+func (pc *persistChunk) WaitStored() error {
+	_, err := pc.waitData(0, nil)
+	return err
 }
 
 func (pc *persistChunk) Load(ctx context.Context) (resp.AllReadCloser, error) {
@@ -188,17 +195,29 @@ func (pc *persistChunk) Error() error {
 	return pc.err
 }
 
+func (pc *persistChunk) CanClose() bool {
+	return pc.refs.Load() <= 0
+}
+
 func (pc *persistChunk) Close() {
 	pc.CloseWithError(types.ErrChunkClosed)
 }
 
 func (pc *persistChunk) CloseWithError(err error) {
 	pc.DonePersist()
-	pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
+	if err != types.ErrChunkClosed {
+		pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
+	} else {
+		pc.cache.log.Debug("%s: Closed", pc.Key())
+	}
 	pc.notifyError(err)
-	if pc.refs.Load() <= 0 {
+	if pc.CanClose() {
 		pc.once.Do(pc.close)
 	}
+}
+
+func (pc *persistChunk) IsClosed() bool {
+	return pc.closed
 }
 
 func (pc *persistChunk) doneRefs() int32 {
@@ -215,6 +234,7 @@ func (pc *persistChunk) close() {
 		key = debugIDRemover.ReplaceAllString(key, "")
 	}
 	pc.cache.remove(key)
+	pc.closed = true
 	pc.cache.log.Debug("%s Removed, remaining %d keys", pc.Key(), pc.cache.Len())
 }
 
@@ -243,7 +263,7 @@ func (pc *persistChunk) notifyData(interceptor *server.InterceptReader) {
 
 func (pc *persistChunk) waitData(nRead int64, done chan<- struct{}) (int64, error) {
 	pc.mu.Lock()
-	if pc.bytesStored() <= nRead {
+	if pc.bytesStored() <= nRead && pc.err == nil {
 		pc.notifier.Wait()
 	}
 	pc.mu.Unlock()

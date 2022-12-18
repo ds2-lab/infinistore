@@ -53,11 +53,13 @@ type Response struct {
 	w         resp.ResponseWriter
 	ctxCancel context.CancelFunc
 	ctxDone   <-chan struct{}
+	from      string
 }
 
 func NewResponse(cmd string) *Response {
 	rsp := &Response{Cmd: cmd}
 	rsp.Closer.Init()
+	rsp.from = "responded"
 	return rsp
 }
 
@@ -70,7 +72,7 @@ func (rsp *Response) Request() *Request {
 }
 
 func (rsp *Response) String() string {
-	return fmt.Sprintf("%s %v", rsp.Cmd, &rsp.Id)
+	return fmt.Sprintf("%s %s:%v", rsp.from, rsp.Cmd, &rsp.Id)
 }
 
 func (rsp *Response) SetBodyStream(stream resp.AllReadCloser) {
