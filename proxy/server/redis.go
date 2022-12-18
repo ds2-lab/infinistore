@@ -121,8 +121,11 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 		w.AppendError(err.Error())
 		w.Flush()
 	} else {
-		size = reader.Len()
-		if err := w.CopyBulk(reader, int64(size)); err != nil {
+		// size = reader.Len()
+		// err := w.CopyBulk(reader, int64(size));
+		w.AppendBulkString("")
+		err := w.Flush()
+		if err != nil {
 			a.log.Warn("Error on sending %s: %v", key, err)
 		}
 		reader.Close()
