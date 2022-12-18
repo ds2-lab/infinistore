@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,8 +15,8 @@ import (
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
+	"github.com/mason-leap-lab/go-utils/promise"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
 const (
@@ -91,7 +92,7 @@ type Request struct {
 	leftAttempts     int
 	reason           error
 	responseTimeout  time.Duration
-	responded        unsafe.Pointer // promise.Promise
+	responded        atomic.Value
 
 	// Shared if request to be send to multiple lambdas
 	response *response
@@ -124,11 +125,25 @@ func (req *Request) GetRequest() *Request {
 	return req
 }
 
+// MarkError updates the error of the request and returns the remaining attempts. Error specified can be nil to reset the error.
 func (req *Request) MarkError(err error) int {
 	req.err = err
+	// No change to number of attempts if error is nil. For asynchronous request, error can be reported later.
+	// Or if the request is success, it does not matter to retry.
+	if err == nil {
+		return req.leftAttempts
+	}
+
 	if req.BodyStream != nil && req.streamingStarted {
-		req.leftAttempts = 0
-		req.reason = ErrStreamingReq
+		if req.PersistChunk != nil && req.leftAttempts > 1 {
+			// Once persist chunk start streaming, it will continue streaming until stored.
+			// Start a new downstream to read data. No need to hold.
+			req.BodyStream, _ = req.PersistChunk.Load(context.Background())
+			req.leftAttempts--
+		} else {
+			req.leftAttempts = 0
+			req.reason = ErrStreamingReq
+		}
 	} else if req.leftAttempts == 0 {
 		req.leftAttempts = MAX_ATTEMPTS - 1
 	} else {
@@ -198,8 +213,9 @@ func (req *Request) PrepareForGet(conn Conn) {
 
 func (req *Request) ToGetResponse() *Response {
 	rsp := &Response{
-		Id:  req.Id,
-		Cmd: req.Cmd,
+		Id:   req.Id,
+		Cmd:  req.Cmd,
+		from: "cached",
 	}
 	if req.RetCommand != "" {
 		rsp.Cmd = req.RetCommand
@@ -222,7 +238,7 @@ func (req *Request) ToRecover() *Request {
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
 	recover.conn = nil
-	recover.responded = nil
+	recover.responded = atomic.Value{}
 	return &recover
 }
 
@@ -287,8 +303,23 @@ func (req *Request) close() {
 	}
 }
 
-func (req *Request) Validate() bool {
-	return req.MustRequest() || !req.isResponded()
+// Validate confirms if the request should be sent to the Lambda. Pass true for the final confirmation.
+func (req *Request) Validate(final bool) bool {
+	if !req.isResponded() {
+		return true
+	} else if !req.MustRequest() {
+		return false
+	}
+	if ok := req.PersistChunk.CanClose(); !ok {
+		return true
+	} else if !final {
+		// Close the chunk so no further request will pending on this chunk. Will confirm again later.
+		req.PersistChunk.Close()
+		return true
+	} else {
+		// If Closed, it is safe to quit the request.
+		return !req.PersistChunk.IsClosed()
+	}
 }
 
 // MustRequest indicates that the request must be sent to the Lambda.
@@ -349,8 +380,9 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 	// * The response promise is associated with the sent request.
 	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
-	responded := promise.LoadPromise(&req.responded)
+	responded, _ := req.responded.Load().(promise.Promise)
 	if responded != nil && !responded.IsResolved() {
+		req.responded = atomic.Value{}
 		responded.Resolve(rsp)
 	}
 
@@ -415,19 +447,19 @@ func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
 		return ErrNotSuppport
 	}
-	err := req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true})
+	err := req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true, from: "abandoned"})
 	if err != nil && err != ErrResponded {
 		return err
 	}
 
 	// Try abandon streaming.
-	if rsp := req.Response(); rsp != nil && !rsp.IsAbandon() {
+	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() {
 		rsp.CancelFlush()
 	}
 	return nil
 }
 
-func (req *Request) Timeout(opts ...int) (err error) {
+func (req *Request) Timeout(opts ...int) (responded promise.Promise, err error) {
 	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
 
 	// responseTimeout has been calculated in PrepareForXXX()
@@ -436,60 +468,41 @@ func (req *Request) Timeout(opts ...int) (err error) {
 	}
 
 	// Initialize promise
-	p := req.initPromise(opts...)
+	p := req.InitPromise(opts...)
 	// Set timeout
 	p.SetTimeout(req.responseTimeout)
-	// Double check if the request is already responded.
-	if req.IsReturnd() {
-		p.Resolve(nil)
-	}
+
+	// We will not check if the shared response is available, a promise for sent request must be resolved.
+
 	// Wait for timeout
-	return p.Timeout()
+	return p, p.Timeout()
 }
 
 func (req *Request) ResponseTimeout() time.Duration {
 	return req.responseTimeout
 }
 
-func (req *Request) Response() *Response {
+// Response returns shared response if available.
+func (req *Request) getResponse() *Response {
 	// Read from shared response first.
 	if req.isResponded() {
 		rsp, _ := req.response.get().(*Response)
 		return rsp
 	}
 
-	// Read from promise.
-	promise := promise.LoadPromise(&req.responded)
-	if promise != nil && promise.IsResolved() {
-		rsp, _ := promise.Value().(*Response)
-		return rsp
-	}
-
 	return nil
 }
 
-func (req *Request) Error() error {
-	// Read from shared response first.
-	if req.isResponded() {
-		rsp, _ := req.response.get().(error)
-		return rsp
+// InitPromise initialize a promise for later use. NOTE: This function is not thread-safe
+func (req *Request) InitPromise(opts ...int) (ret promise.Promise) {
+	ret, _ = req.responded.Load().(promise.Promise)
+	if ret == nil {
+		ret = promise.NewPromise()
+		req.responded.Store(ret)
 	}
-
-	// Read from promise.
-	promise := promise.LoadPromise(&req.responded)
-	if promise != nil && promise.IsResolved() {
-		rsp, _ := promise.Value().(error)
-		return rsp
-	}
-
-	return nil
-}
-
-func (req *Request) initPromise(opts ...int) promise.Promise {
-	responded := promise.InitPromise(&req.responded)
 
 	if len(opts) > 0 && opts[0]&DEBUG_INITPROMISE_WAIT > 0 {
 		<-time.After(50 * time.Millisecond)
 	}
-	return responded
+	return
 }

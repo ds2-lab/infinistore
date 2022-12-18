@@ -2,9 +2,7 @@ package promise
 
 import (
 	"errors"
-	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -67,26 +65,7 @@ func NewPromiseWithOptions(opts interface{}) Promise {
 	return NewChannelPromiseWithOptions(opts)
 }
 
-func InitPromise(promise *unsafe.Pointer, opts ...interface{}) Promise {
-	if len(opts) == 0 {
-		return InitPromise(promise, nil)
-	}
-
-	a := LoadPromise(promise)
-	if a == nil {
-		b := NewChannelPromiseWithOptions(opts[0])
-		if atomic.CompareAndSwapPointer(promise, nil, unsafe.Pointer(b)) {
-			return b
-		} else {
-			return LoadPromise(promise)
-		}
-	}
-	return a
-}
-
-func LoadPromise(promise *unsafe.Pointer) Promise {
-	if loaded := atomic.LoadPointer(promise); loaded != nil {
-		return (*ChannelPromise)(loaded)
-	}
-	return nil
+// Recycle returns the promise to the pool.
+func Recycle(p Promise) {
+	// TODO: recycle
 }

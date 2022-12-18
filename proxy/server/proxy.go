@@ -223,9 +223,6 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
-	if req.PersistChunk != nil {
-		defer req.BodyStream.Close()
-	}
 	if err != nil && err == metastore.ErrConcurrentCreation {
 		// Later concurrent setting will be automatically abandoned and return the same result as the earlier one.
 		req.BodyStream.(resp.Holdable).Unhold() // bodyStream now will automatically be closed.
@@ -323,8 +320,8 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 			p.log.Debug("Persisting %v to cache %s", &req.Id, cached.Key())
 			req.PersistChunk = cached
 		} else {
-			p.log.Debug("Serving %v from cache %s", &req.Id, cached.Key())
 			go p.waitForCache(req, cached, counter)
+			p.log.Debug("Serving %v from cache %s", &req.Id, cached.Key())
 			return
 		}
 	}
@@ -525,6 +522,8 @@ func (p *Proxy) beforePlacingHandler(meta *metastore.Meta, chunkId int, cmd type
 	req.BodyStream = bodyStream
 	req.BodyStream.(resp.Holdable).Hold()
 	req.PersistChunk = pChunk
+	// Finish interception whatever.
+	go bodyStream.Close()
 }
 
 func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, counter *global.RequestCounter) {

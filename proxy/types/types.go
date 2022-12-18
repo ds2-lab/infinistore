@@ -6,7 +6,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
+	"github.com/mason-leap-lab/go-utils/promise"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 

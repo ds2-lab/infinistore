@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/kelindar/binary"
+	"github.com/mason-leap-lab/go-utils/promise"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
@@ -257,10 +258,11 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 	ins := conn.instance // Save a reference in case the connection being released later.
 	// Clear busy status unless waitResponse is set.
-	waitResponse := false
+	var responded promise.Promise
+	var waitTimeout = false
 	defer func() {
-		if !waitResponse {
-			conn.doneRequest(ins, req)
+		if !waitTimeout {
+			conn.doneRequest(ins, req, responded)
 		}
 	}()
 
@@ -286,12 +288,13 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	conn.prePushRequest(req)
 	// Abandon if the request is already responded. However, if persist chunk is available,
 	// all chunks can benifit later requests, and we will not abandon it.
-	if !req.Validate() {
+	if !req.Validate(true) {
 		conn.popRequest(req)
 		conn.log.Debug("Abandon requesting %v: responded.", &req.Id)
 		return
 	}
 
+	responded = req.InitPromise()
 	switch req.Name() {
 	case protocol.CMD_SET:
 		req.PrepareForSet(conn)
@@ -328,20 +331,20 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		conn.peekGrant <- struct{}{}
 	}
 
-	conn.log.Debug("Sent %v", req)
 	ins.SetDue(due.UnixNano(), false) // Set long due until response received.
 
-	waitResponse = true
+	waitTimeout = true
 	go func() {
 		// The request has been send, call doneBusy after response set.
-		defer conn.doneRequest(ins, req)
+		defer conn.doneRequest(ins, req, responded)
 
 		// Wait for response or timeout.
 		// Noted that even the client-request can be responeded, Timeout() will wait for lambda-request.
-		err := req.Timeout()
+		_, err := req.Timeout()
 		if err == nil {
-			rsp := req.Response()
+			rsp, _ := responded.Value().(*types.Response)
 			if rsp == nil {
+				// If error, we are done.
 				return
 			} else if rsp.IsAbandon() {
 				conn.log.Debug("Abandoned %v", &rsp.Id)
@@ -360,7 +363,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 					case conn.chanWait <- &types.Request{}:
 						// Once the queue is free (because we can inserted into it), consume it to allow next request.
 						// This approach can be only used for data link, because no request will be sent on data link before it is returned to the link manager.
-						<-conn.chanWait
+						<-conn.chanWait // This is equivalent to rsp.Wait()
 					// Guarded by the same timeout for original request. It is avaiable after we call the req.Timeout() before.
 					case <-time.After(req.ResponseTimeout()):
 						conn.CloseWithReason("timeout on waiting for response of abandoned request", false)
@@ -431,17 +434,28 @@ func (conn *Connection) loadRequest(rsp *types.Response) (*types.Request, error)
 }
 
 // doneRequest resets instance and connection status after a request.
-func (conn *Connection) doneRequest(ins *Instance, req *types.Request) {
+func (conn *Connection) doneRequest(ins *Instance, req *types.Request, responded promise.Promise) {
 	ins.doneBusy(req)
 
 	// Nil response suggests an error without proper response. Error during tranmission response will be handled differently.
-	if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
+	if req.PersistChunk != nil && !req.PersistChunk.IsStored() && !req.PersistChunk.IsClosed() {
 		conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
-		if err := req.Error(); err != nil {
-			req.PersistChunk.CloseWithError(err)
-		} else {
-			req.PersistChunk.Close()
+		// ASSERION: responded is not nil.
+		var err error
+		if responded != nil {
+			err, _ = responded.Value().(error)
 		}
+		if err != nil {
+			req.PersistChunk.CloseWithError(err)
+		} else if conn.IsClosed() {
+			// If responded is abandoned, the chunk can failed to store due to connection closed. See history logs why the reason is closed.
+			req.PersistChunk.CloseWithError(ErrConnectionClosed)
+		} else {
+			req.PersistChunk.CloseWithError(types.ErrUnexpectedClose)
+		}
+	}
+	if responded != nil {
+		promise.Recycle(responded)
 	}
 
 	lm := ins.lm
