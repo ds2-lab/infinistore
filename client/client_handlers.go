@@ -572,27 +572,39 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 	req.Cmd = protocol.CMD_GET_CHUNK
 	req.ReqId = reqId
 
-	cn, err := c.validate(addr, i)
-	if err != nil {
-		req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
+	for attempt := 0; attempt < RequestAttempts; attempt++ {
+		if attempt > 0 {
+			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attempt+1)
+		}
+
+		cn, err := c.validate(addr, i)
+		if err != nil {
+			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
+			return
+		}
+
+		req.SetConn(cn)
+		err = cn.StartRequest(req, func(_ client.Request) error {
+			// cmd seq key reqId chunkId
+			cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
+			return nil
+		})
+		if err != nil && c.closed {
+			req.SetResponse(ErrClientClosed)
+			return
+		} else if err != nil {
+			log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
+			continue
+		}
+
+		log.Debug("Initiated getting %d@%s(%s), attempt %d", i, key, addr, attempt+1)
+		ctx, cancel := context.WithTimeout(req.Context(), Timeout)
+		req.Cancel = cancel
+		req.SetContext(ctx)
 		return
 	}
 
-	req.SetConn(cn)
-	err = cn.StartRequest(req, func(_ client.Request) error {
-		// cmd seq key reqId chunkId
-		cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
-		return nil
-	})
-	if err != nil {
-		req.SetResponse(fmt.Errorf("error on initiate request(%s): %v", addr, err))
-		return
-	}
-	ctx, cancel := context.WithTimeout(req.Context(), Timeout)
-	req.Cancel = cancel
-	req.SetContext(ctx)
-
-	log.Debug("Initiated getting %d@%s(%s) %d", i, key, addr, req.Seq())
+	req.SetResponse(fmt.Errorf("stop attempts: %v", ErrMaxPreflightsReached))
 }
 
 func (c *Client) readGetResponse(req *ClientRequest) error {

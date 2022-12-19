@@ -205,10 +205,6 @@ func (r *ecRet) Len() int {
 
 func (r *ecRet) Request(i int) *ClientRequest {
 	if r.reqs[i] == nil {
-		if r.Err != nil {
-			r.Done()
-			return nil
-		}
 		ctx := context.WithValue(context.Background(), CtxKeyECRet, r)
 		req := &ClientRequest{Request: client.NewRequestWithContext(ctx)}
 		req.OnRespond(func(rsp interface{}, err error) {

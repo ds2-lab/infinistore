@@ -20,9 +20,10 @@ func Ifelse(expr bool, then interface{}, or interface{}) interface{} {
 }
 
 func IsConnectionFailed(err error) bool {
-	if err == io.EOF || err == io.ErrUnexpectedEOF {
+	if err == io.EOF || err == io.ErrUnexpectedEOF || err == io.ErrClosedPipe {
 		return true
-	} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+	} else if _, ok := err.(net.Error); ok {
+		// All net.Error counts, they are either timeout or permanent(non-temporary) error.
 		return true
 	}
 

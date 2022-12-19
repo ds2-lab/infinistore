@@ -1597,9 +1597,9 @@ func (ins *Instance) resetCoolTimer(flag bool) {
 }
 
 func (ins *Instance) isBusy(counter uint64, write bool) (uint64, bool) {
-	if write && ins.numBusyingWrites(counter) > IN_CONCURRENCY {
+	if write && ins.numBusyingWrites(counter) >= IN_CONCURRENCY {
 		return counter, true
-	} else if ins.numBusying(counter) > MAX_CONCURRENCY {
+	} else if ins.numBusying(counter) >= MAX_CONCURRENCY {
 		return counter, true
 	} else {
 		return counter, false

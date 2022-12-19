@@ -333,7 +333,8 @@ func (conn *Conn) invalidate(shortcut *net.MockConn) {
 func (conn *Conn) isConnectionFailed(err error) bool {
 	if err == io.EOF || err == io.ErrUnexpectedEOF || err == io.ErrClosedPipe {
 		return true
-	} else if netErr, ok := err.(sysnet.Error); ok && netErr.Timeout() {
+	} else if _, ok := err.(sysnet.Error); ok {
+		// All net.Error counts, they are either timeout or permanent(non-temporary) error.
 		return true
 	}
 

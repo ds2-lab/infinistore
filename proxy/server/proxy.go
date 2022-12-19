@@ -547,6 +547,7 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 
 	// Set response
 	if err := req.SetResponse(rsp); err != nil {
+		p.log.Warn("Failed to set response on streaming cached %v: %v", &rsp.Id, err)
 		stream.(resp.Holdable).Unhold()
 		stream.Close()
 		return

@@ -238,7 +238,7 @@ func (req *Request) ToRecover() *Request {
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
 	recover.conn = nil
-	recover.responded = atomic.Value{}
+	recover.resetPromise()
 	return &recover
 }
 
@@ -382,7 +382,6 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
 	responded, _ := req.responded.Load().(promise.Promise)
 	if responded != nil && !responded.IsResolved() {
-		req.responded = atomic.Value{}
 		responded.Resolve(rsp)
 	}
 
@@ -469,6 +468,7 @@ func (req *Request) Timeout(opts ...int) (responded promise.Promise, err error) 
 
 	// Initialize promise
 	p := req.InitPromise(opts...)
+	defer req.resetPromise() // One time use
 	// Set timeout
 	p.SetTimeout(req.responseTimeout)
 
@@ -505,4 +505,8 @@ func (req *Request) InitPromise(opts ...int) (ret promise.Promise) {
 		<-time.After(50 * time.Millisecond)
 	}
 	return
+}
+
+func (req *Request) resetPromise(opts ...int) {
+	req.responded = atomic.Value{}
 }
