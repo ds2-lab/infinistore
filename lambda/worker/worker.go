@@ -15,8 +15,10 @@ import (
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/common/net"
+	"github.com/mason-leap-lab/infinicache/common/stats"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -78,6 +80,9 @@ type Worker struct {
 
 	// Proxies container
 	proxies []*HandlerProxy
+
+	// Stats
+	movingRTT *stats.MovingStats
 }
 
 type WorkerOptions struct {
@@ -98,10 +103,21 @@ func NewWorker(lifeId int64) *Worker {
 		dataLinks:   list.New(),
 		closed:      WorkerClosed,
 		proxies:     make([]*HandlerProxy, 0, 10), // 10 for a initial size.
+		movingRTT:   stats.NewMovingUnilateralValue(10, 0.875, 0.125),
 	}
+	worker.movingRTT.Add(float64(20 * time.Millisecond))
 	worker.Server.HandleFunc(protocol.CMD_ACK, worker.ackHandler)
 	worker.Server.HandleCallbackFunc(worker.responseHandler)
 	return worker
+}
+
+// types.ServerStats implementation.
+func (wrk *Worker) GetStats() types.ServerStats {
+	return wrk
+}
+
+func (wrk *Worker) RTT() time.Duration {
+	return time.Duration(wrk.movingRTT.Value())
 }
 
 func (wrk *Worker) Id() int32 {
@@ -590,9 +606,12 @@ func (wrk *Worker) WaitAck(cmd string, cb func(), links ...interface{}) {
 	link := wrk.selectLink(links...)
 	go func() {
 		// Wait for resolve or timeout
+		start := time.Now()
 		if err := link.acked.Timeout(); err != nil {
 			wrk.log.Warn("Acknowledge of %v: %v", cmd, err)
 			link.acked.Resolve()
+		} else {
+			wrk.movingRTT.Add(float64(time.Since(start)))
 		}
 		cb()
 	}()
