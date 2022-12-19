@@ -270,7 +270,6 @@ func (conn *Connection) sendRequest(req *types.Request) {
 	if conn.IsClosed() {
 		retries := req.MarkError(ErrConnectionClosed)
 		conn.log.Warn("Unexpected closed connection when sending request: %v, %d retries left.", req, retries)
-		ins.ResetDue(false)
 		if retries > 0 {
 			ins.mustDispatch(req)
 		} else {
@@ -315,10 +314,9 @@ func (conn *Connection) sendRequest(req *types.Request) {
 
 	// Updated by Tianium: 20210523
 	// Write timeout is added back. See comments in req.Flush()
-	due := time.Now().Add(req.ResponseTimeout())
 	if err := req.Flush(); err != nil {
 		conn.log.Warn("Flush request error: %v - %v", req, err)
-		ins.ResetDue(false)
+		ins.ResetDue(false, "connection error on sending request")
 		if req.MarkError(err) > 0 {
 			ins.mustDispatch(req)
 		} else {
@@ -331,7 +329,7 @@ func (conn *Connection) sendRequest(req *types.Request) {
 		conn.peekGrant <- struct{}{}
 	}
 
-	ins.SetDue(due.UnixNano(), false) // Set long due until response received.
+	ins.SetDue(time.Now().Add(protocol.HeaderTimeout).UnixNano(), false, "granting extension for serving request") // Set long due until response received.
 
 	waitTimeout = true
 	go func() {
@@ -529,6 +527,10 @@ func (conn *Connection) CloseWithReason(reason string, block bool) error {
 		}
 		// conn.Conn.SetDeadline(time.Now().Add(-time.Second)) // Force timeout to stop blocking read.
 		conn.Conn.Close()
+
+		if conn.control && conn.instance != nil {
+			conn.instance.ResetDue(false, "control connection closed")
+		}
 	}
 
 	if block {
@@ -915,7 +917,7 @@ func (conn *Connection) getHandler(start time.Time) {
 		conn.CloseAndWait() // Ensure closed and safe to wait for the close in a handler.
 		return
 	}
-	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano(), false)
+	conn.instance.SetDue(protocol.GetBodyDeadline(stream.Len()).UnixNano(), false, "granting extension for transfering chunk")
 
 	rsp := types.NewResponse(protocol.CMD_GET)
 	rsp.Id.ReqId = reqId
@@ -1173,10 +1175,10 @@ func (conn *Connection) readAndSetDue(ins *Instance) error {
 	due, err := conn.r.ReadInt()
 	if conn.closeIfError("Failed to read due: %v.", err) {
 		// Reset possible optimistic estimation.
-		ins.ResetDue(true)
+		ins.ResetDue(true, "failing to read due feedback")
 		return err
 	}
-	ins.SetDue(due, true) // As long as any connection is busy, delay the update of due.
+	ins.SetDue(due, true, "updating due feedback") // As long as any connection is busy, delay the update of due.
 
 	flags, err := conn.r.ReadInt()
 	if conn.closeIfError("Failed to read piggyback flags: %v.", err) {
@@ -1202,7 +1204,7 @@ func (conn *Connection) ackCommand(cmd string) error {
 
 func (conn *Connection) finalizeCommmand(cmd string) error {
 	if conn.IsClosed() {
-		conn.instance.ResetDue(true)
+		conn.instance.ResetDue(true, "connection closed before reading due feedback")
 		return ErrConnectionClosed
 	} else if err := conn.readAndSetDue(conn.instance); err != nil {
 		// The connection will be closed if error occurs.

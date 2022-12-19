@@ -21,7 +21,6 @@ import (
 	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/go-utils/promise"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
@@ -212,11 +211,7 @@ type Instance struct {
 
 func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 	dp.id = id
-	dp.log = &logger.ColorLogger{
-		Prefix: fmt.Sprintf("%s-%d ", dp.name, dp.id),
-		Level:  global.Log.GetLevel(),
-		Color:  !global.Options.NoColor,
-	}
+	dp.log = global.GetLogger(fmt.Sprintf("%s-%d ", dp.name, dp.id))
 
 	ins := &Instance{
 		Deployment: dp,
@@ -845,7 +840,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	connectTimeout := DefaultConnectTimeout
 	// for::attemps
 	for {
-		ins.log.Debug("Validating...")
+		ins.log.Info("Validating..., due in %v", goodDue)
 		// Try invoking the lambda node.
 		// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
 		triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
@@ -1280,7 +1275,7 @@ func (ins *Instance) TryFlagValidated(conn *Connection, sid string, flags int64)
 		ins.log.Debug("[%v]Already validated", ins)
 		return validConn, ErrInstanceValidated
 	} else {
-		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano(), false) // Set due after MinValidationInterval immediately.
+		ins.SetDue(time.Now().Add(MinValidationInterval).UnixNano(), false, "keeping validation inteval") // Set due after MinValidationInterval immediately.
 		return validConn, nil
 	}
 }
@@ -1385,12 +1380,12 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 		if lastErr == nil || leftAttempts == 0 { // Request can become streaming, so we need to test again everytime.
 			break
 		} else {
-			ins.ResetDue(false) // Force ping on error
+			ins.ResetDue(false, "request failure") // Force ping on error
 			ins.log.Warn("Failed to %v: %v, %d attempts remaining.", cmd, lastErr, leftAttempts)
 		}
 	}
 	if lastErr != nil {
-		ins.ResetDue(false) // Force ping on error
+		ins.ResetDue(false, "request failure") // Force ping on error
 		if leftAttempts == 0 {
 			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		} else {
@@ -1656,8 +1651,10 @@ func (ins *Instance) doneBusy(cmd types.Command) {
 	}
 
 	status := atomic.AddUint64(&ins.numRequests, ^(ins.getBusyUnit(req) - 1))
-	if ins.numBusying(status) == 0 {
-		ins.SetDue(ins.delayedDue, false)
+	if ins.numBusying(status) == 0 || ins.delayedDue > ins.due {
+		ins.SetDue(ins.delayedDue, false, "concluding delayed due")
+	} else {
+		ins.log.Info("Keep lambda due in %v for busy instance", time.Duration(ins.due-time.Now().UnixNano())) // Instance busy, keep the last due.
 	}
 }
 
@@ -1687,15 +1684,25 @@ func (ins *Instance) FlagDataCollected(ok string) {
 	global.DataCollected.Done()
 }
 
-func (ins *Instance) SetDue(due int64, delay bool) {
+func (ins *Instance) SetDue(due int64, delay bool, reason string) {
 	ins.delayedDue = due
 	if !delay {
 		ins.due = due
 	}
+	if len(reason) == 0 {
+		return
+	}
+	timeout := time.Duration(due - time.Now().UnixNano())
+	if timeout <= -time.Millisecond {
+		ins.log.Warn("Set(%v) lambda due in %v for %s", delay, timeout, reason)
+	} else {
+		ins.log.Debug("Set(%v) lambda due in %v for %s", delay, timeout, reason)
+	}
 }
 
-func (ins *Instance) ResetDue(delay bool) {
-	ins.SetDue(time.Now().UnixNano(), delay)
+func (ins *Instance) ResetDue(delay bool, reason string) {
+	ins.log.Debug("Reset(%v) lambda due time for %s", delay, reason)
+	ins.SetDue(time.Now().UnixNano(), delay, "")
 }
 
 func (ins *Instance) getRerouteThreshold() uint64 {

@@ -34,16 +34,24 @@ func BuildPiggyback(response *worker.ObjectResponse) {
 	}
 }
 
+func GetDefaultExtension(session *lambdaLife.Session) time.Duration {
+	extension := Server.GetStats().RTT() * 2 // Expecting new requests to arrive within RTT.
+	if extension < lambdaLife.TICK_EXTENSION {
+		extension = lambdaLife.TICK_EXTENSION
+	}
+	// if session.Requests > 1 {
+	// 	extension = lambdaLife.TICK_EXTENSION
+	// }
+	return extension
+}
+
 func TestHandler(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 
 	Pong.Cancel()
 	session := lambdaLife.GetSession()
 	session.Timeout.Busy(c.Name)
-	extension := lambdaLife.TICK_ERROR
-	if session.Requests > 1 {
-		extension = lambdaLife.TICK
-	}
+	extension := GetDefaultExtension(session)
 	defer session.Timeout.DoneBusyWithReset(extension, c.Name)
 
 	log.Debug("In Test handler")
@@ -69,17 +77,14 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
-	extension := lambdaLife.TICK_ERROR
-	if session.Requests > 1 {
-		extension = lambdaLife.TICK
-	}
+	extension := GetDefaultExtension(session)
 	cmd := c.Name // Save for defer, command is reused by redeo.
 	defer Server.WaitAck(cmd, func() {
 		session.Timeout.DoneBusyWithReset(extension, cmd)
 	}, client)
 
 	t := time.Now()
-	log.Debug("In GET handler(link:%v)", link)
+	log.Debug("In GET handler(link:%v, extension:%v)", link, extension)
 
 	reqId := c.Arg(0).String()
 	// Skip: chunkId := c.Arg(1).String()
@@ -200,14 +205,11 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
-	extension := lambdaLife.TICK_ERROR
-	if session.Requests > 1 {
-		extension = lambdaLife.TICK
-	}
+	extension := GetDefaultExtension(session)
 
 	t := time.Now()
 	var t2 time.Time
-	log.Debug("In SET handler(link:%v)", link)
+	log.Debug("In SET handler(link:%v, extension:%v)", link, extension)
 
 	var reqId, chunkId, key string
 	cmd := c.Name
@@ -347,10 +349,8 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
-	extension := lambdaLife.TICK_ERROR
-	if session.Requests > 1 {
-		extension = lambdaLife.TICK
-	}
+	extension := GetDefaultExtension(session)
+
 	var ret *types.OpRet
 	cmd := c.Name
 	defer Server.WaitAck(cmd, func() {
@@ -361,7 +361,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 	}, client)
 
 	t := time.Now()
-	log.Debug("In RECOVER handler(link:%v)", link)
+	log.Debug("In RECOVER handler(link:%v, extension:%v)", link, extension)
 
 	errRsp := &worker.ErrorResponse{}
 	reqId := c.Arg(0).String()
@@ -460,10 +460,8 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 	Pong.Cancel()
 	session.Timeout.Busy(c.Name)
 	session.Requests++
-	extension := lambdaLife.TICK_ERROR
-	if session.Requests > 1 {
-		extension = lambdaLife.TICK
-	}
+	extension := GetDefaultExtension(session)
+
 	var ret *types.OpRet
 	cmd := c.Name
 	defer Server.WaitAck(cmd, func() {
