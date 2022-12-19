@@ -65,6 +65,10 @@ type StorageMeta interface {
 	Calibrate()
 }
 
+type ServerStats interface {
+	RTT() time.Duration
+}
+
 type Storage interface {
 	Id() uint64
 	Get(string) (string, []byte, *OpRet)

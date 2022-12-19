@@ -56,14 +56,18 @@ func IsLocalCacheEnabled() bool {
 
 func GetLogger(prefix string) logger.ILogger {
 	return &logger.ColorLogger{
-		Prefix: prefix,
-		Level:  Log.GetLevel(),
-		Color:  !Options.NoColor,
+		Prefix:  prefix,
+		Level:   Log.GetLevel(),
+		Color:   !Options.NoColor,
+		Verbose: Log.GetLevel() == logger.LOG_LEVEL_ALL,
 	}
 }
 
 func SetLoggerLevel(level int) {
 	if color, ok := Log.(*logger.ColorLogger); ok {
 		color.Level = level
+		if level == logger.LOG_LEVEL_ALL {
+			color.Verbose = true
+		}
 	}
 }
