@@ -40,18 +40,20 @@ var (
 	PlaceholderResponse = &response{}
 )
 
-type RequestCloser interface {
+type RequestGroup interface {
 	MarkReturnd(*Id) (uint64, bool)
 	IsFulfilled(status ...uint64) bool
 	IsAllReturned(status ...uint64) bool
 	Close()
 }
 
+// Shared response container.
 type response struct {
 	status uint32
 	client *redeo.Client
 	rsp    interface{}
 	mu     sync.Mutex
+	once   sync.Once
 }
 
 func (r *response) set(rsp interface{}) error {
@@ -84,6 +86,7 @@ type Request struct {
 	Changes        int
 	CollectorEntry interface{}
 	Option         int64
+	RequestGroup   RequestGroup
 	PersistChunk   PersistChunk
 
 	conn             Conn
@@ -96,7 +99,6 @@ type Request struct {
 
 	// Shared if request to be send to multiple lambdas
 	response *response
-	Cleanup  RequestCloser
 	// Added by Tianium 20221102
 	AllDone      bool // Is sharded request done after chunk request
 	AllSucceeded bool // Is sharded request succeeded after chunk request
@@ -298,9 +300,9 @@ func (req *Request) close() {
 		}
 	}
 
-	if req.Cleanup != nil {
-		req.Cleanup.Close()
-		req.Cleanup = nil
+	if req.RequestGroup != nil {
+		req.RequestGroup.Close()
+		req.RequestGroup = nil
 	}
 }
 
@@ -367,85 +369,6 @@ func (req *Request) SetErrorResponse(err error) error {
 	return req.setResponse(err)
 }
 
-// SetResponse sets response of the request. Concurrent request dispatching is
-// supported, in which case the request will be dispatched to multiple instances,
-// one of which is required and others are optional. SetResponse ensure only one
-// response will be sent by:
-// 1. Cancel timeout for individual request copy.
-// 2. Ignore err if the request copy is optional.
-// 3. Exclusively set response for first responder.
-func (req *Request) setResponse(rsp interface{}) (err error) {
-	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
-
-	// Responsed promise has high priority because:
-	// * The response promise is associated with the sent request.
-	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
-	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
-	responded, _ := req.responded.Load().(promise.Promise)
-	if responded != nil && !responded.IsResolved() {
-		responded.Resolve(rsp)
-	}
-
-	// Ignore err if request is optional
-	if _, ok := rsp.(error); ok && req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
-		return nil
-	}
-
-	if req.response == nil {
-		return ErrNoClient
-	}
-
-	// Makeup:
-	// 1. Ensure return mark is marked
-	// 2. Do cleanup
-	// req.close safe
-	cleanup := req.Cleanup
-	if cleanup != nil {
-		status, _ := cleanup.MarkReturnd(&req.Id)
-		// Added by Tianium: 20221102
-		// Update status of shared request.
-		req.AllDone = cleanup.IsAllReturned(status)
-		req.AllSucceeded = cleanup.IsFulfilled(status)
-	} else {
-		req.MarkReturned()
-	}
-	// Guard codes after this line will only executed once.
-	if err := req.response.set(rsp); err != nil {
-		return ErrResponded
-	}
-
-	// Cleanup request.
-	req.close()
-
-	// Asynchronously send the response.
-	if req.response.client == nil {
-		// Skip if client is nil or reset.
-		return nil
-	}
-
-	response, ok := rsp.(*Response)
-	if ok {
-		response.request = req
-		err = req.response.client.AddResponses(response)
-	} else {
-		err = req.response.client.AddResponses(&proxyResponse{response: rsp, request: req})
-		err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
-		if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
-			err, ok := rsp.(error)
-			if !ok {
-				err = fmt.Errorf("%v", rsp)
-			}
-			req.PersistChunk.CloseWithError(err)
-		}
-	}
-	// if err != nil {
-	// 	err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
-	// }
-	// Release reference so chan can be garbage collected.
-	req.response.client = nil
-	return err
-}
-
 // Only appliable to GET so far.
 func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
@@ -485,6 +408,90 @@ func (req *Request) Timeout(opts ...int) (responded promise.Promise, err error) 
 
 func (req *Request) ResponseTimeout() time.Duration {
 	return req.responseTimeout
+}
+
+// SetResponse sets response of the request. Concurrent request dispatching is
+// supported, in which case the request will be dispatched to multiple instances,
+// one of which is required and others are optional. SetResponse ensure only one
+// response will be sent by:
+// 1. Cancel timeout for individual request copy.
+// 2. Ignore err if the request copy is optional.
+// 3. Exclusively set response for first responder.
+func (req *Request) setResponse(rsp interface{}) (err error) {
+	// defer util.PanicRecovery("proxy/types/Request.SetResponse", &err)
+
+	// Responsed promise has high priority because:
+	// * The response promise is associated with the sent request.
+	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
+	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
+	responded, _ := req.responded.Load().(promise.Promise)
+	if responded != nil && !responded.IsResolved() {
+		responded.Resolve(rsp)
+	}
+
+	// Ignore err if request is optional
+	if _, ok := rsp.(error); ok && req.Option&protocol.REQUEST_GET_OPTIONAL > 0 {
+		return nil
+	}
+
+	if req.response == nil {
+		return ErrNoClient
+	}
+
+	// Notified the request group that the request is returned but not necessarily succeeded.
+	// Should req.close safe. However, we have to use sync.Once to ensure it.
+	req.response.once.Do(req.notifyRequestGroup)
+
+	// Atomically set response, only the first responder will succeed.
+	if err := req.response.set(rsp); err != nil {
+		return ErrResponded
+	}
+
+	// We are done with the request, close it.
+	req.close()
+
+	// Send repsonse to client. Skip if client is nil or reset.
+	if req.response.client == nil {
+		return nil
+	}
+	if response, ok := rsp.(*Response); ok {
+		response.request = req
+		err = req.response.client.AddResponses(response)
+	} else {
+		// Handle unexpected response and normalize error response.
+		errResponse, ok := rsp.(error)
+		if !ok {
+			errResponse = fmt.Errorf("unexpected response: %v", rsp)
+		}
+		err = req.response.client.AddResponses(&proxyResponse{response: errResponse, request: req})
+		// Make sure the persisting chunk being notified the error.
+		if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
+			req.PersistChunk.CloseWithError(errResponse)
+		}
+	}
+	// if err != nil {
+	// 	err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
+	// }
+
+	// Release reference so chan can be garbage collected.
+	req.response.client = nil
+	return err
+}
+
+func (req *Request) notifyRequestGroup() {
+	// Makeup:
+	// 1. Ensure return mark is marked
+	// 2. Do cleanup
+	group := req.RequestGroup
+	if group != nil {
+		status, _ := group.MarkReturnd(&req.Id)
+		// Added by Tianium: 20221102
+		// Update status of shared request.
+		req.AllDone = group.IsAllReturned(status)
+		req.AllSucceeded = group.IsFulfilled(status)
+	} else {
+		req.MarkReturned()
+	}
 }
 
 // Response returns shared response if available.
