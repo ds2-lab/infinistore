@@ -539,14 +539,14 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 	counter.AddSucceeded(req.Id.Chunk(), false)
 
 	// Prepare response
-	rsp := req.ToGetResponse()
+	rsp := req.ToCachedResponse()
 	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 	defer rsp.Close()
 	defer cancel()
 
 	// Set response
-	if err := req.SetResponse(rsp); err != nil {
+	if err := req.SetResponse(rsp); err != nil && err != types.ErrResponded {
 		p.log.Warn("Failed to set response on streaming cached %v: %v", &rsp.Id, err)
 		stream.(resp.Holdable).Unhold()
 		stream.Close()

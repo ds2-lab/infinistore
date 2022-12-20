@@ -211,11 +211,12 @@ func (req *Request) PrepareForGet(conn Conn) {
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
 
-func (req *Request) ToGetResponse() *Response {
+func (req *Request) ToCachedResponse() *Response {
 	rsp := &Response{
-		Id:   req.Id,
-		Cmd:  req.Cmd,
-		from: "cached",
+		Id:     req.Id,
+		Cmd:    req.Cmd,
+		cached: true,
+		from:   "cached",
 	}
 	if req.RetCommand != "" {
 		rsp.Cmd = req.RetCommand
@@ -455,8 +456,8 @@ func (req *Request) Abandon() error {
 		return err
 	}
 
-	// Try abandon streaming.
-	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() {
+	// Try abandon streaming. Stream served from cache will not be abandoned for good throughput.
+	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() && !rsp.IsCached() {
 		rsp.CancelFlush()
 	}
 	return nil

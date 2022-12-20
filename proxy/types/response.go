@@ -49,6 +49,7 @@ type Response struct {
 	request   *Request
 	finalizer ResponseFinalizer
 	abandon   bool // Abandon flag, set in Request class.
+	cached    bool // Cached flag, the response is served from cache.
 
 	w         resp.ResponseWriter
 	ctxCancel context.CancelFunc
@@ -148,6 +149,10 @@ func (rsp *Response) Flush() error {
 
 func (rsp *Response) IsAbandon() bool {
 	return rsp.abandon
+}
+
+func (rsp *Response) IsCached() bool {
+	return rsp.cached
 }
 
 func (rsp *Response) WaitFlush(ctxCancelable bool) error {

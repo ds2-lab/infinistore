@@ -589,7 +589,10 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 			cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
 			return nil
 		})
-		if err != nil && c.closed {
+		if err != nil && err == client.ErrResponded {
+			// Already responded, may be first-d abandoned.
+			return
+		} else if err != nil && c.closed {
 			req.SetResponse(ErrClientClosed)
 			return
 		} else if err != nil {
