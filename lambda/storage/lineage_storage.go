@@ -461,9 +461,13 @@ func (s *LineageStorage) StopTracker() error {
 
 // Status returns the status of the storage.
 // If short is specified, returns nil if all terms confirmed, or returns the meta of main storage only.
-func (s *LineageStorage) Status(short bool) types.LineageStatus {
-	if short && s.unconfirmedEnd == s.unconfirmedStart {
-		return nil
+func (s *LineageStorage) Status(short bool) (confirmedTerm uint64, status types.LineageStatus) {
+	confirmedTerm = s.lineage.Term
+	if s.unconfirmedStart < s.unconfirmedEnd {
+		confirmedTerm = s.unconfirmed[s.unconfirmedStart].Term
+	} else if short {
+		// If short and no unconfirmed, we are done.
+		return
 	}
 
 	meta := &protocol.Meta{
@@ -479,9 +483,9 @@ func (s *LineageStorage) Status(short bool) types.LineageStatus {
 		meta.SnapshotSize = s.snapshot.Size
 	}
 	if s.backupLineage != nil && !short {
-		return types.LineageStatus{meta, s.backupLineage.Meta}
+		return confirmedTerm, types.LineageStatus{meta, s.backupLineage.Meta}
 	} else {
-		return types.LineageStatus{meta}
+		return confirmedTerm, types.LineageStatus{meta}
 	}
 }
 
@@ -680,6 +684,7 @@ func (s *LineageStorage) doCommitTerm(lineage *types.LineageTerm, uploader *s3ma
 		copy(s.unconfirmed[:s.unconfirmedEnd-s.unconfirmedStart], s.unconfirmed[s.unconfirmedStart:s.unconfirmedEnd])
 		s.unconfirmedEnd -= s.unconfirmedStart
 		s.unconfirmedStart = 0
+		s.unconfirmed = s.unconfirmed[:s.unconfirmedEnd]
 	}
 	// Append unconfirmed term
 	s.unconfirmed = append(s.unconfirmed, term)

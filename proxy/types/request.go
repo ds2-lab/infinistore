@@ -211,11 +211,12 @@ func (req *Request) PrepareForGet(conn Conn) {
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
 
-func (req *Request) ToGetResponse() *Response {
+func (req *Request) ToCachedResponse() *Response {
 	rsp := &Response{
-		Id:   req.Id,
-		Cmd:  req.Cmd,
-		from: "cached",
+		Id:     req.Id,
+		Cmd:    req.Cmd,
+		cached: true,
+		from:   "cached",
 	}
 	if req.RetCommand != "" {
 		rsp.Cmd = req.RetCommand
@@ -238,7 +239,7 @@ func (req *Request) ToRecover() *Request {
 	recover.RetCommand = protocol.CMD_GET
 	recover.Changes = req.Changes & CHANGE_PLACEMENT
 	recover.conn = nil
-	recover.responded = atomic.Value{}
+	recover.resetPromise()
 	return &recover
 }
 
@@ -382,7 +383,6 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
 	responded, _ := req.responded.Load().(promise.Promise)
 	if responded != nil && !responded.IsResolved() {
-		req.responded = atomic.Value{}
 		responded.Resolve(rsp)
 	}
 
@@ -429,6 +429,7 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 		err = req.response.client.AddResponses(response)
 	} else {
 		err = req.response.client.AddResponses(&proxyResponse{response: rsp, request: req})
+		err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
 		if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
 			err, ok := rsp.(error)
 			if !ok {
@@ -437,6 +438,9 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 			req.PersistChunk.CloseWithError(err)
 		}
 	}
+	// if err != nil {
+	// 	err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
+	// }
 	// Release reference so chan can be garbage collected.
 	req.response.client = nil
 	return err
@@ -452,8 +456,8 @@ func (req *Request) Abandon() error {
 		return err
 	}
 
-	// Try abandon streaming.
-	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() {
+	// Try abandon streaming. Stream served from cache will not be abandoned for good throughput.
+	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() && !rsp.IsCached() {
 		rsp.CancelFlush()
 	}
 	return nil
@@ -469,6 +473,7 @@ func (req *Request) Timeout(opts ...int) (responded promise.Promise, err error) 
 
 	// Initialize promise
 	p := req.InitPromise(opts...)
+	defer req.resetPromise() // One time use
 	// Set timeout
 	p.SetTimeout(req.responseTimeout)
 
@@ -505,4 +510,8 @@ func (req *Request) InitPromise(opts ...int) (ret promise.Promise) {
 		<-time.After(50 * time.Millisecond)
 	}
 	return
+}
+
+func (req *Request) resetPromise(opts ...int) {
+	req.responded = atomic.Value{}
 }

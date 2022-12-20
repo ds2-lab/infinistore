@@ -163,7 +163,8 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	} else {
 		log.Debug("Input meta: %v", input.Status)
 		if len(input.Status.Metas) == 0 {
-			return store.Lineage.Status(false).ProtocolStatus(), errors.New("no node status found in the input")
+			_, status := store.Lineage.Status(false)
+			return status.ProtocolStatus(), errors.New("no node status found in the input")
 		}
 
 		// Preprocess protocol meta and check consistency
@@ -173,12 +174,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		for i := 0; i < len(metas); i++ {
 			metas[i], err = types.LineageMetaFromProtocol(&input.Status.Metas[i])
 			if err != nil {
-				return store.Lineage.Status(false).ProtocolStatus(), err
+				_, status := store.Lineage.Status(false)
+				return status.ProtocolStatus(), err
 			}
 
 			ret, err := store.Lineage.Validate(metas[i])
 			if err != nil {
-				return store.Lineage.Status(false).ProtocolStatus(), err
+				_, status := store.Lineage.Status(false)
+				return status.ProtocolStatus(), err
 			} else if !ret.IsConsistent() {
 				if input.IsBackingOnly() && i == 0 {
 					// if i == 0 {
@@ -194,7 +197,8 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				}
 			} else if ret == types.LineageValidationConsistentWithHistoryTerm {
 				flags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
-				payload, _ = binary.Marshal(store.Lineage.Status(true).ShortStatus())
+				_, status := store.Lineage.Status(true)
+				payload, _ = binary.Marshal(status.ShortStatus())
 			}
 		}
 
@@ -317,7 +321,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		// On system closing, the lineage should have been unset.
 		if store.Lineage != nil {
 			log.Error("Seesion aborted faultly when persistence is enabled.")
-			status = store.Lineage.Status(false)
+			_, status = store.Lineage.Status(false)
 		}
 		return
 	case <-session.Timeout.C():
@@ -352,7 +356,7 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 			store.Persist.StopTracker()
 		}
 		if store.Lineage != nil {
-			status = store.Lineage.Status(false)
+			_, status = store.Lineage.Status(false)
 		}
 		byeHandler(session, status)
 		session.Done()
@@ -460,7 +464,7 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 	// Finally we can send pong.
 	flags := protocol.PONG_FOR_CTRL
 	if store.Lineage != nil {
-		status := store.Lineage.Status(true)
+		_, status := store.Lineage.Status(true)
 		if status != nil {
 			flags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
 			payload, _ = binary.Marshal(status.ShortStatus())

@@ -310,7 +310,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// Update counter
 	counter.Requests[dChunkId] = req
 
-	p.log.Debug("HandleGet %v: %s from %d", reqId, chunkKey, lambdaDest)
+	p.log.Debug("HandleGet %v(%d): %s from %d", reqId, dChunkId, chunkKey, lambdaDest)
 
 	if p.cache != nil {
 		// Query the persist cache.
@@ -539,14 +539,15 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 	counter.AddSucceeded(req.Id.Chunk(), false)
 
 	// Prepare response
-	rsp := req.ToGetResponse()
+	rsp := req.ToCachedResponse()
 	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 	defer rsp.Close()
 	defer cancel()
 
 	// Set response
-	if err := req.SetResponse(rsp); err != nil {
+	if err := req.SetResponse(rsp); err != nil && err != types.ErrResponded {
+		p.log.Warn("Failed to set response on streaming cached %v: %v", &rsp.Id, err)
 		stream.(resp.Holdable).Unhold()
 		stream.Close()
 		return
