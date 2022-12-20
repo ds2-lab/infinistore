@@ -105,7 +105,7 @@ type Lineage interface {
 
 	// Status returns the status of the lineage.
 	// Parameter short: returns simplified status if passes true.
-	Status(bool) LineageStatus
+	Status(bool) (confirmed uint64, status LineageStatus)
 }
 
 type LineageTerm struct {

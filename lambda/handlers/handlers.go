@@ -26,8 +26,9 @@ var (
 
 func BuildPiggyback(response *worker.ObjectResponse) {
 	if Lineage != nil {
-		status := Lineage.Status(true)
+		confirmed, status := Lineage.Status(true)
 		if status != nil {
+			log.Info("Attaching unconfirmed terms: %d/%d confirmed", confirmed, status[0].Term)
 			response.PiggyFlags |= protocol.PONG_WITH_PAYLOAD | protocol.PONG_RECONCILE
 			response.PiggyPayload, _ = binary.Marshal(status.ShortStatus())
 		}
