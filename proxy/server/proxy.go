@@ -310,7 +310,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	// Update counter
 	counter.Requests[dChunkId] = req
 
-	p.log.Debug("HandleGet %v: %s from %d", reqId, chunkKey, lambdaDest)
+	p.log.Debug("HandleGet %v(%d): %s from %d", reqId, dChunkId, chunkKey, lambdaDest)
 
 	if p.cache != nil {
 		// Query the persist cache.

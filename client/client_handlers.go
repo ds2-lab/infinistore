@@ -593,7 +593,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 			req.SetResponse(ErrClientClosed)
 			return
 		} else if err != nil {
-			log.Warn("Failed to initiate getting %d@%s(%s): %v", i, key, addr, err)
+			log.Warn("Failed to initiate getting %d@%s(%s): %v, left attempts: %d", i, key, addr, err, RequestAttempts-attempt-1)
 			continue
 		}
 

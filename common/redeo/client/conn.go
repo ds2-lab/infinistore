@@ -74,7 +74,7 @@ func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
 func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	// Abort if the request has responded
 	if req.IsResponded() {
-		return nil
+		return ErrResponded
 	}
 
 	// Add request to the cwnd
@@ -82,6 +82,10 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	meta, err := conn.cwnd.AddRequest(req)
 	if err != nil {
 		return err
+	}
+
+	if conn.IsClosed() {
+		return ErrConnectionClosed
 	}
 
 	// Lock writer
@@ -95,19 +99,23 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	// Both calback writer and request writer (Flush) are supported.
 	conn.SetWriteDeadline(time.Now().Add(DefaultTimeout))
 	for _, write := range writes {
-		err := write(req)
-		if err != nil && conn.isConnectionFailed(err) {
+		err = write(req) // Keep track of the last error
+		if err != nil {
+			break
+		}
+	}
+	// Flush if no error
+	if err == nil {
+		err = req.Flush()
+	}
+	// Handle last error
+	if err != nil {
+		// Discard request to avoid the request being prematurely responded before started (err occurs).
+		conn.cwnd.AckRequest(req.Seq())
+		// Handle connection error
+		if conn.isConnectionFailed(err) {
 			conn.Close()
 		}
-		if err != nil {
-			return err
-		}
-	}
-	err = req.Flush()
-	if err != nil && conn.isConnectionFailed(err) {
-		conn.Close()
-	}
-	if err != nil {
 		return err
 	}
 
@@ -266,12 +274,12 @@ func (conn *Conn) handleResponses() {
 }
 
 func (conn *Conn) readSeq() {
-	conn.routings.Add(1)
-	defer conn.routings.Done()
-
 	if conn.IsClosed() {
 		return
 	}
+
+	conn.routings.Add(1)
+	defer conn.routings.Done()
 
 	// Got response, reset read deadline.
 	conn.SetReadDeadline(time.Time{})

@@ -246,6 +246,11 @@ func (wnd *Window) MatchRequest(seq int64) (Request, error) {
 }
 
 func (wnd *Window) AckRequest(seq int64) (Request, error) {
+	// Avoid deadlock: the requests will be cleared during closing.
+	if wnd.IsClosed() {
+		return nil, ErrConnectionClosed
+	}
+
 	wnd.mu.RLock()
 	defer wnd.mu.RUnlock()
 

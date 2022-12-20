@@ -428,6 +428,7 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 		err = req.response.client.AddResponses(response)
 	} else {
 		err = req.response.client.AddResponses(&proxyResponse{response: rsp, request: req})
+		err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
 		if req.PersistChunk != nil && !req.PersistChunk.IsStored() {
 			err, ok := rsp.(error)
 			if !ok {
@@ -436,6 +437,9 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 			req.PersistChunk.CloseWithError(err)
 		}
 	}
+	// if err != nil {
+	// 	err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
+	// }
 	// Release reference so chan can be garbage collected.
 	req.response.client = nil
 	return err

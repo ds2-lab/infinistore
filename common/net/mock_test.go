@@ -2,7 +2,10 @@ package net_test
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"testing"
+	"time"
 
 	mock "github.com/jordwest/mock-conn"
 	"github.com/mason-leap-lab/redeo/resp"
@@ -11,6 +14,11 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
+
+func TestClient(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Client")
+}
 
 var (
 	shortcutAddress = "shortcut:%d:%s"
@@ -64,5 +72,22 @@ var _ = Describe("Mock", func() {
 		addr, ok = shortcut.Validate(fullip)
 		Expect(ok).To(Equal(false))
 		Expect(addr).To(Equal(""))
+	})
+
+	It("should mock end detected err on closing of another end", func() {
+		// Read after closed.
+		conn := mock.NewConn()
+		conn.Server.Close()
+		_, err := conn.Client.Read([]byte{0})
+		Expect(err).To(Equal(io.EOF))
+
+		// Read before closed
+		conn = mock.NewConn()
+		go func() {
+			_, err := conn.Client.Read([]byte{0})
+			Expect(err).To(Equal(io.ErrClosedPipe))
+		}()
+		<-time.After(100 * time.Millisecond)
+		conn.Server.Close()
 	})
 })
