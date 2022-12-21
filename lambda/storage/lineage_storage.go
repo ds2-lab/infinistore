@@ -1334,7 +1334,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 	// Setup inputs for terms downloading.
 	more := true
 	ctxDone := ctx.Done()
-	cancelled := false
+	canceled := false
 	go func() {
 		defer close(inputs)
 
@@ -1344,7 +1344,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 				select {
 				case <-ctxDone:
 					more = false
-					cancelled = true // Flag terminated, wait for download consumes all scheduled. Then, the interrupted err will be returned.
+					canceled = true // Flag terminated, wait for download consumes all scheduled. Then, the interrupted err will be returned.
 					return
 				default:
 				}
@@ -1390,7 +1390,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 		ctx := aws.BackgroundContext()
 		ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
 		err := downloader.DownloadWithIterator(ctx, inputs)
-		if cancelled {
+		if canceled {
 			chanError <- ErrRecoveryInterrupted
 		} else if err != nil {
 			s.log.Error("error on download objects: %v", err)

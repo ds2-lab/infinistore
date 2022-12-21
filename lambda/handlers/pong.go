@@ -66,12 +66,12 @@ func (p *PongHandler) Issue(retry bool) bool {
 	}
 }
 
-// Send Send ack(pong) on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
+// Send Send ack(pong) on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is canceled.
 func (p *PongHandler) Send() error {
 	return p.sendImpl(protocol.PONG_FOR_CTRL, nil, nil, false)
 }
 
-// Send Send ack(pong) with flags on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is cancelled.
+// Send Send ack(pong) with flags on control link, must call Issue(bool) first. Pong will keep retrying until maximum attempts reaches or is canceled.
 func (p *PongHandler) SendWithFlags(flags int64, paylaod []byte) error {
 	return p.sendImpl(flags, paylaod, nil, false)
 }
@@ -99,7 +99,7 @@ func (p *PongHandler) Cancel() {
 	p.mu.Unlock()
 }
 
-// IsCancelled If the expected request has been received and pong has benn cancelled.
+// IsCancelled If the expected request has been received and pong has benn canceled.
 func (p *PongHandler) IsCancelled() bool {
 	return p.requested.IsResolved()
 }

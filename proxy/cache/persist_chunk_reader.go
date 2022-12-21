@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type persistChunkReader struct {
@@ -15,6 +14,7 @@ type persistChunkReader struct {
 	done         util.Closer
 	doneWaitData chan struct{}
 	ctx          context.Context
+	lastError    error
 }
 
 func newPersistChunkReader(ctx context.Context, c *persistChunk) *persistChunkReader {
@@ -40,6 +40,7 @@ func (b *persistChunkReader) Read(p []byte) (n int, err error) {
 	if available <= b.r {
 		// Wait for the chunk to be buffered
 		available, err = b.chunk.waitDataWithContext(b.ctx, b.r, b.doneWaitData)
+		b.lastError = err
 	}
 	if available <= b.r {
 		return
@@ -92,7 +93,7 @@ func (b *persistChunkReader) Close() (err error) {
 	b.done.Wait()
 
 	if b.chunk.bytesStored() < b.chunk.Size() {
-		err = types.ErrChunkStoreFailed
+		err = b.lastError
 	}
 
 	b.r = b.chunk.Size()

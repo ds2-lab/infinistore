@@ -48,8 +48,8 @@ type Response struct {
 
 	request   *Request
 	finalizer ResponseFinalizer
-	abandon   bool // Abandon flag, set in Request class.
-	cached    bool // Cached flag, the response is served from cache.
+	abandon   bool         // Abandon flag, set in Request class.
+	cached    PersistChunk // Cached flag, the response is served from cache.
 
 	w         resp.ResponseWriter
 	ctxCancel context.CancelFunc
@@ -151,8 +151,11 @@ func (rsp *Response) IsAbandon() bool {
 	return rsp.abandon
 }
 
-func (rsp *Response) IsCached() bool {
-	return rsp.cached
+func (rsp *Response) IsCached() (stored bool, cached bool) {
+	if rsp.cached == nil {
+		return false, false
+	}
+	return rsp.cached.IsStored(), true
 }
 
 func (rsp *Response) WaitFlush(ctxCancelable bool) error {
@@ -175,16 +178,26 @@ func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 			// break
 		case <-rsp.ctxDone:
 			rsp.abandon = true
-			// Disconnect the client if it's available.
-			client := redeo.GetClient(rsp.Context())
-			if client != nil {
-				client.Conn().Close()
-			} // else test ctxCancellation after client is available.
+			// Try preempt transimission.
+			// If the stream is served by Lambda, we disconnect the client and wait for stream consumed to reuse limited Lambda connections.
+			if stored, cached := rsp.IsCached(); !cached {
+				// Disconnect the client if it's available.
+				client := redeo.GetClient(rsp.Context())
+				if client != nil {
+					client.Conn().Close()
+				} // else test ctxCancellation after client is available.
 
-			// Register finalizer to wait for the close of the stream.
-			rsp.OnFinalize(func(_ *Response) {
+				// Register finalizer to wait for the close of the stream.
+				rsp.OnFinalize(func(_ *Response) {
+					<-chWait
+				})
+			} else if stored {
+				// If the stream is stored, we will not do abandon for good throughput.
 				<-chWait
-			})
+				return nil
+			}
+			// If the stream is served from cache and waiting for data, we simply do nothing. Cached stream will be canceled automatically in proxy.waitForCache()
+
 			return rsp.Context().Err()
 		}
 	}
