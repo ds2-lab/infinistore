@@ -840,7 +840,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 	connectTimeout := DefaultConnectTimeout
 	// for::attemps
 	for {
-		ins.log.Info("Validating..., due in %v", goodDue)
+		ins.log.Debug("Validating..., due in %v", goodDue)
 		// Try invoking the lambda node.
 		// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
 		triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
@@ -1654,7 +1654,7 @@ func (ins *Instance) doneBusy(cmd types.Command) {
 	if ins.numBusying(status) == 0 || ins.delayedDue > ins.due {
 		ins.SetDue(ins.delayedDue, false, "concluding delayed due")
 	} else {
-		ins.log.Info("Keep lambda due in %v for busy instance", time.Duration(ins.due-time.Now().UnixNano())) // Instance busy, keep the last due.
+		ins.log.Debug("Keep lambda due in %v for busy instance", time.Duration(ins.due-time.Now().UnixNano())) // Instance busy, keep the last due.
 	}
 }
 
