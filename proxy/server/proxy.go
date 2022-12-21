@@ -217,7 +217,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	req.Info = prepared
 	// Added by Tianium: 20221102
 	// Add counter support.
-	req.Cleanup = counter // Set cleanup so the counter can always be released.
+	req.RequestGroup = counter // Set cleanup so the counter can always be released.
 	counter.Requests[dChunkId] = req
 	bodyStream = nil // Don't use bodyStream anymore, req.BodyStream can be updated in InsertAndPlace().
 
@@ -306,7 +306,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	req.Key = chunkKey
 	req.CollectorEntry = collectorEntry
 	req.Info = meta
-	req.Cleanup = counter
+	req.RequestGroup = counter
 	// Update counter
 	counter.Requests[dChunkId] = req
 

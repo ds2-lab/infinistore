@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -36,6 +37,16 @@ func (c *persistCache) GetOrCreate(key string, size int64) (chunk types.PersistC
 	}
 
 	got, loaded := c.hashmap.LoadOrStore(key, prepared)
+	reported := false
+	for loaded && got == nil {
+		if !reported {
+			c.log.Warn("Nil chunk found in GetOrCreate. Yield to other goroutines and load again.")
+			reported = true
+		}
+		runtime.Gosched()
+		// Unlikely to happen, but just in case.
+		got, _ = c.hashmap.Load(key) // Don't overwrite "loaded"
+	}
 	for loaded && got.(*persistChunk).Error() != nil {
 		// The chunk stored is in error state, we need to replace it with a new one.
 		_, swapped := c.hashmap.CompareAndSwap(key, got, prepared)
@@ -44,8 +55,7 @@ func (c *persistCache) GetOrCreate(key string, size int64) (chunk types.PersistC
 			got = prepared
 			break
 		} else {
-			// Call GetOrInsert again to get the latest chunk and prevent the chunk being removed.
-			got, loaded = c.hashmap.LoadOrStore(key, prepared)
+			got, loaded = c.hashmap.Load(key)
 		}
 	}
 

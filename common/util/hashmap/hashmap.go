@@ -8,10 +8,10 @@ import (
 
 type BaseHashMap interface {
 	Delete(interface{})
-	Load(interface{}) (interface{}, bool)
-	LoadAndDelete(interface{}) (interface{}, bool)
-	LoadOrStore(interface{}, interface{}) (interface{}, bool)
-	CompareAndSwap(interface{}, interface{}, interface{}) (interface{}, bool)
+	Load(interface{}) (val interface{}, loaded bool)
+	LoadAndDelete(interface{}) (val interface{}, exists bool)
+	LoadOrStore(interface{}, interface{}) (val interface{}, loaded bool)
+	CompareAndSwap(interface{}, interface{}, interface{}) (val interface{}, swapped bool)
 	Range(func(interface{}, interface{}) (contd bool))
 	Store(interface{}, interface{})
 }
@@ -66,7 +66,10 @@ func (m *cMapWrapper) LoadOrStore(key interface{}, value interface{}) (interface
 	if set {
 		return value, false
 	} else {
-		return m.Load(key.(string))
+		// To allow backend bugs be identified by the caller, return loaded value and true.
+		// In case the backend's Load works incorrectly, the caller can detect it by checking the returned value.
+		loaded, _ := m.Load(key)
+		return loaded, true
 	}
 }
 

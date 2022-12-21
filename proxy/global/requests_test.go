@@ -34,7 +34,7 @@ func (c *TestRequestCounter) Close() {
 func newRequest(counter *TestRequestCounter, chunk string) *types.Request {
 	req := types.GetRequest(nil)
 	req.Id = types.Id{ChunkId: chunk}
-	req.Cleanup = counter.Load()
+	req.RequestGroup = counter.Load()
 	counter.Requests[req.Id.Chunk()] = req
 	return req
 }
