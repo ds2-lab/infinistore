@@ -12,7 +12,7 @@ import (
 )
 
 const TICK = 1 * time.Millisecond
-const TICK_EXTENSION = 100 * time.Millisecond
+const TICK_EXTENSION = 1000 * time.Millisecond
 
 // For Lambdas below 0.5vCPU(896M).
 const TICK_1_ERROR_EXTEND = 10000 * time.Millisecond

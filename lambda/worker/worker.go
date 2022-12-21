@@ -28,7 +28,7 @@ const (
 	WorkerClosing        = int32(1)
 	WorkerClosed         = int32(2)
 	RetrialBackoffFactor = 2
-	MinDataLinks         = 1
+	MinDataLinks         = 2
 	MaxDataLinks         = 10
 	MaxDataLinkRetrial   = 3
 )
