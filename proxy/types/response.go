@@ -151,11 +151,11 @@ func (rsp *Response) IsAbandon() bool {
 	return rsp.abandon
 }
 
-func (rsp *Response) IsCached() (stored bool, cached bool) {
+func (rsp *Response) IsCached() (stored int64, full bool, cached bool) {
 	if rsp.cached == nil {
-		return false, false
+		return 0, false, false
 	}
-	return rsp.cached.IsStored(), true
+	return rsp.cached.BytesStored(), rsp.cached.IsStored(), true
 }
 
 func (rsp *Response) WaitFlush(ctxCancelable bool) error {
@@ -180,7 +180,7 @@ func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 			rsp.abandon = true
 			// Try preempt transimission.
 			// If the stream is served by Lambda, we disconnect the client and wait for stream consumed to reuse limited Lambda connections.
-			if stored, cached := rsp.IsCached(); !cached {
+			if stored, _, cached := rsp.IsCached(); !cached {
 				// Disconnect the client if it's available.
 				client := redeo.GetClient(rsp.Context())
 				if client != nil {
@@ -191,10 +191,9 @@ func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 				rsp.OnFinalize(func(_ *Response) {
 					<-chWait
 				})
-			} else if stored {
-				// If the stream is stored, we will not do abandon for good throughput.
-				<-chWait
-				return nil
+			} else if stored > 0 {
+				// Once the cahced starts accepting data, it is unlikely to interrupt. We will then not do abandon the stream for good throughput.
+				return <-chWait
 			}
 			// If the stream is served from cache and waiting for data, we simply do nothing. Cached stream will be canceled automatically in proxy.waitForCache()
 

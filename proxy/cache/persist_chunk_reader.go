@@ -36,7 +36,7 @@ func (b *persistChunkReader) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 
-	available := b.chunk.bytesStored()
+	available := b.chunk.BytesStored()
 	if available <= b.r {
 		// Wait for the chunk to be buffered
 		available, err = b.chunk.waitDataWithContext(b.ctx, b.r, b.doneWaitData)
@@ -95,11 +95,12 @@ func (b *persistChunkReader) Unhold() {
 func (b *persistChunkReader) Close() (err error) {
 	b.done.Wait()
 
-	if b.chunk.bytesStored() < b.chunk.Size() {
+	if !b.chunk.IsStored() {
 		err = b.lastError
 	}
 
+	read := b.r
 	b.r = b.chunk.Size()
-	b.chunk.waitReader(b, err == nil)
+	b.chunk.waitReader(b, read)
 	return
 }
