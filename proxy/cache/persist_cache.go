@@ -37,11 +37,15 @@ func (c *persistCache) GetOrCreate(key string, size int64) (chunk types.PersistC
 	}
 
 	got, loaded := c.hashmap.LoadOrStore(key, prepared)
+	reported := false
 	for loaded && got == nil {
-		c.log.Warn("Nil chunk found in GetOrCreate. Yield to other goroutines and load again.")
+		if !reported {
+			c.log.Warn("Nil chunk found in GetOrCreate. Yield to other goroutines and load again.")
+			reported = true
+		}
 		runtime.Gosched()
 		// Unlikely to happen, but just in case.
-		got, loaded = c.hashmap.Load(key)
+		got, _ = c.hashmap.Load(key) // Don't overwrite "loaded"
 	}
 	for loaded && got.(*persistChunk).Error() != nil {
 		// The chunk stored is in error state, we need to replace it with a new one.
