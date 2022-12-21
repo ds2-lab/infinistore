@@ -21,6 +21,7 @@ import (
 	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/go-utils/promise"
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
@@ -329,7 +330,7 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 	}
 
-	n, busy := ins.setBusy(cmd)
+	n, busy := ins.setBusy(cmd) // setBusy will fail if busy.
 	ins.log.Debug("Dispatching %v, %d queued, busy: %v", cmd, ins.numBusying(n), busy)
 	if opts&DISPATCH_OPT_BUSY_CHECK > 0 && busy {
 		return ErrInstanceBusy
@@ -344,9 +345,11 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 		}
 
 		// wait to be inserted and continue after select
+		ins.addBusy(cmd)
 		select {
 		case ins.chanCmd <- cmd:
 		case <-time.After(protocol.GetHeaderTimeout()):
+			ins.doneBusy(cmd)
 			return ErrQueueTimeout
 		}
 	}
@@ -361,17 +364,17 @@ func (ins *Instance) DispatchWithOptions(cmd types.Command, opts int) error {
 }
 
 func (ins *Instance) mustDispatch(cmd types.Command) {
-	ins.addBusy(cmd.GetRequest())
+	ins.addBusy(cmd.GetRequest()) // addBusy will not failed
 	ins.chanPriorCmd <- cmd
 }
 
 func (ins *Instance) shouldDispatch(cmd types.Command) bool {
-	ins.addBusy(cmd.GetRequest())
+	ins.addBusy(cmd.GetRequest()) // addBusy will not failed
 	select {
 	case ins.chanPriorCmd <- cmd:
 		return true
 	default:
-		ins.doneBusy(cmd.GetRequest())
+		ins.doneBusy(cmd.GetRequest()) // rollback
 		return false
 	}
 }
@@ -1652,7 +1655,7 @@ func (ins *Instance) doneBusy(cmd types.Command) {
 
 	status := atomic.AddUint64(&ins.numRequests, ^(ins.getBusyUnit(req) - 1))
 	if ins.numBusying(status) == 0 || ins.delayedDue > ins.due {
-		ins.SetDue(ins.delayedDue, false, "concluding delayed due")
+		ins.SetDue(ins.delayedDue, false, "concluding delayed due from %v", req)
 	} else {
 		ins.log.Debug("Keep lambda due in %v for busy instance", time.Duration(ins.due-time.Now().UnixNano())) // Instance busy, keep the last due.
 	}
@@ -1684,7 +1687,7 @@ func (ins *Instance) FlagDataCollected(ok string) {
 	global.DataCollected.Done()
 }
 
-func (ins *Instance) SetDue(due int64, delay bool, reason string) {
+func (ins *Instance) SetDue(due int64, delay bool, reason string, args ...interface{}) {
 	ins.delayedDue = due
 	if !delay {
 		ins.due = due
@@ -1694,9 +1697,9 @@ func (ins *Instance) SetDue(due int64, delay bool, reason string) {
 	}
 	timeout := time.Duration(due - time.Now().UnixNano())
 	if timeout <= -time.Millisecond {
-		ins.log.Warn("Set(%v) lambda due in %v for %s", delay, timeout, reason)
+		ins.log.Warn("Set(%v) lambda due in %v for %s", delay, timeout, logger.NewFormatFunc(fmt.Sprintf, reason, args...))
 	} else {
-		ins.log.Debug("Set(%v) lambda due in %v for %s", delay, timeout, reason)
+		ins.log.Debug("Set(%v) lambda due in %v for %s", delay, timeout, logger.NewFormatFunc(fmt.Sprintf, reason, args...))
 	}
 }
 
