@@ -95,7 +95,7 @@ type Request struct {
 	leftAttempts     int
 	reason           error
 	responseTimeout  time.Duration
-	responded        atomic.Value
+	responded        *atomic.Value // Use pointer to allow the promise being cleared.
 
 	// Shared if request to be send to multiple lambdas
 	response *response
@@ -105,10 +105,13 @@ type Request struct {
 }
 
 func GetRequest(client *redeo.Client) *Request {
-	return &Request{response: &response{
-		status: REQUEST_INVOKED,
-		client: client,
-	}}
+	return &Request{
+		response: &response{
+			status: REQUEST_INVOKED,
+			client: client,
+		},
+		responded: &atomic.Value{},
+	}
 }
 
 func (req *Request) String() string {
@@ -424,8 +427,8 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 	// * The response promise is associated with the sent request.
 	// * If the promise is available, the request must have been sent to the Lambda and waiting for response.
 	// * When response duel, in which case multiple requests are sent to different Lambdas, multiple promises exist to be resolved.
-	responded, _ := req.responded.Load().(promise.Promise)
-	if responded != nil && !responded.IsResolved() {
+	responded, ok := req.responded.Load().(promise.Promise)
+	if ok && !responded.IsResolved() {
 		responded.Resolve(rsp)
 	}
 
@@ -520,5 +523,5 @@ func (req *Request) InitPromise(opts ...int) (ret promise.Promise) {
 }
 
 func (req *Request) resetPromise(opts ...int) {
-	req.responded = atomic.Value{}
+	req.responded = &atomic.Value{}
 }
