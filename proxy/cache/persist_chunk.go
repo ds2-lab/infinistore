@@ -18,23 +18,30 @@ import (
 )
 
 var (
-	noneRead       = func() int64 { return 0 }
-	debugIDRemover = regexp.MustCompile(`:[0-9a-f-]+$`)
+	noneIntercepted = &dummyPersistInterceptor{}
+	debugIDRemover  = regexp.MustCompile(`:[0-9a-f-]+$`)
 )
 
-type persistChunkBytesStoredReader func() int64
+type persistChunkInterceptor interface {
+	BytesIntercepted() int64
+}
+
+type dummyPersistInterceptor struct {
+}
+
+func (d *dummyPersistInterceptor) BytesIntercepted() int64 { return 0 }
 
 type persistChunk struct {
 	protocol.Contextable
 	cache *persistCache
 
-	key     string
-	data    []byte
-	size    int64
-	written persistChunkBytesStoredReader
-	refs    atomic.Int32
-	cancel  context.CancelFunc
-	closed  bool
+	key         string
+	data        []byte
+	size        int64
+	refs        atomic.Int32
+	cancel      context.CancelFunc
+	interceptor persistChunkInterceptor
+	closed      bool
 
 	// We use sync.Cond for readers' synchronization. See lab/blocker for a overhead benchmark.
 	mu       sync.Mutex
@@ -46,9 +53,9 @@ type persistChunk struct {
 func newPersistChunk(c *persistCache, key string, size int64) *persistChunk {
 	// TODO: Init with chunk instance.
 	chunk := &persistChunk{
-		cache:   c,
-		data:    nil,
-		written: noneRead,
+		cache:       c,
+		data:        nil,
+		interceptor: noneIntercepted,
 	}
 	chunk.reset(key, size)
 	chunk.notifier = sync.NewCond(&chunk.mu)
@@ -77,7 +84,7 @@ func (pc *persistChunk) Size() int64 {
 }
 
 func (pc *persistChunk) IsStored() bool {
-	return pc.written() == pc.size
+	return pc.bytesStored() == pc.size
 }
 
 // Store will be called in two situations:
@@ -93,17 +100,20 @@ func (pc *persistChunk) IsStored() bool {
 //          And all Load()ing requests will be notified with error.
 // 2.err.2. If error occurs during reading(getting), all Load()ing requests will be notified with error.
 func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, error) {
-	pc.cache.log.Debug("%s: Storing initiated.", pc.Key())
-	if reader.Len() != pc.size {
+	if pc.interceptor != noneIntercepted {
+		return nil, types.ErrStoredTwice
+	} else if reader.Len() != pc.size {
 		return nil, types.ErrInvalidChunkSize
 	}
+
+	pc.cache.log.Debug("%s: Storing initiated.", pc.Key())
 
 	pc.refs.Add(1)
 	if pc.data == nil {
 		pc.data = make([]byte, pc.size)
 	}
 	interceptor := server.NewInterceptReaderWithBuffer(reader, pc.data)
-	pc.written = interceptor.BytesIntercepted
+	pc.interceptor = interceptor
 	interceptor.OnIntercept(pc.notifyData)
 	interceptor.OnClose(pc.waitInterceptor)
 
@@ -188,7 +198,7 @@ func (pc *persistChunk) DonePersist() {
 	pc.cancel()
 	pc.cancel = nil
 	left := pc.doneRefs()
-	pc.cache.log.Debug("%s: Persisted, ref counter: %d", pc.Key(), left)
+	pc.cache.log.Debug("%s: Done persisting, ref counter: %d", pc.Key(), left)
 }
 
 func (pc *persistChunk) Error() error {
@@ -204,13 +214,22 @@ func (pc *persistChunk) Close() {
 }
 
 func (pc *persistChunk) CloseWithError(err error) {
+	// Clear persisting flag and avoid retrial.
 	pc.DonePersist()
+
+	if pc.IsStored() {
+		return
+	}
+
 	if err != types.ErrChunkClosed {
 		pc.cache.log.Warn("%s: Closed with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
 	} else {
 		pc.cache.log.Debug("%s: Closed", pc.Key())
 	}
+
 	pc.notifyError(err)
+
+	// Close the chunk if no reference left.
 	if pc.CanClose() {
 		pc.once.Do(pc.close)
 	}
@@ -233,13 +252,13 @@ func (pc *persistChunk) close() {
 	if global.Options.Debug {
 		key = debugIDRemover.ReplaceAllString(key, "")
 	}
-	pc.cache.remove(key)
+	pc.cache.remove(key, pc)
 	pc.closed = true
 	pc.cache.log.Debug("%s Removed, remaining %d keys", pc.Key(), pc.cache.Len())
 }
 
 func (pc *persistChunk) bytesStored() int64 {
-	return pc.written()
+	return pc.interceptor.BytesIntercepted()
 }
 
 func (pc *persistChunk) notifyError(err error) {
@@ -253,10 +272,11 @@ func (pc *persistChunk) notifyData(interceptor *server.InterceptReader) {
 	err := interceptor.LastError()
 	if err != nil {
 		pc.cache.log.Warn("%s: Storing with error: %v, affected: %d", pc.Key(), err, pc.refs.Load())
-		err = types.ErrChunkStoreFailed
+		pc.notifyError(err)
+		return
 	}
+
 	pc.mu.Lock()
-	pc.err = err
 	pc.notifier.Broadcast()
 	pc.mu.Unlock()
 }
@@ -298,6 +318,13 @@ func (pc *persistChunk) waitReader(reader resp.AllReadCloser, allLoaded bool) {
 func (pc *persistChunk) waitPersistTimeout(ctx context.Context, retry types.PersistRetrier) {
 	<-ctx.Done()
 	if ctx.Err() == context.DeadlineExceeded {
-		retry(pc)
+		if retry != nil {
+			pc.cache.log.Debug("%s: Persisting timeout, retry...", pc.Key())
+			retry(pc)
+		} else {
+			// For debug only, warn the user.
+			pc.cache.log.Warn("%s: Persisting timeout and no retrier specified. We are done.", pc.Key())
+			pc.DonePersist()
+		}
 	}
 }
