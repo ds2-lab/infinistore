@@ -91,6 +91,8 @@ func (c *persistCache) Report() {
 		var msg strings.Builder
 		c.hashmap.Range(func(_, chunk interface{}) bool {
 			msg.WriteString(chunk.(fmt.Stringer).String())
+			msg.WriteString(":")
+			msg.WriteString(chunk.(*persistChunk).Error().Error())
 			msg.WriteString(" ")
 			return true
 		})
@@ -98,6 +100,9 @@ func (c *persistCache) Report() {
 	}))
 }
 
-func (c *persistCache) remove(key string) {
-	c.hashmap.Delete(key)
+func (c *persistCache) remove(key string, chunk types.PersistChunk) {
+	existed, _ := c.hashmap.Load(key)
+	if existed == nil || existed == chunk {
+		c.hashmap.Delete(key)
+	}
 }

@@ -13,6 +13,7 @@ var (
 	ErrInvalidChunkSize = errors.New("invalid chunk size")
 	ErrUnimplemented    = errors.New("unimplemented")
 	ErrRequestFailure   = errors.New("request failed")
+	ErrStoredTwice      = errors.New("chunk stored twice")
 	ErrChunkClosed      = errors.New("chunk closed")
 	ErrChunkStoreFailed = errors.New("failed to cache chunk")
 	ErrUnexpectedClose  = errors.New("chunk unexpected closed")
