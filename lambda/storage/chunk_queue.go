@@ -1,12 +1,23 @@
 package storage
 
 import (
+	"sync"
+
 	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 type ChunkQueue struct {
 	queue []*types.Chunk
 	lru   bool
+	mu    sync.Mutex
+}
+
+func (h *ChunkQueue) Lock() {
+	h.mu.Lock()
+}
+
+func (h *ChunkQueue) Unlock() {
+	h.mu.Unlock()
 }
 
 func (h *ChunkQueue) Len() int {
@@ -24,7 +35,7 @@ func (h *ChunkQueue) Less(i, j int) bool {
 	}
 }
 
-func (h ChunkQueue) Swap(i, j int) {
+func (h *ChunkQueue) Swap(i, j int) {
 	// log.Printf("Swap %d, %d (%v, %v) of %d", i, j, h[i], h[j], len(h))
 	h.queue[i].BuffIdx, h.queue[j].BuffIdx = h.queue[j].BuffIdx, h.queue[i].BuffIdx
 	h.queue[i], h.queue[j] = h.queue[j], h.queue[i]
@@ -44,14 +55,14 @@ func (h *ChunkQueue) Pop() interface{} {
 	return ret
 }
 
-func (h ChunkQueue) Peek() *types.Chunk {
+func (h *ChunkQueue) Peek() *types.Chunk {
 	if len(h.queue) == 0 {
 		return nil
 	}
 	return h.queue[0]
 }
 
-func (h ChunkQueue) Chunk(idx int) *types.Chunk {
+func (h *ChunkQueue) Chunk(idx int) *types.Chunk {
 	if idx < len(h.queue) {
 		return h.queue[idx]
 	}

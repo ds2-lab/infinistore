@@ -452,9 +452,9 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request, responded
 			req.PersistChunk.CloseWithError(types.ErrUnexpectedClose)
 		}
 	}
-	if responded != nil {
-		promise.Recycle(responded)
-	}
+	// if responded != nil {
+	// 	promise.Recycle(responded)
+	// }
 
 	lm := ins.lm
 	if !conn.control && lm != nil && !conn.IsClosed() {
