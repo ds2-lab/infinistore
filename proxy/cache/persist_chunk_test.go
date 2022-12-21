@@ -268,6 +268,7 @@ var _ = Describe("PersistChunk", func() {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		reader, _ := chunk.Load(ctx)
+		reader.(resp.Holdable).Hold()
 		cancel()
 		_, err := reader.Read(buff)
 		Expect(err).To(Equal(context.Canceled))

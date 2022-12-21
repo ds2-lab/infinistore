@@ -43,6 +43,9 @@ func (b *persistChunkReader) Read(p []byte) (n int, err error) {
 		b.lastError = err
 	}
 	if available <= b.r {
+		if err != nil {
+			b.Unhold()
+		}
 		return
 	}
 
