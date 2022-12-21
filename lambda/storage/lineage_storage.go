@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"compress/gzip"
-	"container/heap"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -20,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/kelindar/binary"
 	csync "github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/mason-leap-lab/infinicache/common/sync/heap"
 	"github.com/zhangjyr/hashmap"
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
@@ -151,7 +151,9 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
-	if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
+	if opt.Sized {
+		// pass
+	} else if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
 		opt = updatedOpt
 	} else {
 		return types.OpError(ErrOOStorage)
