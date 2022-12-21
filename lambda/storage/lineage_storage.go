@@ -151,7 +151,7 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
-	if opt.Sized {
+	if opt != nil && opt.Sized {
 		// pass
 	} else if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
 		opt = updatedOpt
