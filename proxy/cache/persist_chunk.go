@@ -162,7 +162,7 @@ func (pc *persistChunk) StartPersist(req interface{}, timeout time.Duration, ret
 	// Validate existing context. Do not add reference if it's already timed out and retrying.
 	ctx := pc.Context()
 	if err := ctx.Err(); err == context.Canceled {
-		// The context has been canceled, we are done. It can only be cancelled in DonePersist.
+		// The context has been canceled, we are done. It can only be canceled in DonePersist.
 		return
 	} else if pc.cancel != nil {
 		// We are retrying, cancel the previous context.
