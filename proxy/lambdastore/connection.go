@@ -1047,7 +1047,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	// 1. The request timeouts.
 	// 2. This is a repeated SET for persistence retrial (See cache/persist_chunk:Store()).
 	if counter == nil {
-		// conn.log.Warn("Request not found: %s, can be cancelled already", rsp.Id.ReqId)
+		// conn.log.Warn("Request not found: %s, can be canceled already", rsp.Id.ReqId)
 		// Set response
 		conn.setResponse(rsp)
 		return

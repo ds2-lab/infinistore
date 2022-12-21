@@ -477,9 +477,9 @@ var _ = Describe("AvailableLinks", func() {
 		runtime.Gosched()
 		select {
 		case al.Request() <- &types.Request{}: // 4: Request wait at 150, wait another 100 to continue to double check and send request.
-			<-time.After(75 * time.Millisecond)                 // 5: Link request cancelled at 200 (Link request cancelled but we still get request to proceed)
+			<-time.After(75 * time.Millisecond)                 // 5: Link request canceled at 200 (Link request canceled but we still get request to proceed)
 			list.GetRequestPipe()                               // 6: New link request added at 225
-			<-time.After(75 * time.Millisecond)                 // 7: Double check at 250 (Double check if link request cancelled but new link request available)
+			<-time.After(75 * time.Millisecond)                 // 7: Double check at 250 (Double check if link request canceled but new link request available)
 			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout)) // 8: Should timeout correct reported.
 		case <-al.Closed():
 			Fail("on successful request, select should not pick Closed()")
@@ -512,7 +512,7 @@ var _ = Describe("AvailableLinks", func() {
 		case al.Request() <- &types.Request{}: // 4: Request wait at 150, wait another 100 to continue to double check and send request.
 			old := al.link
 			al.link = nil                       // Mimic multi-threaded situation: al.link not set before timeout exection.
-			<-time.After(75 * time.Millisecond) // 5: Link request cancelled at 200 (Link request cancelled but we still get request to proceed)
+			<-time.After(75 * time.Millisecond) // 5: Link request canceled at 200 (Link request canceled but we still get request to proceed)
 			al.link = old                       // Mimic multi-threaded situation: al.link set in link request.
 			<-time.After(75 * time.Millisecond) // 6: 250 link request double checks if request has been closed.
 			Expect(al.Error()).To(Equal(ErrLinkRequestTimeout))

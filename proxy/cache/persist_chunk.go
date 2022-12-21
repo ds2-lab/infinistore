@@ -162,7 +162,7 @@ func (pc *persistChunk) StartPersist(req interface{}, timeout time.Duration, ret
 	// Validate existing context. Do not add reference if it's already timed out and retrying.
 	ctx := pc.Context()
 	if err := ctx.Err(); err == context.Canceled {
-		// The context has been cancelled, we are done. It can only be cancelled in DonePersist.
+		// The context has been canceled, we are done. It can only be cancelled in DonePersist.
 		return
 	} else if pc.cancel != nil {
 		// We are retrying, cancel the previous context.
@@ -294,15 +294,16 @@ func (pc *persistChunk) waitData(nRead int64, done chan<- struct{}) (int64, erro
 	return pc.bytesStored(), pc.err
 }
 
-func (pc *persistChunk) waitDataWithContext(ctx context.Context, nRead int64, done chan struct{}) (int64, error) {
+func (pc *persistChunk) waitDataWithContext(ctx context.Context, nRead int64, done chan struct{}) (stored int64, err error) {
 	go pc.waitData(nRead, done)
 	select {
 	case <-ctx.Done():
-		pc.err = ctx.Err()
+		err = ctx.Err()
 	case <-done:
+		err = pc.err
 	}
 
-	return pc.bytesStored(), pc.err
+	return pc.bytesStored(), err
 }
 
 func (pc *persistChunk) waitInterceptor(interceptor *server.InterceptReader) {

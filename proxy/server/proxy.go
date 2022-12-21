@@ -539,7 +539,7 @@ func (p *Proxy) waitForCache(req *types.Request, cached types.PersistChunk, coun
 	counter.AddSucceeded(req.Id.Chunk(), false)
 
 	// Prepare response
-	rsp := req.ToCachedResponse()
+	rsp := req.ToCachedResponse(cached)
 	rsp.SetBodyStream(stream)
 	stream.(resp.Holdable).Hold()
 	defer rsp.Close()

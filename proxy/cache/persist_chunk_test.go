@@ -218,7 +218,7 @@ var _ = Describe("PersistChunk", func() {
 		Expect(cache.Len()).To(Equal(0))
 	})
 
-	It("should Loaded reader report error if storing failed", func() {
+	It("should loaded reader report error if storing failed", func() {
 		testStream := "Test me."
 		buff := make([]byte, 1)
 
@@ -254,6 +254,28 @@ var _ = Describe("PersistChunk", func() {
 		Expect(err).To(Equal(types.ErrChunkStoreFailed))
 		Expect(errChunk.Error()).To(Equal(types.ErrChunkStoreFailed))
 		Expect(errChunk.(*persistChunk).refs.Load()).To(Equal(int32(0)))
+		Expect(cache.Len()).To(Equal(0))
+	})
+
+	It("should cancelling loaded reader will not cause chunk error", func() {
+		testStream := "Test me."
+		buff := make([]byte, 1)
+
+		chunk, _ := cache.GetOrCreate("test", int64(len(testStream)))
+		interceptor, _ := chunk.Store(resp.NewInlineReader([]byte(testStream)))
+		Expect(chunk.Error()).To(BeNil())
+		Expect(cache.Len()).To(Equal(1))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		reader, _ := chunk.Load(ctx)
+		cancel()
+		_, err := reader.Read(buff)
+		Expect(err).To(Equal(context.Canceled))
+		err = reader.Close()
+		Expect(err).To(Equal(context.Canceled))
+
+		Expect(chunk.Error()).To(BeNil())
+		interceptor.Close()
 		Expect(cache.Len()).To(Equal(0))
 	})
 })
