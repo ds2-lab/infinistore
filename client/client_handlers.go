@@ -317,6 +317,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 	req.Cmd = protocol.CMD_SET_CHUNK
 	req.ReqId = reqId
 
+	var lastErr error
 	for attempt := 0; attempt < RequestAttempts; attempt++ {
 		if attempt > 0 {
 			log.Info("Retry setting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attempt+1)
@@ -362,6 +363,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			req.SetResponse(ErrClientClosed)
 			return
 		} else if err != nil {
+			lastErr = err
 			continue
 		}
 
@@ -372,7 +374,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 		return
 	}
 
-	req.SetResponse(fmt.Errorf("stop attempts: %v", ErrMaxPreflightsReached))
+	req.SetResponse(fmt.Errorf("stop attempts: %v, last error: %v", ErrMaxPreflightsReached, lastErr))
 }
 
 func (c *Client) readSetResponse(req *ClientRequest) error {
@@ -572,6 +574,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 	req.Cmd = protocol.CMD_GET_CHUNK
 	req.ReqId = reqId
 
+	var lastErr error
 	for attempt := 0; attempt < RequestAttempts; attempt++ {
 		if attempt > 0 {
 			log.Info("Retry getting %d@%s(%s), %s, attempt %d", i, key, addr, reqId, attempt+1)
@@ -589,14 +592,16 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 			cn.WriteCmdString(req.Cmd, strconv.FormatInt(req.Seq(), 10), key, req.ReqId, strconv.Itoa(i))
 			return nil
 		})
-		if err != nil && err == client.ErrResponded {
-			// Already responded, may be first-d abandoned.
-			return
-		} else if err != nil && c.closed {
+		// if err != nil && err == client.ErrResponded {
+		// 	// Already responded, may be first-d abandoned.
+		// 	return
+		// } else
+		if err != nil && c.closed {
 			req.SetResponse(ErrClientClosed)
 			return
 		} else if err != nil {
-			log.Warn("Failed to initiate getting %d@%s(%s): %v, left attempts: %d", i, key, addr, err, RequestAttempts-attempt-1)
+			lastErr = err
+			log.Warn("Failed to initiate getting %d@%s(%v): %v, left attempts: %d", i, key, cn.GetConn(), err, RequestAttempts-attempt-1)
 			continue
 		}
 
@@ -607,7 +612,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		return
 	}
 
-	req.SetResponse(fmt.Errorf("stop attempts: %v", ErrMaxPreflightsReached))
+	req.SetResponse(fmt.Errorf("stop attempts: %v, last error %v", ErrMaxPreflightsReached, lastErr))
 }
 
 func (c *Client) readGetResponse(req *ClientRequest) error {

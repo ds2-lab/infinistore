@@ -85,17 +85,24 @@ func (s *shortcut) Invalidate(conn *ShortcutConn) {
 }
 
 type MockConn struct {
-	*mock.Conn
+	Server *MockEnd
+	Client *MockEnd
+
+	mock   *mock.Conn
 	parent *ShortcutConn
 	idx    int
 }
 
 func NewMockConn(scn *ShortcutConn, idx int) *MockConn {
-	return &MockConn{
-		Conn:   mock.NewConn(),
+	mock := mock.NewConn()
+	conn := &MockConn{
+		mock:   mock,
 		parent: scn,
 		idx:    idx,
 	}
+	conn.Server = &MockEnd{End: mock.Server, parent: conn}
+	conn.Client = &MockEnd{End: mock.Client, parent: conn}
+	return conn
 }
 
 func (c *MockConn) String() string {
@@ -106,12 +113,14 @@ func (c *MockConn) Close() error {
 	return c.parent.close(c.idx, c)
 }
 
-func (c *MockConn) close() {
-	c.Conn.Close()
-}
-
 func (c *MockConn) Invalid() {
 	c.parent.Conns[c.idx] = nil
+}
+
+func (c *MockConn) close() {
+	c.Server.status = "droped"
+	c.Client.status = "droped"
+	c.mock.Close()
 }
 
 type ShortcutConn struct {

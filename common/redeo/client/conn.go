@@ -9,9 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
-	"github.com/mason-leap-lab/infinicache/common/net"
 	"github.com/mason-leap-lab/redeo/client"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -37,7 +35,6 @@ type Conn struct {
 	Meta    interface{}
 	Handler ResponseHandler
 
-	shortcut  *net.MockConn
 	lastError error
 	cwnd      *Window
 	rseq      chan interface{}
@@ -46,12 +43,6 @@ type Conn struct {
 	routings  sync.WaitGroup
 	wMu       sync.Mutex   // Mutex to avoid concurrent writing to the connection.
 	wReq      *RequestMeta // Request that is writing to the connection now.
-}
-
-func NewShortcut(cn *net.MockConn, configs ...ConnConfig) *Conn {
-	conn := NewConn(cn.Client, configs...)
-	conn.shortcut = cn
-	return conn
 }
 
 func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
@@ -154,7 +145,6 @@ func (conn *Conn) Close() error {
 
 	// Close connection to force block read to quit
 	err := conn.GetConn().Close()
-	conn.invalidate(conn.shortcut)
 
 	// Signal sub-goroutings to quit.
 	select {
@@ -329,13 +319,6 @@ func (conn *Conn) close() error {
 	conn.cwnd.Close()
 
 	return err
-}
-
-func (conn *Conn) invalidate(shortcut *net.MockConn) {
-	// Thread safe implementation
-	if shortcut != nil && atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&conn.shortcut)), unsafe.Pointer(shortcut), unsafe.Pointer(nil)) {
-		shortcut.Close()
-	}
 }
 
 func (conn *Conn) isConnectionFailed(err error) bool {

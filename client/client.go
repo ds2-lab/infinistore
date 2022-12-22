@@ -148,17 +148,15 @@ func (c *Client) connectShortcut(addr string, n int) error {
 func (c *Client) validate(address string, i int) (cn *client.Conn, err error) {
 	if c.conns[address][i] == nil || c.conns[address][i].IsClosed() {
 		var conn sysnet.Conn
+		// Dial
 		if c.shortcut == nil || c.shortcut.Address != address {
 			conn, err = sysnet.Dial("tcp", address)
-			if err == nil {
-				c.conns[address][i] = client.NewConn(conn, func(cn *client.Conn) {
-					cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
-					cn.SetWindowSize(2) // use 2 to form pipeline
-					cn.Handler = c
-				})
-			}
 		} else {
-			c.conns[address][i] = client.NewShortcut(c.shortcut.Validate(i).Conns[i], func(cn *client.Conn) {
+			conn = c.shortcut.Validate(i).Conns[i].Client
+		}
+		// Wrap connection
+		if err == nil {
+			c.conns[address][i] = client.NewConn(conn, func(cn *client.Conn) {
 				cn.Meta = &ClientConnMeta{Addr: address, AddrIdx: i}
 				cn.SetWindowSize(2) // use 2 to form pipeline
 				cn.Handler = c
@@ -228,17 +226,6 @@ func (r *ecRet) Request(i int) *ClientRequest {
 		r.reqs[i] = req
 	}
 	return r.reqs[i]
-}
-
-func (r *ecRet) Set(i int, ret interface{}) {
-	req := r.reqs[i]
-	if req != nil {
-		req.SetResponse(ret)
-	}
-}
-
-func (r *ecRet) SetError(i int, err error) {
-	r.Set(i, err)
 }
 
 func (r *ecRet) RetStore(i int) (ret string) {
