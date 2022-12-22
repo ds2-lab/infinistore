@@ -184,7 +184,7 @@ func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 				// Disconnect the client if it's available.
 				client := redeo.GetClient(rsp.Context())
 				if client != nil {
-					client.Conn().Close()
+					util.CloseWithReason(client.Conn(), "closedAbandon")
 				} // else test ctxCancellation after client is available.
 
 				// Register finalizer to wait for the close of the stream.

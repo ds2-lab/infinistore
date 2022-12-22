@@ -206,7 +206,7 @@ var _ = Describe("Worker", func() {
 
 		// Prepare new shortcut connection for redial.
 		old := shortcut.Conns[0]
-		shortcut.Conns[0] = net.NewMockConn(shortcut, 0)
+		shortcut.Conns[0] = net.NewMockConn(shortcut, 0, 0)
 
 		// Server should redail now.
 		old.Close()

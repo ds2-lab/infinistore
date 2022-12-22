@@ -211,7 +211,7 @@ func (r *ecRet) Request(i int) *ClientRequest {
 			}
 			// In case of deadline exceeded, we don't know what blocks the connection. Close it to force a new connection to be created next time.
 			if err == context.DeadlineExceeded || util.IsConnectionFailed(err) {
-				req.Conn().Close()
+				util.CloseWithReason(req.Conn(), "closedResponded")
 			}
 
 			// Keep record of the last error

@@ -20,8 +20,25 @@ func (c *MockEnd) String() string {
 	}
 }
 
-func (c *MockEnd) Close() error {
-	c.status = "closed"
-	c.parent.Invalid()
-	return c.End.Close()
+func (c *MockEnd) Close() (err error) {
+	return c.CloseWithReason("closed")
+}
+
+func (c *MockEnd) CloseWithReason(reason string) (err error) {
+	if c.parent.invalid() {
+		// End that first closes
+		c.status = reason
+	} else {
+		// End that second closes
+		c.setStatus("dropped")
+	}
+	c.End.Writer.Close()
+	err = c.End.Reader.Close()
+	return
+}
+
+func (c *MockEnd) setStatus(reason string) {
+	if len(c.status) == 0 {
+		c.status = reason
+	}
 }

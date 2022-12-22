@@ -402,7 +402,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		default:
 			rsp := server.NewErrorResponse(w, wrapper.Request().Seq, "unable to respond unsupport command %s", wrapper.Request().Cmd)
 			if err := rsp.Flush(); err != nil {
-				client.Conn().Close()
+				util.CloseWithReason(client.Conn(), "closedFlushError")
 			}
 			return
 		}
@@ -415,7 +415,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			} else {
 				p.log.Debug("Abandon flushing %v", rsp)
 			}
-			client.Conn().Close()
+			util.CloseWithReason(client.Conn(), "closedFlushResponse")
 			return
 		} else {
 			p.log.Debug("Flushed response %v", rsp)
@@ -470,7 +470,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			wrapper.Request().Info.(*metastore.Meta).Invalidate()
 		}
 		if err := r.Flush(); err != nil {
-			client.Conn().Close()
+			util.CloseWithReason(client.Conn(), "closedFlushError")
 			return
 		}
 	}
