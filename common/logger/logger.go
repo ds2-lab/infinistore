@@ -33,17 +33,24 @@ func NewFunc(f Func) Func {
 	return f
 }
 
-// NewFunc Create the function wrapper for func(arg interface{}) string
+// NewFuncWithArg Create the function wrapper for func(arg interface{}) string
 func NewFuncWithArg(f func(arg interface{}) string, arg interface{}) Func {
 	return func() string {
 		return f(arg)
 	}
 }
 
-// NewFunc Create the function wrapper for func(arg ...interface{}) string
+// NewFuncWithArgs Create the function wrapper for func(arg ...interface{}) string
 func NewFuncWithArgs(f func(arg ...interface{}) string, args ...interface{}) Func {
 	return func() string {
 		return f(args...)
+	}
+}
+
+// NewFormatFunc Create the function wrapper that compatible with fmt.Sprintf
+func NewFormatFunc(f func(msg string, arg ...interface{}) string, msg string, args ...interface{}) Func {
+	return func() string {
+		return f(msg, args...)
 	}
 }
 

@@ -437,7 +437,7 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request, responded
 
 	// Nil response suggests an error without proper response. Error during tranmission response will be handled differently.
 	if req.PersistChunk != nil && !req.PersistChunk.IsStored() && !req.PersistChunk.IsClosed() {
-		conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
+		conn.log.Warn("Detected unfulfilled persist chunk during %v, predicted due in: %v", req, req.PredictedDue)
 		// ASSERION: responded is not nil.
 		var err error
 		if responded != nil {
@@ -869,7 +869,7 @@ func (conn *Connection) pongHandler() {
 		return
 	}
 
-	validated, err := instance.TryFlagValidated(conn, sid, flags)
+	validated, _, err := instance.TryFlagValidated(conn, sid, flags)
 	if err != nil && err != ErrNotCtrlLink && err != ErrInstanceValidated {
 		conn.log.Warn("Discard rouge PONG(%v) for %d, current %v", conn, storeId, validated)
 		conn.Conn.Close() // Close connection normally, so lambda will close itself.

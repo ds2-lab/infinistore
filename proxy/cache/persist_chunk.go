@@ -64,7 +64,7 @@ func newPersistChunk(c *persistCache, key string, size int64) *persistChunk {
 
 // String returns a description of the chunk.
 func (b *persistChunk) String() string {
-	return fmt.Sprintf("%s:%d/%d", b.Key(), b.bytesStored(), b.Size())
+	return fmt.Sprintf("%s:%d/%d", b.Key(), b.BytesStored(), b.Size())
 }
 
 func (pc *persistChunk) reset(key string, size int64) {
@@ -84,7 +84,11 @@ func (pc *persistChunk) Size() int64 {
 }
 
 func (pc *persistChunk) IsStored() bool {
-	return pc.bytesStored() == pc.size
+	return pc.BytesStored() == pc.size
+}
+
+func (pc *persistChunk) BytesStored() int64 {
+	return pc.interceptor.BytesIntercepted()
 }
 
 // Store will be called in two situations:
@@ -139,7 +143,7 @@ func (pc *persistChunk) LoadAll(ctx context.Context) (data []byte, err error) {
 	defer pc.doneRefs()
 
 	done := make(chan struct{})
-	stored := pc.bytesStored()
+	stored := pc.BytesStored()
 	for stored < pc.Size() {
 		stored, err = pc.waitDataWithContext(ctx, stored, done)
 		if err != nil {
@@ -257,10 +261,6 @@ func (pc *persistChunk) close() {
 	pc.cache.log.Debug("%s Removed, remaining %d keys", pc.Key(), pc.cache.Len())
 }
 
-func (pc *persistChunk) bytesStored() int64 {
-	return pc.interceptor.BytesIntercepted()
-}
-
 func (pc *persistChunk) notifyError(err error) {
 	pc.mu.Lock()
 	pc.err = types.ErrChunkStoreFailed
@@ -283,7 +283,7 @@ func (pc *persistChunk) notifyData(interceptor *server.InterceptReader) {
 
 func (pc *persistChunk) waitData(nRead int64, done chan<- struct{}) (int64, error) {
 	pc.mu.Lock()
-	if pc.bytesStored() <= nRead && pc.err == nil {
+	if pc.BytesStored() <= nRead && pc.err == nil {
 		pc.notifier.Wait()
 	}
 	pc.mu.Unlock()
@@ -291,7 +291,7 @@ func (pc *persistChunk) waitData(nRead int64, done chan<- struct{}) (int64, erro
 	if done != nil {
 		done <- struct{}{}
 	}
-	return pc.bytesStored(), pc.err
+	return pc.BytesStored(), pc.err
 }
 
 func (pc *persistChunk) waitDataWithContext(ctx context.Context, nRead int64, done chan struct{}) (stored int64, err error) {
@@ -303,17 +303,17 @@ func (pc *persistChunk) waitDataWithContext(ctx context.Context, nRead int64, do
 		err = pc.err
 	}
 
-	return pc.bytesStored(), err
+	return pc.BytesStored(), err
 }
 
 func (pc *persistChunk) waitInterceptor(interceptor *server.InterceptReader) {
 	left := pc.doneRefs()
-	pc.cache.log.Debug("%s: Stored(%v), ref counter: %d", pc.Key(), pc.IsStored(), left)
+	pc.cache.log.Debug("%s: Stored(%d/%d), ref counter: %d", pc.Key(), pc.BytesStored(), pc.Size(), left)
 }
 
-func (pc *persistChunk) waitReader(reader resp.AllReadCloser, allLoaded bool) {
+func (pc *persistChunk) waitReader(reader resp.AllReadCloser, loaded int64) {
 	left := pc.doneRefs()
-	pc.cache.log.Debug("%s: Loaded(%v), ref counter: %d", pc.Key(), allLoaded, left)
+	pc.cache.log.Debug("%s: Loaded(%d/%d), ref counter: %d", pc.Key(), loaded, pc.Size(), left)
 }
 
 func (pc *persistChunk) waitPersistTimeout(ctx context.Context, retry types.PersistRetrier) {

@@ -88,6 +88,7 @@ type Request struct {
 	Option         int64
 	RequestGroup   RequestGroup
 	PersistChunk   PersistChunk
+	PredictedDue   time.Duration
 
 	conn             Conn
 	streamingStarted bool

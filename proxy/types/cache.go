@@ -65,8 +65,11 @@ type PersistChunk interface {
 	// Size returns the size of the chunk.
 	Size() int64
 
-	// IsStored returns whether the chunk is stored.
+	// IsStored returns whether the chunk is fully stored.
 	IsStored() bool
+
+	// ByteStored returns how many bytes is stored.
+	BytesStored() int64
 
 	// Store stores the chunk by intercepting a stream.
 	Store(resp.AllReadCloser) (resp.AllReadCloser, error)

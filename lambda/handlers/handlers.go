@@ -161,7 +161,7 @@ func GetHandler(w resp.ResponseWriter, c *resp.Command) {
 			ReqId:     reqId,
 			ChunkId:   chunkId,
 			Recovered: recovered,
-			Extension: extension,
+			Extension: extension - Server.GetStats().RTT(), // Proxy don't need to consider RTT
 		}
 		BuildPiggyback(response)
 
@@ -304,7 +304,7 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 		BaseResponse: worker.BaseResponse{Cmd: c.Name},
 		ReqId:        reqId,
 		ChunkId:      chunkId,
-		Extension:    extension,
+		Extension:    extension - Server.GetStats().RTT(), // Proxy don't need to consider RTT
 	}
 	BuildPiggyback(response)
 
@@ -430,7 +430,7 @@ func RecoverHandler(w resp.ResponseWriter, c *resp.Command) {
 		ReqId:     reqId,
 		ChunkId:   chunkId,
 		Recovered: 1,
-		Extension: extension,
+		Extension: extension - Server.GetStats().RTT(), // Proxy don't need to consider RTT
 	}
 	BuildPiggyback(response)
 
@@ -486,7 +486,7 @@ func DelHandler(w resp.ResponseWriter, c *resp.Command) {
 			BaseResponse: worker.BaseResponse{Cmd: c.Name},
 			ReqId:        reqId,
 			ChunkId:      chunkId,
-			Extension:    extension,
+			Extension:    extension - Server.GetStats().RTT(), // Proxy don't need to consider RTT
 		}
 		BuildPiggyback(response)
 		Server.AddResponses(response, client)

@@ -92,7 +92,7 @@ func (c *persistCache) Report() {
 		c.hashmap.Range(func(_, chunk interface{}) bool {
 			msg.WriteString(chunk.(fmt.Stringer).String())
 			msg.WriteString(":")
-			msg.WriteString(chunk.(*persistChunk).Error().Error())
+			msg.WriteString(fmt.Sprintf("%v", chunk.(*persistChunk).Error()))
 			msg.WriteString(" ")
 			return true
 		})
