@@ -48,7 +48,7 @@ var _ = Describe("RequestCoordinator", func() {
 		req := newRequest(counter, "0")
 		err := req.SetErrorResponse(errDummyResponse)
 
-		Expect(err).To(Equal(types.ErrNoClient))
+		Expect(err).To(BeNil())
 		Expect(counter.recycled).To(Equal(int32(1)))
 	})
 

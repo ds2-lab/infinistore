@@ -9,9 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
-	"github.com/mason-leap-lab/infinicache/common/net"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/client"
 	"github.com/mason-leap-lab/redeo/resp"
 )
@@ -37,7 +36,6 @@ type Conn struct {
 	Meta    interface{}
 	Handler ResponseHandler
 
-	shortcut  *net.MockConn
 	lastError error
 	cwnd      *Window
 	rseq      chan interface{}
@@ -46,12 +44,6 @@ type Conn struct {
 	routings  sync.WaitGroup
 	wMu       sync.Mutex   // Mutex to avoid concurrent writing to the connection.
 	wReq      *RequestMeta // Request that is writing to the connection now.
-}
-
-func NewShortcut(cn *net.MockConn, configs ...ConnConfig) *Conn {
-	conn := NewConn(cn.Client, configs...)
-	conn.shortcut = cn
-	return conn
 }
 
 func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
@@ -146,15 +138,18 @@ func (conn *Conn) IsClosed() bool {
 	}
 }
 
-// Close Signal connection should be closed. Function close() will be called later for actural operation
 func (conn *Conn) Close() error {
+	return conn.CloseWithReason("closed")
+}
+
+// Close Signal connection should be closed. Function close() will be called later for actural operation
+func (conn *Conn) CloseWithReason(reason string) error {
 	if !atomic.CompareAndSwapUint32(&conn.closed, 0, 1) {
 		return ErrConnectionClosed
 	}
 
 	// Close connection to force block read to quit
-	err := conn.GetConn().Close()
-	conn.invalidate(conn.shortcut)
+	err := util.CloseWithReason(conn.GetConn(), reason)
 
 	// Signal sub-goroutings to quit.
 	select {
@@ -230,7 +225,7 @@ func (conn *Conn) handleResponses() {
 		var read interface{}
 		select {
 		case <-conn.done:
-			conn.close()
+			conn.close("closed")
 			return
 		case read = <-conn.rseq:
 		}
@@ -240,7 +235,7 @@ func (conn *Conn) handleResponses() {
 		switch ret := read.(type) {
 		case error:
 			conn.lastError = ret
-			conn.close()
+			conn.close("closedError")
 			return
 		case int64:
 			rseq = ret
@@ -267,7 +262,7 @@ func (conn *Conn) handleResponses() {
 
 		if readErr != nil {
 			conn.lastError = readErr
-			conn.close()
+			conn.close("closedError")
 			return
 		}
 	}
@@ -315,9 +310,9 @@ func (conn *Conn) notifyRseq(rseq interface{}) {
 	}
 }
 
-func (conn *Conn) close() error {
+func (conn *Conn) close(reason string) error {
 	// Call signal function to avoid duplicated close.
-	err := conn.Close()
+	err := conn.CloseWithReason(reason)
 
 	// Drain possible stucks
 	select {
@@ -329,13 +324,6 @@ func (conn *Conn) close() error {
 	conn.cwnd.Close()
 
 	return err
-}
-
-func (conn *Conn) invalidate(shortcut *net.MockConn) {
-	// Thread safe implementation
-	if shortcut != nil && atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&conn.shortcut)), unsafe.Pointer(shortcut), unsafe.Pointer(nil)) {
-		shortcut.Close()
-	}
 }
 
 func (conn *Conn) isConnectionFailed(err error) bool {

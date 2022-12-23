@@ -194,13 +194,14 @@ func (c *RequestCounter) IsFulfilled(status ...uint64) bool {
 	}
 }
 
+// IsLate returns true if the request is late and should be called after successfully got head of response but before flushing the stream.
 func (c *RequestCounter) IsLate(status ...uint64) bool {
 	if len(status) == 0 {
 		return c.IsLate(c.Status())
 	}
 
 	if c.waitForClient {
-		return (status[0]&REQCNT_MASK_FLUSHED)>>REQCNT_BITS_FLUSHED > c.numToFulfill
+		return (status[0]&REQCNT_MASK_FLUSHED)>>REQCNT_BITS_FLUSHED >= c.numToFulfill
 	} else {
 		return (status[0]&REQCNT_MASK_SUCCEED)>>REQCNT_BITS_SUCCEED > c.numToFulfill
 	}

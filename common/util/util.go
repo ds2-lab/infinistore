@@ -38,3 +38,15 @@ func PanicRecovery(from string, err *error) {
 		}
 	}
 }
+
+type VerboseCloser interface {
+	CloseWithReason(reason string) error
+}
+
+func CloseWithReason(c io.Closer, reason string) error {
+	if v, ok := c.(VerboseCloser); ok {
+		return v.CloseWithReason(reason)
+	} else {
+		return c.Close()
+	}
+}

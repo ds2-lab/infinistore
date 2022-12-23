@@ -474,7 +474,7 @@ func (req *Request) setResponse(rsp interface{}) (err error) {
 		}
 	}
 	// if err != nil {
-	// 	err = fmt.Errorf("client %d: %v", req.response.client.ID(), err)
+	// 	err = fmt.Errorf("client %v: %v", req.response.client.Conn(), err)
 	// }
 
 	// Release reference so chan can be garbage collected.

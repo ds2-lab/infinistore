@@ -1,6 +1,8 @@
 package types
 
-import "net"
+import (
+	"net"
+)
 
 // InputEvent Input for the Lambda
 type InputEvent struct {
