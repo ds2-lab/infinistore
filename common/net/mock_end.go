@@ -20,6 +20,10 @@ func (c *MockEnd) String() string {
 	}
 }
 
+func (c *MockEnd) Status() string {
+	return c.status
+}
+
 func (c *MockEnd) Close() (err error) {
 	return c.CloseWithReason("closed")
 }
