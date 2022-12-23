@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"io"
 	sysnet "net"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/net"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -36,6 +38,54 @@ func readBody(reader io.Reader, size int64) (err error) {
 	return
 }
 
+func shouldNotTimeout(test func() interface{}, expects ...bool) interface{} {
+	expect := false
+	if len(expects) > 0 {
+		expect = expects[0]
+	}
+
+	timer := time.NewTimer(time.Second)
+	timeout := false
+	responeded := make(chan interface{})
+	var ret interface{}
+	go func() {
+		responeded <- test()
+	}()
+	select {
+	case <-timer.C:
+		timeout = true
+	case ret = <-responeded:
+		if !timer.Stop() {
+			<-timer.C
+		}
+	}
+
+	Expect(timeout).To(Equal(expect))
+	return ret
+}
+
+// func shouldTimeout(test func() interface{}) {
+// 	shouldNotTimeout(test, true)
+// }
+
+type holdableInlineReader struct {
+	*resp.InlineReader
+	util.Closer
+}
+
+func (r *holdableInlineReader) Hold() {
+	r.Closer.Init()
+}
+
+func (r *holdableInlineReader) Unhold() {
+	r.Closer.Close()
+}
+
+func (r *holdableInlineReader) Close() error {
+	r.Closer.Wait()
+	return r.InlineReader.Close()
+}
+
 var _ = Describe("RequestCoordinator", func() {
 	net.InitShortcut()
 
@@ -47,7 +97,9 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{InlineReader: resp.NewInlineReader(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
 
 		// Simulate cancel before preparing
 		response.CancelFlush()
@@ -68,6 +120,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(chunkId).To(Equal("-1"))
 
 		Expect(<-chErr).To(BeNil())
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return error if cancel before transmission", func() {
@@ -78,7 +134,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{InlineReader: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -101,6 +158,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(err).To(Equal(io.EOF))
 
 		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return error if cancel during transmission", func() {
@@ -111,7 +172,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{InlineReader: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -135,6 +197,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(err).To(Equal(io.EOF))
 
 		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return success if cancel after transmission", func() {
@@ -145,7 +211,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{InlineReader: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -169,5 +236,9 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(mock.Server.Status()).To(Equal("")) // Not disconnected
 
 		Expect(<-chErr).To(BeNil())
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 })

@@ -115,6 +115,10 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
 		// Clear body and bodyStream. Note that the stream is still available to use.
 		rsp.Body = nil
 		rsp.bodyStream = nil
+		// Unhold the stream, so the Close() can consume the stream.
+		if holdable, ok := rsp.stream.(resp.Holdable); ok {
+			holdable.Unhold()
+		}
 	} else {
 		w.AppendBulkString(rsp.Id.ChunkId)
 	}
