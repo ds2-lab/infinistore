@@ -18,7 +18,9 @@ var (
 	ResponseTimeout = 100 * time.Millisecond
 )
 
-type Preparer func(*SimpleResponse, resp.ResponseWriter)
+// Response filler to simplify response construction. If an error is returned, the response will be discarded,
+// and the connection will be closed except an ErrShouldIgnore is returned.
+type Preparer func(*SimpleResponse, resp.ResponseWriter) error
 
 type Response interface {
 	redeo.Contextable
@@ -149,9 +151,12 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	r.ResponseWriter = writer
 	r.err = nil
 	if r.preparer != nil {
-		r.preparer(r.inst.(*SimpleResponse), writer)
+		r.err = r.preparer(r.inst.(*SimpleResponse), writer)
 	} else {
 		r.inst.Prepare()
+	}
+	if r.err != nil {
+		return r.err
 	}
 
 	client := redeo.GetClient(r.Context())

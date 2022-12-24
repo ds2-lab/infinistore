@@ -57,8 +57,9 @@ func TestHandler(w resp.ResponseWriter, c *resp.Command) {
 
 	log.Debug("In Test handler")
 
-	rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+	rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 		w.AppendBulkString(rsp.Cmd)
+		return nil
 	}, client)
 	if err := rsp.Flush(); err != nil {
 		log.Error("Error on test::flush: %v", err)
@@ -229,16 +230,18 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 				if err := ret.Error(); err == nil {
 					log.Debug("Sending persisted notification: %s", key)
 					// Notification will send using control link.
-					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSISTED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSISTED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 						w.AppendBulkString(rsp.Cmd)
 						w.AppendBulkString(key)
+						return nil
 					})
 				} else {
 					log.Debug("Sending persist failure notification: %s", key)
 					// Notification will send using control link.
-					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSIST_FAILED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+					rsp, _ = Server.AddResponsesWithPreparer(protocol.CMD_PERSIST_FAILED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 						w.AppendBulkString(rsp.Cmd)
 						w.AppendBulkString(key)
+						return nil
 					})
 				}
 				if err := rsp.Flush(); err != nil {
@@ -527,9 +530,10 @@ func DataHandler(w resp.ResponseWriter, c *resp.Command) {
 	// put DATA to s3
 	collector.Save()
 
-	rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+	rsp, _ := Server.AddResponsesWithPreparer(c.Name, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 		w.AppendBulkString(rsp.Cmd)
 		w.AppendBulkString("OK")
+		return nil
 	}, client)
 
 	if err := rsp.Flush(); err != nil {

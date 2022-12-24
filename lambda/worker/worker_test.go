@@ -33,8 +33,9 @@ type TestHeartbeater struct {
 }
 
 func (hb *TestHeartbeater) SendToLink(link *Link, flags int64) error {
-	rsp, err := hb.worker.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) {
+	rsp, err := hb.worker.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) error {
 		w.AppendBulkString(rsp.Cmd)
+		return nil
 	}, link)
 	if err != nil {
 		return err
@@ -145,8 +146,9 @@ var _ = Describe("Worker", func() {
 		fmt.Println("response should be cached if connection has not been established...")
 		shortcut := net.Shortcut.Prepare(TestAddress, getTestID(), TestNumConnections)
 
-		server.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) {
+		server.AddResponsesWithPreparer("pong", func(rsp *SimpleResponse, w resp.ResponseWriter) error {
 			w.AppendBulkString(rsp.Cmd)
+			return nil
 		})
 		server.SetManualAck(true)
 		start, err := server.StartOrResume(net.StrAddr(shortcut.Address), &WorkerOptions{DryRun: true})

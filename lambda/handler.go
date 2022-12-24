@@ -478,8 +478,9 @@ func pingHandler(w resp.ResponseWriter, c *resp.Command) {
 
 func recoveredHandler(ctx context.Context) error {
 	log.Debug("Sending recovered notification.")
-	rsp, _ := store.Server.AddResponsesWithPreparer(protocol.CMD_RECOVERED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+	rsp, _ := store.Server.AddResponsesWithPreparer(protocol.CMD_RECOVERED, func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 		w.AppendBulkString(rsp.Cmd)
+		return nil
 	})
 	return rsp.Flush()
 }
@@ -538,11 +539,16 @@ func byeHandler(session *lambdaLife.Session, status types.LineageStatus) error {
 	// init backup cmd
 	if DRY_RUN {
 		meta := finalize(status)
-		rsp, _ := store.Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+		out, err := json.Marshal(meta)
+		if err != nil {
+			return err
+		}
+
+		rsp, _ := store.Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) error {
 			w.AppendBulkString(rsp.Cmd)
 			w.AppendBulkString(session.Sid)
-			out, _ := json.Marshal(meta)
 			w.AppendBulk(out)
+			return nil
 		})
 		return rsp.Flush()
 	}

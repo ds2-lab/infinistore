@@ -39,6 +39,7 @@ var (
 	ErrWorkerClosed     = errors.New("worker closed")
 	ErrNoProxySpecified = errors.New("no proxy specified")
 	ErrInvalidShortcut  = errors.New("invalid shortcut connection")
+	ErrShouldIgnore     = errors.New("should ignore")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 
 	DialTimeout           = 20 * time.Millisecond
@@ -630,7 +631,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	}
 
 	err := rsp.flush(w)
-	if err != nil {
+	if err != nil && err != ErrShouldIgnore {
 		// Set link as failure instead of closing it. Different links (control or data) may reconnect or disconnect.
 		wrk.SetFailure(link, err)
 
