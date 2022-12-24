@@ -346,7 +346,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			cn.WriteBulkString(strconv.Itoa(lambdaId))
 			cn.WriteBulkString(strconv.Itoa(MaxLambdaStores))
 			if err := cn.Flush(); err != nil {
-				log.Warn("Failed to flush headers of setting %d@%s(%s): %v", i, key, addr, err)
+				log.Warn("Failed to flush headers of setting %d@%s(%v): %v, left attempts: %d", i, key, cn.GetConn(), err, RequestAttempts-attempt-1)
 				return err
 			}
 
@@ -354,7 +354,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			//if err := c.W[i].Flush(); err != nil {
 			cn.SetWriteDeadline(time.Now().Add(Timeout))
 			if err := cn.CopyBulk(bytes.NewReader(val), int64(len(val))); err != nil {
-				log.Warn("Failed to stream body of setting %d@%s(%s): %v", i, key, addr, err)
+				log.Warn("Failed to stream body of setting %d@%s(%v): %v, left attempts: %d", i, key, cn.GetConn(), err, RequestAttempts-attempt-1)
 				return err
 			}
 			return nil

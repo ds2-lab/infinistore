@@ -4,8 +4,8 @@
 
 BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="Store1VPCNode"
-DEPLOY_FROM=0
-DEPLOY_CLUSTER=400
+DEPLOY_FROM=323
+DEPLOY_CLUSTER=2000
 ARG_PROMPT="[num_logs]"
 
 EMPH="\033[1;33m"
@@ -23,5 +23,6 @@ fi
 echo -e "Deleting "$EMPH"logs"$RESET" of Lambda deployments ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} ..."
 read -p "Press any key to confirm, or ctrl-C to stop."
 for ((i = ${DEPLOY_FROM}; i <= ${DEPLOY_TO}; i++)); do
+    echo -e "Deleting logs of Lambda deployment ${DEPLOY_PREFIX}$i ..."
     aws logs delete-log-group --log-group-name /aws/lambda/${DEPLOY_PREFIX}$i
 done
