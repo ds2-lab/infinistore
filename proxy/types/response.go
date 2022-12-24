@@ -146,7 +146,7 @@ func (rsp *Response) Flush() error {
 			if rsp.ctxError != nil {
 				return rsp.ctxError
 			} else {
-				return err
+				return fmt.Errorf("failed to copy bulk: %v", err)
 			}
 		}
 	}
@@ -214,6 +214,7 @@ func (rsp *Response) waitFlush(ctxCancelable bool, getConn func() net.Conn) erro
 				// Disconnect the client if it's available.
 				conn := getConn()
 				if conn != nil {
+					rsp.from = "abandon" + rsp.from
 					util.CloseWithReason(conn, "closedAbandon")
 				} // else test ctxCancellation after client is available.
 

@@ -937,7 +937,7 @@ func (conn *Connection) getHandler(start time.Time) {
 
 	// Send ack and pop request.
 	rsp.OnFinalize(conn.getPopRequestFinalizer(req))
-	rsp.OnFinalize(conn.getCommandFinalizer(rsp.Cmd))
+	rsp.OnFinalize(conn.getCommandFinalizer(req, rsp.Cmd))
 	// Set rsp as closed so it can be released safely.
 	defer rsp.Close()
 
@@ -1217,9 +1217,11 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 	return nil
 }
 
-func (conn *Connection) getCommandFinalizer(cmd string) types.ResponseFinalizer {
+func (conn *Connection) getCommandFinalizer(req *types.Request, cmd string) types.ResponseFinalizer {
 	return func(_ *types.Response) {
-		conn.finalizeCommmand(cmd)
+		if conn.finalizeCommmand(cmd) != nil && req.PersistChunk != nil {
+			conn.log.Warn("Failed to finalize command, inspecting persist chunk, stored: %d/%d, inspector: %v", req.PersistChunk.BytesStored(), req.PersistChunk.Size(), req.PersistChunk.GetInterceptor())
+		}
 	}
 }
 

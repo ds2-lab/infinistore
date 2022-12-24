@@ -65,8 +65,8 @@ func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
 // StartRequest increase the request counter by 1
 func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	// Abort if the request has responded
-	if req.IsResponded() {
-		return ErrResponded
+	if reason, ok := req.IsResponded(); ok {
+		return fmt.Errorf("%v: %s", ErrResponded, reason)
 	}
 
 	// Add request to the cwnd
@@ -110,7 +110,7 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 
 	// If request get responded during adding, EndRequest may or may not be called successfully.
 	// Ack again to ensure req getting removed from cwnd.
-	if req.IsResponded() {
+	if _, ok := req.IsResponded(); ok {
 		conn.cwnd.AckRequest(req.Seq())
 	}
 	return nil
@@ -249,14 +249,14 @@ func (conn *Conn) handleResponses() {
 			readErr = err
 		} else if conn.Handler == nil {
 			readErr = ErrNoHandler
-			req.SetResponse(readErr)
+			req.SetResponse(readErr, "handling responses")
 		} else {
 			err = conn.Handler.ReadResponse(req)
 			if err != nil && conn.isConnectionFailed(err) {
 				readErr = err
 			}
 			// Set ErrNoResponse as default response
-			req.SetResponse(ErrNoResponse)
+			req.SetResponse(ErrNoResponse, "handling responses")
 		}
 
 		if readErr != nil {

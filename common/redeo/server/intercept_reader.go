@@ -41,7 +41,7 @@ func NewInterceptReaderWithBuffer(reader resp.AllReadCloser, buf []byte) *Interc
 
 // String returns a description of the chunk.
 func (ir *InterceptReader) String() string {
-	return fmt.Sprintf("InterceptReader(%d)", ir.Len())
+	return fmt.Sprintf("InterceptReader(%d/%d)", ir.r, ir.Len())
 }
 
 func (ir *InterceptReader) Read(p []byte) (n int, err error) {

@@ -325,7 +325,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 
 		cn, err := c.validate(addr, i)
 		if err != nil {
-			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
+			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err), "sendSet")
 			return
 		}
 
@@ -361,7 +361,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 			return nil
 		})
 		if err != nil && c.closed {
-			req.SetResponse(ErrClientClosed)
+			req.SetResponse(ErrClientClosed, "sendSet")
 			return
 		} else if err != nil {
 			lastErr = err
@@ -381,7 +381,7 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 		return
 	}
 
-	req.SetResponse(fmt.Errorf("stop attempts: %v, last error: %v", ErrMaxPreflightsReached, lastErr))
+	req.SetResponse(fmt.Errorf("stop attempts: %v, last error: %v", ErrMaxPreflightsReached, lastErr), "sendSet")
 }
 
 func (c *Client) readSetResponse(req *ClientRequest) error {
@@ -397,10 +397,10 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 	cn.SetReadDeadline(time.Now().Add(HeaderTimeout))
 	appErr, err := c.readErrorResponse(req)
 	if err != nil {
-		req.SetResponse(err)
+		req.SetResponse(err, "readSetResponse")
 		return err
 	} else if appErr != nil {
-		req.SetResponse(appErr)
+		req.SetResponse(appErr, "readSetResponse")
 		return nil
 	}
 
@@ -408,19 +408,19 @@ func (c *Client) readSetResponse(req *ClientRequest) error {
 	chunkId, _ := cn.ReadBulkString()
 	storeId, err := cn.ReadBulkString()
 	if err != nil {
-		req.SetResponse(fmt.Errorf("error on reading header: %v", err))
+		req.SetResponse(fmt.Errorf("error on reading header: %v", err), "readSetResponse")
 		return err
 	}
 
 	// Match reqId and chunk
 	if respId != req.ReqId || chunkId != strconv.Itoa(cm.AddrIdx) {
 		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(req.ReqId)), logger.SafeString(chunkId, 2), req.ReqId, cm.AddrIdx)
-		req.SetResponse(ErrUnexpectedResponse)
+		req.SetResponse(ErrUnexpectedResponse, "readSetResponse")
 		return nil
 	}
 
 	log.Debug("Set chunk %s(%d)", req.ReqId, cm.AddrIdx)
-	req.SetResponse(storeId)
+	req.SetResponse(storeId, "readSetResponse")
 	return nil
 }
 
@@ -589,7 +589,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 
 		cn, err := c.validate(addr, i)
 		if err != nil {
-			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err))
+			req.SetResponse(fmt.Errorf("error on validating connection(%s): %v", addr, err), "sendGet")
 			return
 		}
 
@@ -604,7 +604,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		// 	return
 		// } else
 		if err != nil && c.closed {
-			req.SetResponse(ErrClientClosed)
+			req.SetResponse(ErrClientClosed, "sendGet")
 			return
 		} else if err != nil {
 			lastErr = err
@@ -619,7 +619,7 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		return
 	}
 
-	req.SetResponse(fmt.Errorf("stop attempts: %v, last error %v", ErrMaxPreflightsReached, lastErr))
+	req.SetResponse(fmt.Errorf("stop attempts: %v, last error %v", ErrMaxPreflightsReached, lastErr), "sendGet")
 }
 
 func (c *Client) readGetResponse(req *ClientRequest) error {
@@ -630,10 +630,10 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	cn.SetReadDeadline(time.Now().Add(HeaderTimeout))
 	appErr, err := c.readErrorResponse(req)
 	if err != nil {
-		req.SetResponse(err)
+		req.SetResponse(err, "readGetResponse")
 		return err
 	} else if appErr != nil {
-		req.SetResponse(appErr)
+		req.SetResponse(appErr, "readGetResponse")
 		return nil
 	}
 
@@ -641,7 +641,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	meta, _ := cn.ReadBulkString()
 	chunkId, err := cn.ReadBulkString()
 	if err != nil {
-		req.SetResponse(fmt.Errorf("error on reading header: %v", err))
+		req.SetResponse(fmt.Errorf("error on reading header: %v", err), "readGetResponse")
 		// Could acceptable for client first-D optimization.
 		return err
 	}
@@ -649,7 +649,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	// Matching chunk
 	if respId != req.ReqId || (chunkId != strconv.Itoa(cm.AddrIdx) && chunkId != "-1") {
 		log.Warn("Unexpected response %s(%s), expects %s(%d)", logger.SafeString(respId, len(req.ReqId)), logger.SafeString(chunkId, 2), req.ReqId, cm.AddrIdx)
-		req.SetResponse(ErrUnexpectedResponse)
+		req.SetResponse(ErrUnexpectedResponse, "readGetResponse")
 		// Skip body
 		if err := cn.SkipBulk(); err != nil {
 			return err
@@ -660,7 +660,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 
 	// Abandon?
 	if chunkId == "-1" {
-		req.SetResponse(ErrAbandon)
+		req.SetResponse(ErrAbandon, "readGetResponse")
 		return nil
 	}
 
@@ -668,18 +668,18 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	cn.SetReadDeadline(time.Now().Add(Timeout))
 	valReader, err := cn.StreamBulk()
 	if err != nil {
-		req.SetResponse(fmt.Errorf("error on getting reader of received chunk: %v", err))
+		req.SetResponse(fmt.Errorf("error on getting reader of received chunk: %v", err), "readGetResponse")
 		return err
 	}
 	if valReader.Len() == 0 {
-		req.SetResponse(fmt.Errorf("got empty chunk"))
+		req.SetResponse(fmt.Errorf("got empty chunk"), "readGetResponse")
 		valReader.ReadAll()
 		return ErrEmptyChunk
 	}
 
 	val, err := valReader.ReadAll()
 	if err != nil {
-		req.SetResponse(fmt.Errorf("error on streaming received chunk: %v", err))
+		req.SetResponse(fmt.Errorf("error on streaming received chunk: %v", err), "readGetResponse")
 		return err
 	}
 
@@ -689,7 +689,7 @@ func (c *Client) readGetResponse(req *ClientRequest) error {
 	}
 
 	log.Debug("Got chunk %s(%d)", req.ReqId, cm.AddrIdx)
-	req.SetResponse(val)
+	req.SetResponse(val, "readGetResponse")
 	return nil
 }
 
