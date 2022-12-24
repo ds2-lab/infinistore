@@ -71,13 +71,9 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 
 	// Add request to the cwnd
 	req.SetContext(context.WithValue(req.Context(), CtxKeyConn, conn))
-	meta, err := conn.cwnd.AddRequest(req)
+	meta, err := conn.cwnd.AddRequest(req) // If connection is closed, err will be returned.
 	if err != nil {
 		return err
-	}
-
-	if conn.IsClosed() {
-		return ErrConnectionClosed
 	}
 
 	// Lock writer
@@ -103,7 +99,7 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	}
 	// Handle last error
 	if err != nil {
-		// Discard request to avoid the request being prematurely responded before started (err occurs).
+		// Discard request the request
 		conn.cwnd.AckRequest(req.Seq())
 		// Handle connection error
 		if conn.isConnectionFailed(err) {

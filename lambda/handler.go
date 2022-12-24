@@ -49,6 +49,8 @@ func init() {
 		log.Debug("GOMAXPROCS %d", goroutines)
 	}
 
+	lambdaLife.TICK = MIN_TICK
+	lambdaLife.Init() // Reinit the timeout variables.
 	store.Lifetime = lambdaLife.New(LIFESPAN)
 	store.Server = worker.NewWorker(store.Lifetime.Id())
 	store.Server.SetHeartbeater(handlers.Pong)

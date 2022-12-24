@@ -84,10 +84,13 @@ func newReqBucket(seq int64) *ReqBucket {
 func (b *ReqBucket) Reset() {
 	if b.acked < b.filled {
 		for i := 0; i < len(b.requests); i++ {
-			if b.requests[i] != nil && !b.requests[i].Acked {
-				_ = b.requests[i].SetResponse(ErrConnectionClosed)
-				b.requests[i] = nil
+			if b.requests[i] == nil {
+				continue
 			}
+			if b.requests[i].Sent && !b.requests[i].Acked {
+				_ = b.requests[i].SetResponse(ErrConnectionClosed)
+			}
+			b.requests[i] = nil
 		}
 	}
 	b.refs = 0

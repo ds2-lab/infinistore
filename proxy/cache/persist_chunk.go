@@ -125,6 +125,14 @@ func (pc *persistChunk) Store(reader resp.AllReadCloser) (resp.AllReadCloser, er
 	// TODO: Add support to read from break point
 }
 
+// GetInterceptor returns the interceptor of the chunk.
+func (pc *persistChunk) GetInterceptor() resp.AllReadCloser {
+	if pc.interceptor == noneIntercepted {
+		return nil
+	}
+	return pc.interceptor.(resp.AllReadCloser)
+}
+
 // WaitStored will wait until the chunk is stored or error occurs.
 func (pc *persistChunk) WaitStored() error {
 	_, err := pc.waitData(0, nil)

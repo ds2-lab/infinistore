@@ -135,7 +135,7 @@ func (req *Request) GetRequest() *Request {
 func (req *Request) MarkError(err error) int {
 	req.err = err
 	// No change to number of attempts if error is nil. For asynchronous request, error can be reported later.
-	// Or if the request is success, it does not matter to retry.
+	// Or if the request is success, it does not matter to call MarkError again.
 	if err == nil {
 		return req.leftAttempts
 	}
@@ -144,13 +144,24 @@ func (req *Request) MarkError(err error) int {
 		if req.PersistChunk != nil && req.leftAttempts > 1 {
 			// Once persist chunk start streaming, it will continue streaming until stored.
 			// Start a new downstream to read data. No need to hold.
-			req.BodyStream, _ = req.PersistChunk.Load(context.Background())
+			clearStart, _ := req.PersistChunk.Load(context.Background())
+			clearStart.(resp.Holdable).Hold()
+			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
+				holdable.Unhold()
+			}
+			req.BodyStream.(resp.Holdable).Unhold()
+			req.BodyStream = clearStart // Exchange the stream with the new one so that the next attempt can read data from the beginning.
+			req.streamingStarted = false
 			req.leftAttempts--
+			go clearStart.Close()
 		} else {
+			// On running out of attempts, the BodyStream will be unholded on request close.
 			req.leftAttempts = 0
 			req.reason = ErrStreamingReq
 		}
 	} else if req.leftAttempts == 0 {
+		// If leftAttempts is 0, it means the value is not initialized. If caller sees the 0 attempts left, it will not initiate a retry.
+		// So no reentry of this function is expected after the attempts has been reduced to 0 and no deadloop is expected.
 		req.leftAttempts = MAX_ATTEMPTS - 1
 	} else {
 		req.leftAttempts--
@@ -193,6 +204,7 @@ func (req *Request) ToSetRetrial(stream resp.AllReadCloser) *Request {
 	retrial.Cmd = req.Cmd
 	retrial.BodyStream = stream
 	retrial.Info = req.Info
+	retrial.PersistChunk = req.PersistChunk
 	return retrial
 }
 
@@ -217,7 +229,7 @@ func (req *Request) PrepareForGet(conn Conn) {
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
 
-func (req *Request) ToCachedResponse(cached PersistChunk) *Response {
+func (req *Request) ToCachedResponse(cached PersistChunkForResponse) *Response {
 	rsp := &Response{
 		Id:     req.Id,
 		Cmd:    req.Cmd,

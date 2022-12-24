@@ -51,8 +51,8 @@ type Response struct {
 
 	request   *Request
 	finalizer ResponseFinalizer
-	abandon   bool         // Abandon flag, set in Request class.
-	cached    PersistChunk // Cached flag, the response is served from cache.
+	abandon   bool                    // Abandon flag, set in Request class.
+	cached    PersistChunkForResponse // Cached flag, the response is served from cache.
 
 	w         resp.ResponseWriter
 	ctxCancel context.CancelFunc

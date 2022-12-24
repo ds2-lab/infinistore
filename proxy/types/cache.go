@@ -55,9 +55,18 @@ type PersistCache interface {
 	Report()
 }
 
+type PersistChunkForResponse interface {
+	// IsStored returns whether the chunk is fully stored.
+	IsStored() bool
+
+	// ByteStored returns how many bytes is stored.
+	BytesStored() int64
+}
+
 // PersistChunk offers API for a abstract chunk to support persisting.
 type PersistChunk interface {
 	redeo.Contextable
+	PersistChunkForResponse
 
 	// Key returns the key of the chunk.
 	Key() string
@@ -65,14 +74,11 @@ type PersistChunk interface {
 	// Size returns the size of the chunk.
 	Size() int64
 
-	// IsStored returns whether the chunk is fully stored.
-	IsStored() bool
-
-	// ByteStored returns how many bytes is stored.
-	BytesStored() int64
-
 	// Store stores the chunk by intercepting a stream.
 	Store(resp.AllReadCloser) (resp.AllReadCloser, error)
+
+	// GetInterceptor returns the interceptor that returns on calling Store().
+	GetInterceptor() resp.AllReadCloser
 
 	// WaitStored waits for the chunk to be stored or error occurred.
 	WaitStored() error
