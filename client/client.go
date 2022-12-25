@@ -205,13 +205,13 @@ func (r *ecRet) Request(i int) *ClientRequest {
 	if r.reqs[i] == nil {
 		ctx := context.WithValue(context.Background(), CtxKeyECRet, r)
 		req := &ClientRequest{Request: client.NewRequestWithContext(ctx)}
-		req.OnRespond(func(rsp interface{}, err error) {
+		req.OnRespond(func(rsp interface{}, err error, reason string) {
 			if req.Cancel != nil {
 				req.Cancel()
 			}
 			// In case of deadline exceeded, we don't know what blocks the connection. Close it to force a new connection to be created next time.
 			if err == context.DeadlineExceeded || util.IsConnectionFailed(err) {
-				util.CloseWithReason(req.Conn(), "closedResponded")
+				util.CloseWithReason(req.Conn(), fmt.Sprintf("closedResponded:%s", reason))
 			}
 
 			// Keep record of the last error

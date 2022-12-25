@@ -103,7 +103,7 @@ var _ = Describe("Connection", func() {
 
 		// wait for the response
 		done := make(chan struct{})
-		req.OnRespond(func(_ interface{}, err error) {
+		req.OnRespond(func(_ interface{}, err error, _ string) {
 			Expect(err.Error()).To(Equal("i/o timeout"))
 			conn.Close()
 			close(done)

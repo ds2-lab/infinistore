@@ -88,7 +88,7 @@ func (b *ReqBucket) Reset() {
 				continue
 			}
 			if b.requests[i].Sent && !b.requests[i].Acked {
-				_ = b.requests[i].SetResponse(ErrConnectionClosed)
+				_ = b.requests[i].SetResponse(ErrConnectionClosed, "connection cleanup")
 			}
 			b.requests[i] = nil
 		}
@@ -466,7 +466,7 @@ func (wnd *Window) cleanUp() {
 					continue
 				} else if err := meta.testTimeout(t); err != nil {
 					// Note that the request must have benn sent. Timeout on write will not be tested.
-					meta.SetResponse(err)
+					meta.SetResponse(err, "response timeout")
 					req := meta.Request
 					if req != nil {
 						_, _ = wnd.AckRequest(req.Seq())

@@ -63,26 +63,21 @@ func NewConn(cn sysnet.Conn, configs ...ConnConfig) *Conn {
 }
 
 // StartRequest increase the request counter by 1
-func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
+func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) (err error) {
 	// Abort if the request has responded
-	if req.IsResponded() {
-		return ErrResponded
+	if reason, ok := req.IsResponded(); ok {
+		return fmt.Errorf("%v: %s", ErrResponded, reason)
 	}
-
-	// Add request to the cwnd
 	req.SetContext(context.WithValue(req.Context(), CtxKeyConn, conn))
-	meta, err := conn.cwnd.AddRequest(req) // If connection is closed, err will be returned.
-	if err != nil {
+
+	// Lock writer
+	if err := conn.writeStart(req); err != nil { // If connection is closed, err will be returned.
 		return err
 	}
 
-	// Lock writer
-	conn.writeStart(meta)
-	defer conn.writeEnd()
-
 	if conn.IsClosed() {
 		// Request will be cleared.
-		return ErrConnectionClosed
+		return conn.writeEnd(req, ErrConnectionClosed)
 	}
 
 	// Both calback writer and request writer (Flush) are supported.
@@ -97,23 +92,21 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	if err == nil {
 		err = req.Flush()
 	}
-	// Handle last error
+
+	// Handle result
 	if err != nil {
-		// Discard request the request
-		conn.cwnd.AckRequest(req.Seq())
 		// Handle connection error
 		if conn.isConnectionFailed(err) {
 			conn.Close()
 		}
-		return err
-	}
-
-	// If request get responded during adding, EndRequest may or may not be called successfully.
-	// Ack again to ensure req getting removed from cwnd.
-	if req.IsResponded() {
+	} else if _, ok := req.IsResponded(); ok {
+		// If request get responded during adding, EndRequest may or may not be called successfully.
+		// Ack again to ensure req getting removed from cwnd.
 		conn.cwnd.AckRequest(req.Seq())
 	}
-	return nil
+
+	// End request
+	return conn.writeEnd(req, err)
 }
 
 // StartRequest increase the request counter by 1
@@ -200,18 +193,29 @@ func (conn *Conn) SetWindowSize(size int) {
 	conn.cwnd.SetSize(size)
 }
 
-func (conn *Conn) writeStart(req *RequestMeta) {
+func (conn *Conn) writeStart(req Request) (err error) {
 	conn.wMu.Lock()
-	conn.wReq = req
+	meta, err := conn.cwnd.AddRequest(req) // If connection is closed, err will be returned.
+	if err != nil {
+		conn.wMu.Unlock()
+		return err
+	}
+	conn.wReq = meta
 	conn.routings.Add(1) // Avoid connection being release during writing.
+	return
 }
 
-func (conn *Conn) writeEnd() {
+func (conn *Conn) writeEnd(req Request, err error) error {
 	conn.routings.Done()
-	conn.wReq.Sent = true
-	conn.wReq.Deadline = time.Now().Add(DefaultTimeout)
+	if err == nil {
+		conn.wReq.Sent = true
+		conn.wReq.Deadline = time.Now().Add(DefaultTimeout)
+	} else {
+		conn.cwnd.AckRequest(req.Seq())
+	}
 	conn.wReq = nil
 	conn.wMu.Unlock()
+	return err
 }
 
 func (conn *Conn) handleResponses() {
@@ -249,14 +253,14 @@ func (conn *Conn) handleResponses() {
 			readErr = err
 		} else if conn.Handler == nil {
 			readErr = ErrNoHandler
-			req.SetResponse(readErr)
+			req.SetResponse(readErr, "handling responses")
 		} else {
 			err = conn.Handler.ReadResponse(req)
 			if err != nil && conn.isConnectionFailed(err) {
 				readErr = err
 			}
 			// Set ErrNoResponse as default response
-			req.SetResponse(ErrNoResponse)
+			req.SetResponse(ErrNoResponse, "handling responses")
 		}
 
 		if readErr != nil {

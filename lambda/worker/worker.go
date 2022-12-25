@@ -526,6 +526,11 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr sysnet.Addr, opts *WorkerOpti
 
 	// Serve the client.
 	go func(link *Link) {
+		client := link.Client
+		if client == nil {
+			// Can be cleared during worker pausing.
+			return
+		}
 		_ = wrk.Server.ServeClient(link.Client, false) // Enable asych mode to allow sending request.
 		// Recycle the spare token if the link owns one.
 		wrk.flagReservationUsed(link)

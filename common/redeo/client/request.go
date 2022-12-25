@@ -18,7 +18,7 @@ var (
 	CtxKeyConn = requestCtxKey("conn")
 )
 
-type ResponseNotifier func(interface{}, error)
+type ResponseNotifier func(response interface{}, err error, reason string)
 
 type Request interface {
 	// Seq gets the sequence of the request.
@@ -34,10 +34,10 @@ type Request interface {
 	Flush() error
 
 	// SetResponse sets the response for the request.
-	SetResponse(interface{}) error
+	SetResponse(response interface{}, reason string) error
 
 	// IsResponded returns if the request is responded.
-	IsResponded() bool
+	IsResponded() (reason string, responded bool)
 
 	// Response waits and returns the response and the error of the request.
 	Response() (interface{}, error)
@@ -63,6 +63,7 @@ type request struct {
 	seq       int64
 	response  interface{}
 	err       error
+	reason    string
 	ctx       context.Context
 	status    uint32
 	responded chan struct{}
@@ -103,7 +104,7 @@ func (req *request) Flush() error {
 	return cn.Flush()
 }
 
-func (req *request) SetResponse(rsp interface{}) error {
+func (req *request) SetResponse(rsp interface{}, reason string) error {
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_INVOKED, REQUEST_RESPONDED) {
 		return ErrResponded
 	}
@@ -113,17 +114,18 @@ func (req *request) SetResponse(rsp interface{}) error {
 	} else {
 		req.response = rsp
 	}
+	req.reason = reason
 
 	close(req.responded)
 	if cn := req.Conn(); cn != nil {
 		cn.EndRequest(req)
 	}
-	req.onRespond(req.response, req.err)
+	req.onRespond(req.response, req.err, reason)
 	return nil
 }
 
-func (req *request) IsResponded() bool {
-	return atomic.LoadUint32(&req.status) == REQUEST_RESPONDED
+func (req *request) IsResponded() (string, bool) {
+	return req.reason, atomic.LoadUint32(&req.status) == REQUEST_RESPONDED
 }
 
 func (req *request) Response() (interface{}, error) {
@@ -133,7 +135,7 @@ func (req *request) Response() (interface{}, error) {
 			break
 		case <-req.ctx.Done():
 			// Call SetResponse for thread safty.
-			req.SetResponse(req.ctx.Err())
+			req.SetResponse(req.ctx.Err(), "context done")
 		}
 	}
 
@@ -159,6 +161,6 @@ func (req *request) SetContext(ctx context.Context) {
 	req.ctx = ctx
 }
 
-func defaultResponseNotifier(_ interface{}, _ error) {
+func defaultResponseNotifier(_ interface{}, _ error, _ string) {
 	// do nothing
 }
