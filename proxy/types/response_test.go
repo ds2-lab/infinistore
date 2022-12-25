@@ -5,13 +5,27 @@ import (
 	"crypto/rand"
 	"io"
 	sysnet "net"
+	"time"
 
 	"github.com/mason-leap-lab/infinicache/common/net"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
+
+type errorReadAllCloser struct {
+	*resp.InlineReader
+}
+
+func newErrorReadAllCloser(buff []byte) *errorReadAllCloser {
+	return &errorReadAllCloser{resp.NewInlineReader(buff)}
+}
+
+func (r *errorReadAllCloser) Read(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
+}
 
 func getShortCut() (*net.MockConn, *net.ShortcutConn) {
 	shortcut := net.Shortcut.Prepare("localhost", 0, 1)
@@ -36,6 +50,62 @@ func readBody(reader io.Reader, size int64) (err error) {
 	return
 }
 
+func shouldNotTimeout(test func() interface{}, expects ...bool) interface{} {
+	expect := false
+	if len(expects) > 0 {
+		expect = expects[0]
+	}
+
+	timer := time.NewTimer(time.Second)
+	timeout := false
+	responeded := make(chan interface{})
+	var ret interface{}
+	go func() {
+		responeded <- test()
+	}()
+	select {
+	case <-timer.C:
+		timeout = true
+	case ret = <-responeded:
+		if !timer.Stop() {
+			<-timer.C
+		}
+	}
+
+	Expect(timeout).To(Equal(expect))
+	return ret
+}
+
+// func shouldTimeout(test func() interface{}) {
+// 	shouldNotTimeout(test, true)
+// }
+
+type holdableInlineReader struct {
+	resp.AllReadCloser
+	util.Closer
+}
+
+func (r *holdableInlineReader) Read(p []byte) (n int, err error) {
+	n, err = r.AllReadCloser.Read(p)
+	if err != nil {
+		r.Unhold()
+	}
+	return
+}
+
+func (r *holdableInlineReader) Hold() {
+	r.Closer.Init()
+}
+
+func (r *holdableInlineReader) Unhold() {
+	r.Closer.Close()
+}
+
+func (r *holdableInlineReader) Close() error {
+	r.Closer.Wait()
+	return r.AllReadCloser.Close()
+}
+
 var _ = Describe("RequestCoordinator", func() {
 	net.InitShortcut()
 
@@ -47,7 +117,9 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
 
 		// Simulate cancel before preparing
 		response.CancelFlush()
@@ -68,6 +140,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(chunkId).To(Equal("-1"))
 
 		Expect(<-chErr).To(BeNil())
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return error if cancel before transmission", func() {
@@ -78,7 +154,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -89,7 +166,7 @@ var _ = Describe("RequestCoordinator", func() {
 		chunkId := readHeader(resp.NewResponseReader(mock.Client))
 		Expect(chunkId).To(Equal("0"))
 
-		// Simulate cancel behavior
+		// Simulate cancel before transmission
 		response.CancelFlush()
 
 		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
@@ -101,6 +178,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(err).To(Equal(io.EOF))
 
 		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return error if cancel during transmission", func() {
@@ -111,7 +192,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -121,9 +203,9 @@ var _ = Describe("RequestCoordinator", func() {
 
 		chunkId := readHeader(resp.NewResponseReader(mock.Client))
 		Expect(chunkId).To(Equal("0"))
-		readBody(mock.Client, int64(len(testStream)/2)) // Half read
 
-		// Simulate cancel behavior
+		// Simulate cancel during transmission
+		readBody(mock.Client, int64(len(testStream)/2)) // Half read
 		response.CancelFlush()
 
 		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
@@ -135,6 +217,10 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(err).To(Equal(io.EOF))
 
 		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 
 	It("should WaitFlush return success if cancel after transmission", func() {
@@ -145,7 +231,8 @@ var _ = Describe("RequestCoordinator", func() {
 
 		response := NewResponse(protocol.CMD_GET)
 		response.Id.ChunkId = "0"
-		response.SetBodyStream(resp.NewInlineReader(testStream))
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		response.SetBodyStream(stream)
 		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
 
 		chErr := make(chan error)
@@ -160,7 +247,7 @@ var _ = Describe("RequestCoordinator", func() {
 		_, err := allReader.ReadAll()
 		Expect(err).To(BeNil())
 
-		// Simulate cancel before preparing
+		// Simulate cancel after transimission. We go async to give waitFlush some time to execute before cancel.
 		go response.CancelFlush()
 
 		err = response.waitFlush(true, func() sysnet.Conn { return mock.Server })
@@ -169,5 +256,52 @@ var _ = Describe("RequestCoordinator", func() {
 		Expect(mock.Server.Status()).To(Equal("")) // Not disconnected
 
 		Expect(<-chErr).To(BeNil())
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
+	})
+
+	It("should WaitFlush on cached response will not abandon connection", func() {
+		testStream := make([]byte, 1024*1024)
+		rand.Read(testStream)
+		mock, shortcut := getShortCut()
+		defer clearConn(shortcut)
+
+		// Prepare cached reader
+		chunk := newEmptyTestPersistChunkForResponse(len(testStream))
+		// Prepare request
+		req := &Request{}
+		req.Id.ChunkId = "0"
+		req.Cmd = protocol.CMD_GET
+
+		response := req.ToCachedResponse(chunk)
+		stream := &holdableInlineReader{AllReadCloser: newErrorReadAllCloser(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
+		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
+
+		chErr := make(chan error)
+		go func() {
+			chErr <- response.Flush()
+		}()
+
+		reader := resp.NewResponseReader(mock.Client)
+		chunkId := readHeader(reader)
+		Expect(chunkId).To(Equal("0"))
+
+		// Simulate cancel before transmission
+		response.CancelFlush()
+
+		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
+		Expect(err).To(Equal(context.Canceled))
+		Expect(response.Context().Err()).To(Equal(context.Canceled))
+		Expect(mock.Server.Status()).To(Equal("")) // Not disconnected
+
+		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
 	})
 })

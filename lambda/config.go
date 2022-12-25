@@ -6,7 +6,8 @@ import (
 )
 
 const (
-	LIFESPAN = 5 * time.Minute
+	LIFESPAN = 5 * time.Minute      // Not effective for now
+	MIN_TICK = 1 * time.Millisecond // Set to 100ms to compare with legacy system.
 )
 
 var (

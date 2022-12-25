@@ -11,7 +11,6 @@ import (
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
-const TICK = 1 * time.Millisecond
 const TICK_EXTENSION = 100 * time.Millisecond
 
 // For Lambdas below 0.5vCPU(896M).
@@ -27,14 +26,16 @@ const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
 var (
+	TICK              = 100 * time.Millisecond
 	TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
-	TICK_ERROR        = time.Duration(0)
+	TICK_ERROR        = TICK_10_ERROR
 
 	ErrTimeout      = errors.New("timeout")
 	MemoryLimitInMB = 3096
 )
 
-func init() {
+// Set public to allow reconfiguration.
+func Init() {
 	// adapt
 	if lambdacontext.MemoryLimitInMB > 0 {
 		MemoryLimitInMB = lambdacontext.MemoryLimitInMB
@@ -42,13 +43,16 @@ func init() {
 
 	if MemoryLimitInMB < 896 {
 		TICK_ERROR_EXTEND = TICK_1_ERROR_EXTEND
-		// TICK_ERROR = TICK_1_ERROR
+		TICK_ERROR = TICK_1_ERROR
 	} else if MemoryLimitInMB < 1792 {
 		TICK_ERROR_EXTEND = TICK_5_ERROR_EXTEND
-		// TICK_ERROR = TICK_5_ERROR
+		TICK_ERROR = TICK_5_ERROR
 	} else {
 		TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
-		// TICK_ERROR = TICK_10_ERROR
+		TICK_ERROR = TICK_10_ERROR
+	}
+	if TICK == 1*time.Millisecond {
+		TICK_ERROR = 0
 	}
 }
 

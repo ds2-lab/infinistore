@@ -23,5 +23,6 @@ fi
 echo -e "Deleting "$EMPH"logs"$RESET" of Lambda deployments ${DEPLOY_PREFIX}${DEPLOY_FROM} to ${DEPLOY_PREFIX}${DEPLOY_TO} ..."
 read -p "Press any key to confirm, or ctrl-C to stop."
 for ((i = ${DEPLOY_FROM}; i <= ${DEPLOY_TO}; i++)); do
+    echo -e "Deleting logs of Lambda deployment ${DEPLOY_PREFIX}$i ..."
     aws logs delete-log-group --log-group-name /aws/lambda/${DEPLOY_PREFIX}$i
 done

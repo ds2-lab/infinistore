@@ -30,6 +30,9 @@ type RequestMeta struct {
 	// Request embeds application level requests.
 	Request
 
+	// Sent indicates the request has been sent successfully.
+	Sent bool
+
 	// Acked indicates the request is acknownledged.
 	Acked bool
 
@@ -42,7 +45,7 @@ type RequestMeta struct {
 
 // IsTimeout returns if the request is timeout given the status of the request's context.
 func (m *RequestMeta) testTimeout(t time.Time) error {
-	if m.Acked || m.Notifier.IsWaiting() {
+	if !m.Sent || m.Acked || m.Notifier.IsWaiting() {
 		return nil
 	}
 
@@ -81,10 +84,13 @@ func newReqBucket(seq int64) *ReqBucket {
 func (b *ReqBucket) Reset() {
 	if b.acked < b.filled {
 		for i := 0; i < len(b.requests); i++ {
-			if b.requests[i] != nil && !b.requests[i].Acked {
-				_ = b.requests[i].SetResponse(ErrConnectionClosed)
-				b.requests[i] = nil
+			if b.requests[i] == nil {
+				continue
 			}
+			if b.requests[i].Sent && !b.requests[i].Acked {
+				_ = b.requests[i].SetResponse(ErrConnectionClosed)
+			}
+			b.requests[i] = nil
 		}
 	}
 	b.refs = 0
@@ -459,6 +465,7 @@ func (wnd *Window) cleanUp() {
 				if meta == nil {
 					continue
 				} else if err := meta.testTimeout(t); err != nil {
+					// Note that the request must have benn sent. Timeout on write will not be tested.
 					meta.SetResponse(err)
 					req := meta.Request
 					if req != nil {

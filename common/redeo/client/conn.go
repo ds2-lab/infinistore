@@ -71,13 +71,9 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 
 	// Add request to the cwnd
 	req.SetContext(context.WithValue(req.Context(), CtxKeyConn, conn))
-	meta, err := conn.cwnd.AddRequest(req)
+	meta, err := conn.cwnd.AddRequest(req) // If connection is closed, err will be returned.
 	if err != nil {
 		return err
-	}
-
-	if conn.IsClosed() {
-		return ErrConnectionClosed
 	}
 
 	// Lock writer
@@ -85,6 +81,7 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	defer conn.writeEnd()
 
 	if conn.IsClosed() {
+		// Request will be cleared.
 		return ErrConnectionClosed
 	}
 
@@ -102,7 +99,7 @@ func (conn *Conn) StartRequest(req Request, writes ...RequestWriter) error {
 	}
 	// Handle last error
 	if err != nil {
-		// Discard request to avoid the request being prematurely responded before started (err occurs).
+		// Discard request the request
 		conn.cwnd.AckRequest(req.Seq())
 		// Handle connection error
 		if conn.isConnectionFailed(err) {
@@ -170,13 +167,14 @@ func (conn *Conn) CloseWithReason(reason string) error {
 	return err
 }
 
-// SetDeadline overwrites default implementation by reset the timeout of writing request.
+// SetDeadline overwrites default implementation by reset the timeout of both reading and writing request.
 func (conn *Conn) SetDeadline(t time.Time) error {
 	err := conn.Conn.SetDeadline(t)
 	if err != nil {
 		return err
 	}
 
+	// Set deadline of wReq is mainly for reading response.
 	wReq := conn.wReq
 	if wReq != nil {
 		wReq.Deadline = t
@@ -184,9 +182,9 @@ func (conn *Conn) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// SetWriteDeadline overwrites default implementation by reset the timeout of writing request.
-func (conn *Conn) SetWriteDeadline(t time.Time) error {
-	err := conn.Conn.SetWriteDeadline(t)
+// SetReadDeadline overwrites default implementation by reset the timeout of reading request.
+func (conn *Conn) SetReadDeadline(t time.Time) error {
+	err := conn.Conn.SetReadDeadline(t)
 	if err != nil {
 		return err
 	}
@@ -210,6 +208,7 @@ func (conn *Conn) writeStart(req *RequestMeta) {
 
 func (conn *Conn) writeEnd() {
 	conn.routings.Done()
+	conn.wReq.Sent = true
 	conn.wReq.Deadline = time.Now().Add(DefaultTimeout)
 	conn.wReq = nil
 	conn.wMu.Unlock()

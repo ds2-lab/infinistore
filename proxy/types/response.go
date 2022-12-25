@@ -51,8 +51,8 @@ type Response struct {
 
 	request   *Request
 	finalizer ResponseFinalizer
-	abandon   bool         // Abandon flag, set in Request class.
-	cached    PersistChunk // Cached flag, the response is served from cache.
+	abandon   bool                    // Abandon flag, set in Request class.
+	cached    PersistChunkForResponse // Cached flag, the response is served from cache.
 
 	w         resp.ResponseWriter
 	ctxCancel context.CancelFunc
@@ -115,6 +115,10 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
 		// Clear body and bodyStream. Note that the stream is still available to use.
 		rsp.Body = nil
 		rsp.bodyStream = nil
+		// Unhold the stream, so the Close() can consume the stream.
+		if holdable, ok := rsp.stream.(resp.Holdable); ok {
+			holdable.Unhold()
+		}
 	} else {
 		w.AppendBulkString(rsp.Id.ChunkId)
 	}

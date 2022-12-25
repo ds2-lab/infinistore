@@ -3,7 +3,7 @@ package client
 import "errors"
 
 var (
-	ErrWindow  = errors.New("windoe error")
+	ErrWindow  = errors.New("window error")
 	ErrTimeout = &timeoutError{}
 )
 
