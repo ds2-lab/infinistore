@@ -149,7 +149,6 @@ func (req *Request) MarkError(err error) int {
 			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
 				holdable.Unhold()
 			}
-			req.BodyStream.(resp.Holdable).Unhold()
 			req.BodyStream = clearStart // Exchange the stream with the new one so that the next attempt can read data from the beginning.
 			req.streamingStarted = false
 			req.leftAttempts--
