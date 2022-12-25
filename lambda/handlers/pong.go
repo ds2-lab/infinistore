@@ -192,6 +192,7 @@ func sendPong(link *worker.Link, flags int64, payload []byte) error {
 		rsp.Attempts = 1
 		sess := lambdaLife.GetSession()
 		// Session should be available by now. If not, ignore the pong.
+		// In warmup invocation, the function can return so quick that the session ends before the pong is sent.
 		if sess == nil {
 			return worker.ErrShouldIgnore
 		}
