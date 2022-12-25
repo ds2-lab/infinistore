@@ -171,7 +171,7 @@ var _ = Describe("RequestCoordinator", func() {
 
 		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
 		Expect(err).To(Equal(context.Canceled))
-		Expect(response.Context().Err()).To(Equal(context.Canceled))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
 		Expect(mock.Server.Status()).To(Equal("closedAbandon"))
 
 		err = readBody(mock.Client, int64(len(testStream)/2)) // Read some
@@ -210,13 +210,137 @@ var _ = Describe("RequestCoordinator", func() {
 
 		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
 		Expect(err).To(Equal(context.Canceled))
-		Expect(response.Context().Err()).To(Equal(context.Canceled))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
 		Expect(mock.Server.Status()).To(Equal("closedAbandon"))
 
 		err = readBody(mock.Client, int64(len(testStream)/2)) // Read rest
 		Expect(err).To(Equal(io.EOF))
 
 		Expect(<-chErr).To(Equal(context.Canceled))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
+	})
+
+	It("should WaitFlush return error if transmission interrupted by lambda", func() {
+		testStream := make([]byte, 1024*1024)
+		rand.Read(testStream)
+		mock, shortcut := getShortCut()
+		defer clearConn(shortcut)
+
+		response := NewResponse(protocol.CMD_GET)
+		response.Id.ChunkId = "0"
+		stream := &holdableInlineReader{AllReadCloser: newErrorReadAllCloser(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
+		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
+
+		chErr := make(chan error)
+		go func() {
+			err := response.Flush()
+			if err != nil {
+				mock.Server.Close()
+			}
+			chErr <- err
+		}()
+
+		chunkId := readHeader(resp.NewResponseReader(mock.Client))
+		Expect(chunkId).To(Equal("0"))
+
+		// Simulate transmission interrupted by lambda, errorReadAllCloser will simulate the lambda error.
+
+		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
+		Expect(err).To(Equal(io.ErrUnexpectedEOF))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
+		Expect(mock.Server.Status()).To(Equal("closed"))
+		Expect(mock.Client.Status()).To(Equal(""))
+
+		Expect(<-chErr).To(Equal(io.ErrUnexpectedEOF))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
+	})
+
+	It("should WaitFlush return error if transmission interrupted by server", func() {
+		testStream := make([]byte, 1024*1024)
+		rand.Read(testStream)
+		mock, shortcut := getShortCut()
+		interruptReason := "interrupted"
+		defer clearConn(shortcut)
+
+		response := NewResponse(protocol.CMD_GET)
+		response.Id.ChunkId = "0"
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
+		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
+
+		chErr := make(chan error)
+		go func() {
+			chErr <- response.Flush()
+		}()
+
+		chunkId := readHeader(resp.NewResponseReader(mock.Client))
+		Expect(chunkId).To(Equal("0"))
+
+		// Simulate transmission interrupted by server
+		readBody(mock.Client, int64(len(testStream)/2)) // Half read
+		mock.Server.CloseWithReason(interruptReason)
+
+		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
+		Expect(err).To(Equal(io.ErrClosedPipe))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
+		Expect(mock.Server.Status()).To(Equal(interruptReason))
+
+		err = readBody(mock.Client, int64(len(testStream)/2)) // Read rest
+		Expect(err).To(Equal(io.EOF))
+		Expect(mock.Client.Status()).To(Equal(""))
+
+		Expect(<-chErr).To(Equal(io.ErrClosedPipe))
+		shouldNotTimeout(func() interface{} {
+			response.Close()
+			return nil
+		})
+	})
+
+	It("should WaitFlush return error if transmission interrupted by client", func() {
+		testStream := make([]byte, 1024*1024)
+		rand.Read(testStream)
+		mock, shortcut := getShortCut()
+		interruptReason := "interrupted"
+		defer clearConn(shortcut)
+
+		response := NewResponse(protocol.CMD_GET)
+		response.Id.ChunkId = "0"
+		stream := &holdableInlineReader{AllReadCloser: resp.NewInlineReader(testStream)}
+		stream.Hold()
+		response.SetBodyStream(stream)
+		response.PrepareForGet(resp.NewResponseWriter(mock.Server), 0)
+
+		chErr := make(chan error)
+		go func() {
+			chErr <- response.Flush()
+		}()
+
+		chunkId := readHeader(resp.NewResponseReader(mock.Client))
+		Expect(chunkId).To(Equal("0"))
+
+		// Simulate transmission interrupted by client
+		readBody(mock.Client, int64(len(testStream)/2)) // Half read
+		mock.Client.CloseWithReason(interruptReason)
+
+		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
+		Expect(err).To(Equal(io.ErrClosedPipe))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
+		Expect(mock.Server.Status()).To(Equal(""))
+
+		err = readBody(mock.Client, int64(len(testStream)/2)) // Read rest
+		Expect(err).To(Equal(io.ErrClosedPipe))
+		Expect(mock.Client.Status()).To(Equal(interruptReason))
+
+		Expect(<-chErr).To(Equal(io.ErrClosedPipe))
 		shouldNotTimeout(func() interface{} {
 			response.Close()
 			return nil
@@ -252,7 +376,7 @@ var _ = Describe("RequestCoordinator", func() {
 
 		err = response.waitFlush(true, func() sysnet.Conn { return mock.Server })
 		Expect(err).To(BeNil())
-		Expect(response.Context().Err()).To(Equal(context.Canceled))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
 		Expect(mock.Server.Status()).To(Equal("")) // Not disconnected
 
 		Expect(<-chErr).To(BeNil())
@@ -295,7 +419,7 @@ var _ = Describe("RequestCoordinator", func() {
 
 		err := response.waitFlush(true, func() sysnet.Conn { return mock.Server })
 		Expect(err).To(Equal(context.Canceled))
-		Expect(response.Context().Err()).To(Equal(context.Canceled))
+		Expect(response.getCtxError()).To(Equal(context.Canceled))
 		Expect(mock.Server.Status()).To(Equal("")) // Not disconnected
 
 		Expect(<-chErr).To(Equal(context.Canceled))

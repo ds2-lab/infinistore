@@ -229,20 +229,22 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	if err != nil && err == metastore.ErrConcurrentCreation {
 		// Later concurrent setting will be automatically abandoned and return the same result as the earlier one.
 		req.BodyStream.(resp.Holdable).Unhold() // bodyStream now will automatically be closed.
+		req.BodyStream.Close()                  // Ensure client request finished before set response.
 		meta.Wait()
 		if meta.IsValid() {
-			rsp := &types.Response{Cmd: protocol.CMD_SET, Id: req.Id, Body: []byte(strconv.FormatUint(meta.Placement[dChunkId], 10))}
-			req.SetResponse(rsp)
+			req.SetResponse(req.ToConcurrentSetResponse(meta.Placement[dChunkId]))
 		} else {
 			req.SetErrorResponse(types.ErrMaxAttemptsReached)
 		}
 		return
 	} else if err != nil {
 		req.BodyStream.(resp.Holdable).Unhold()
+		req.BodyStream.Close() // Ensure client request finished before set response.
 		server.NewErrorResponse(w, seq, err.Error()).Flush()
 		return
 	} else if meta.IsDeleted() {
 		req.BodyStream.(resp.Holdable).Unhold()
+		req.BodyStream.Close() // Ensure client request finished before set response.
 		// Object may be deleted during PUT in a rare case in cache mode (COS is disabled) such as:
 		// T1: Some chunks are set.
 		// T2: The placer decides to evict this object (in rare case) by DELETE it.
@@ -252,7 +254,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	if postProcess != nil {
-		postProcess(p.dropEvicted)
+		go postProcess(p.dropEvicted)
 		// continue
 	}
 }

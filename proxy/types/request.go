@@ -217,6 +217,15 @@ func (req *Request) PrepareForSet(conn Conn) {
 	req.conn = conn
 }
 
+func (req *Request) ToConcurrentSetResponse(placement uint64) *Response {
+	return &Response{
+		Id:   req.Id,
+		Cmd:  req.Cmd,
+		Body: []byte(strconv.FormatUint(placement, 10)),
+		from: "concurrent",
+	}
+}
+
 func (req *Request) PrepareForGet(conn Conn) {
 	conn.Writer().WriteMultiBulkSize(6)
 	conn.Writer().WriteBulkString(req.Cmd)
@@ -235,6 +244,19 @@ func (req *Request) ToCachedResponse(cached PersistChunkForResponse) *Response {
 		Cmd:    req.Cmd,
 		cached: cached,
 		from:   "cached",
+	}
+	if req.RetCommand != "" {
+		rsp.Cmd = req.RetCommand
+	}
+	return rsp
+}
+
+func (req *Request) ToAbandonGetResponse() *Response {
+	rsp := &Response{
+		Id:      req.Id,
+		Cmd:     req.Cmd,
+		abandon: true,
+		from:    "abandoned",
 	}
 	if req.RetCommand != "" {
 		rsp.Cmd = req.RetCommand
@@ -390,7 +412,7 @@ func (req *Request) Abandon() error {
 	if req.Cmd != protocol.CMD_GET {
 		return ErrNotSuppport
 	}
-	err := req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd, abandon: true, from: "abandoned"})
+	err := req.SetResponse(req.ToAbandonGetResponse())
 	if err != nil && err != ErrResponded {
 		return err
 	}

@@ -1220,7 +1220,7 @@ func (conn *Connection) finalizeCommmand(cmd string) error {
 func (conn *Connection) getCommandFinalizer(req *types.Request, cmd string) types.ResponseFinalizer {
 	return func(_ *types.Response) {
 		if conn.finalizeCommmand(cmd) != nil && req.PersistChunk != nil {
-			conn.log.Warn("Failed to finalize command, inspecting persist chunk, stored: %d/%d, inspector: %v", req.PersistChunk.BytesStored(), req.PersistChunk.Size(), req.PersistChunk.GetInterceptor())
+			conn.log.Warn("Failed to finalize command, inspecting, req: %v, inspector: %v", &req.Id, req.PersistChunk.GetInterceptor())
 		}
 	}
 }

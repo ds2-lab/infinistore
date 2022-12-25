@@ -58,6 +58,7 @@ type Response struct {
 	ctxCancel context.CancelFunc
 	ctxDone   <-chan struct{} // There is bug to laziliy call the ctx.Done() in highly parallelized settings. Initiate and cache the done channel to avoid the bug.
 	ctxError  error           // Keep the error to avoid calling the ctx.Err() in highly parallelized settings.
+	connError error           // Keep the error to be used in WaitFlush.
 	from      string
 	mu        sync.Mutex
 }
@@ -108,7 +109,7 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter, seq int64) {
 	w.AppendBulkString(rsp.Size)
 	if rsp.Body == nil && rsp.bodyStream == nil {
 		w.AppendBulkString("-1")
-	} else if rsp.ctxError != nil { // Here is a good place to test the ctxCancellation again if the rsp was ctxCancelled before the client is available.
+	} else if rsp.getCtxError() != nil { // Here is a good place to test the ctxCancellation again if the rsp was ctxCancelled before the client is available.
 		// Cancelled request is treated as abandon.
 		w.AppendBulkString("-1")
 		rsp.abandon = true
@@ -138,23 +139,28 @@ func (rsp *Response) Flush() error {
 
 	if rsp.bodyStream != nil {
 		if err := w.CopyBulk(rsp.bodyStream, rsp.bodyStream.Len()); err != nil {
+			// Save the error to be used in WaitFlush.
+			rsp.connError = err
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := rsp.bodyStream.(resp.Holdable); ok {
 				holdable.Unhold()
 			}
 			// If error is cause by the CancelFlush, override the return error.
-			if rsp.ctxError != nil {
-				return rsp.ctxError
+			if rsp.getCtxError() != nil {
+				return rsp.getCtxError()
 			} else {
-				return fmt.Errorf("failed to copy bulk: %v", err)
+				return err
 			}
 		}
 	}
 
 	// Override the error if the response is abandoned and err occurred.
 	err := w.Flush()
-	if err != nil && rsp.ctxError != nil {
-		err = rsp.ctxError
+	if err != nil {
+		rsp.connError = err
+		if rsp.getCtxError() != nil {
+			err = rsp.getCtxError()
+		}
 	}
 	return err
 }
@@ -170,6 +176,10 @@ func (rsp *Response) IsCached() (stored int64, full bool, cached bool) {
 	return rsp.cached.BytesStored(), rsp.cached.IsStored(), true
 }
 
+// WaitFlush will wait for the response stream to be flushed. Non-stream transmission will return immediately. It returns:
+// 1. context.Cancel if the flush is canceled.
+// 2. transmission error if the flush was failed.
+// Read error after canceled will be ignored.
 func (rsp *Response) WaitFlush(ctxCancelable bool) error {
 	return rsp.waitFlush(ctxCancelable, rsp.getClientConn)
 }
@@ -189,11 +199,12 @@ func (rsp *Response) waitFlush(ctxCancelable bool, getConn func() net.Conn) erro
 		defer rsp.CancelFlush()
 
 		select {
-		case err := <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
-			return err
+		case <-chWait: // No need to store generated error, for it will be identical to the one generated during CopyBulk()
+			return rsp.connError
 			// break
 		case <-rsp.ctxDone:
 			rsp.abandon = true
+			rsp.ctxError = context.Canceled // Only cancel is supported, we avoid reading err from context to reduce lock overhead.
 
 			// Exclusive block with cancel handling in PrepareForGet
 			rsp.mu.Lock()
@@ -273,4 +284,9 @@ func (rsp *Response) getClientConn() net.Conn {
 		return client.Conn()
 	}
 	return nil
+}
+
+// Change implementation if needed.
+func (rsp *Response) getCtxError() error {
+	return rsp.ctxError
 }
