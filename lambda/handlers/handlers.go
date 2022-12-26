@@ -250,13 +250,12 @@ func SetHandler(w resp.ResponseWriter, c *resp.CommandStream) {
 				}
 			}
 
-			if session.Input.IsWaitForCOSDisabled() {
-				log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, ds[2], ds[0], d2)
-			}
-
 			// Output experiment data.
 			if err := ret.Error(); err == nil {
-				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], ds[1], ds[2], time.Since(t), session.Id)
+				collector.AddRequest(t, types.OP_SET, "200", reqId, chunkId, ds[0], d2, ds[2], time.Since(t), session.Id)
+				if session.Input.IsWaitForCOSDisabled() {
+					log.Info("Set(link:%v) key:%s, chunk: %s, duration:%v, transmission:%v, persistence:%v", link, key, chunkId, ds[2], ds[0], d2)
+				}
 			} else {
 				// If the setstream err is net error (timeout), cut the line.
 				if util.IsConnectionFailed(err) {

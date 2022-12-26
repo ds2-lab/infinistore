@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -375,9 +374,8 @@ func (c *Client) sendSet(addr string, key string, reqId string, size string, i i
 		}
 
 		log.Debug("Initiated setting %d@%s(%s), attempt %d", i, key, addr, attempt+1)
-		ctx, cancel := context.WithTimeout(req.Context(), Timeout)
-		req.Cancel = cancel
-		req.SetContext(ctx)
+		// Set deadline for response header.
+		cn.SetReadDeadline(time.Now().Add(Timeout))
 		return
 	}
 
@@ -613,9 +611,8 @@ func (c *Client) sendGet(addr string, key string, reqId string, i int, ret *ecRe
 		}
 
 		log.Debug("Initiated getting %d@%s(%s), attempt %d", i, key, addr, attempt+1)
-		ctx, cancel := context.WithTimeout(req.Context(), Timeout)
-		req.Cancel = cancel
-		req.SetContext(ctx)
+		// Set deadline for response header.
+		cn.SetReadDeadline(time.Now().Add(Timeout))
 		return
 	}
 
