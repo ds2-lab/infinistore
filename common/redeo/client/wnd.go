@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	sysSync "sync"
@@ -36,29 +35,20 @@ type RequestMeta struct {
 	// Acked indicates the request is acknownledged.
 	Acked bool
 
-	// Deadline suggests default deadline of the requests. It can be overridden by request's context.
+	// Deadline suggests deadline of the request's reponse header.
 	Deadline time.Time
 
 	// Notifier unblocks the request on window advancing.
 	Notifier sync.WaitGroup
 }
 
-// IsTimeout returns if the request is timeout given the status of the request's context.
+// IsTimeout returns if the request is timeout given specified deadline.
 func (m *RequestMeta) testTimeout(t time.Time) error {
 	if !m.Sent || m.Acked || m.Notifier.IsWaiting() {
 		return nil
 	}
 
-	// To avoid using lock, ensure the Request is stll avaiable.
-	req := m.Request
-	if req == nil {
-		// If the request is not available, it must be acked.
-		return nil
-	}
-
-	if dl, ok := req.Context().Deadline(); ok && dl.Before(t) {
-		return context.DeadlineExceeded
-	} else if !ok && m.Deadline.Before(t) {
+	if m.Deadline.Before(t) {
 		return ErrTimeout
 	}
 	return nil
