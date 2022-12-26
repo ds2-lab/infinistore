@@ -12,7 +12,7 @@ build-local: build
 	go build -o bin/lambda ../lambda/
 
 build-data: prepare
-	go build -o bin/preprocess benchmark-recovery/preprocess.go
+	go build -o bin/preprocess preprocess/preprocess.go
 
 build-bench: prepare
 	GO111MODULE=off go build -o bin/redbench github.com/wangaoone/redbench/
