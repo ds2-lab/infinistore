@@ -141,7 +141,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, err
 // Internal error if the bool is set to false
 func (c *Client) Get(key string) (ReadAllCloser, bool) {
 	_, reader, err := c.EcGet(key, 0)
-	return reader, err != nil
+	return reader, err == nil
 }
 
 // EcGet Internal API
