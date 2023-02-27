@@ -7,7 +7,7 @@ import (
 
 	// "log"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 type GroupedClusterView struct {

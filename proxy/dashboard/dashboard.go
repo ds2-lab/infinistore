@@ -7,9 +7,9 @@ import (
 
 	ui "github.com/gizak/termui/v3"
 
-	"github.com/mason-leap-lab/infinicache/proxy/dashboard/views"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/dashboard/views"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 const (

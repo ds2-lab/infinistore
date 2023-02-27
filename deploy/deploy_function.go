@@ -32,8 +32,8 @@ var (
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
 	batch   = flag.Int64("batch", 5, "batch Number, no need to modify")
-	mem     = flag.Int64("mem", 256, "the memory of lambda")
-	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
+	mem     = flag.Int64("mem", 1024, "the memory of lambda")
+	bucket  = flag.String("S3", "", "S3 bucket for lambda code")
 
 	subnet = []*string{
 		aws.String("sb-your-subnet-1"),

@@ -32,22 +32,22 @@ function perform(){
         update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
 #        wait
         start_proxy $PREPROXY &
-        while [ ! -f /tmp/infinicache.pid ]
+        while [ ! -f /tmp/infinistore.pid ]
         do
             sleep 1s
         done
-        cat /tmp/infinicache.pid
+        cat /tmp/infinistore.pid
 #        set
         sleep 1s
         bench $((KEYMAX-KEYMIN+1)) 1 $KEYMIN $KEYMAX $SZ $DATA $PARITY 0 $PRESET
-#        while [ ! -f /var/run/infinicache.pid ]
+#        while [ ! -f /var/run/infinistore.pid ]
 #        do
 #            sleep 1s
 #        done
         sleep 1s
 #        get
         bench $NUMBER $CON $KEYMIN $KEYMAX $SZ $DATA $PARITY 1 $PREGET
-        kill -2 `cat /tmp/infinicache.pid`
+        kill -2 `cat /tmp/infinistore.pid`
     done
 }
 

@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"sync/atomic"
 
+	"github.com/ds2-lab/infinistore/common/util/hashmap"
 	mock "github.com/jordwest/mock-conn"
-	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
 )
 
 var (

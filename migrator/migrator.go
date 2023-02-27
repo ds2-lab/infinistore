@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/ds2-lab/infinistore/common/logger"
 	"github.com/zhangjyr/hashmap"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 )
 
 // ErrServerClosed is returned by the Server after a call to Shutdown or Close.

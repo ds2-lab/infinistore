@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/net"
-	"github.com/mason-leap-lab/infinicache/common/stats"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/net"
+	"github.com/ds2-lab/infinistore/common/stats"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util"
+	"github.com/ds2-lab/infinistore/lambda/types"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )

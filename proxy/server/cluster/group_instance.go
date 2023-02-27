@@ -3,9 +3,9 @@ package cluster
 import (
 	"sync/atomic"
 
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 type GroupIndex interface {

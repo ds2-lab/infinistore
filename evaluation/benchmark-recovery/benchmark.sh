@@ -40,11 +40,11 @@ function perform(){
         update_lambda_mem $NODE_PREFIX $NODES $REALMEM $((TIMEOUTBASE+i*10))
         # Wait for proxy ready
         start_proxy $PREPROXY $BACKUPS $REALMEM &
-        while [ ! -f /tmp/infinicache.pid ]
+        while [ ! -f /tmp/infinistore.pid ]
         do
             sleep 1s
         done
-        echo pid:`cat /tmp/infinicache.pid`
+        echo pid:`cat /tmp/infinistore.pid`
 
         # Set objects
         sleep 1s
@@ -72,8 +72,8 @@ function perform(){
         bench $((N-N_SET)) 1 1 $N_SET $BYTES 1 $INTERVAL
 
         # Clean up
-        kill -2 `cat /tmp/infinicache.pid`
-        while [ -f /tmp/infinicache.pid ]
+        kill -2 `cat /tmp/infinistore.pid`
+        while [ -f /tmp/infinistore.pid ]
         do
             sleep 1s
         done

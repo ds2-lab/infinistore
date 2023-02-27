@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mason-leap-lab/infinicache/evaluation/preprocess/options"
+	"github.com/ds2-lab/infinistore/evaluation/preprocess/options"
 )
 
 var (

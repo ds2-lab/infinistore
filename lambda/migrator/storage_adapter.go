@@ -8,8 +8,8 @@ import (
 
 	"github.com/mason-leap-lab/redeo/resp"
 
-	"github.com/mason-leap-lab/infinicache/common/redeo/server"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/ds2-lab/infinistore/common/redeo/server"
+	"github.com/ds2-lab/infinistore/lambda/types"
 )
 
 var (

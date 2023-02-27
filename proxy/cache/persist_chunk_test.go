@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	"github.com/mason-leap-lab/redeo/resp"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"

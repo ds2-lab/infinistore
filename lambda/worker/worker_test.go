@@ -9,7 +9,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/mason-leap-lab/infinicache/common/net"
+	"github.com/ds2-lab/infinistore/common/net"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 

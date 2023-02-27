@@ -13,15 +13,15 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 	"github.com/mason-leap-lab/redeo"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/server"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/collector"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/dashboard"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/server"
 )
 
 var (

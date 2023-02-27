@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/ds2-lab/infinistore/common/logger"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 )
 
 const TICK_EXTENSION = 100 * time.Millisecond

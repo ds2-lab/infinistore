@@ -1,8 +1,8 @@
 package lambdastore
 
 import (
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 // Delegate offers new Backup impletation for delagation.

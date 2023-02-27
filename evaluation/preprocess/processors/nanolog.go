@@ -6,7 +6,7 @@ import (
 	"os"
 
 	nanoReader "github.com/ScottMansfield/nanolog/reader"
-	"github.com/mason-leap-lab/infinicache/evaluation/preprocess/options"
+	"github.com/ds2-lab/infinistore/evaluation/preprocess/options"
 )
 
 type NanologPreprocessor struct {

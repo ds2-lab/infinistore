@@ -9,8 +9,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/ds2-lab/infinistore/common/logger"
 	"github.com/kelindar/binary"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/redeo/resp"
 
 	// "runtime/pprof"
@@ -18,16 +18,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/net"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/lambda/collector"
-	"github.com/mason-leap-lab/infinicache/lambda/handlers"
-	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	"github.com/mason-leap-lab/infinicache/lambda/migrator"
-	"github.com/mason-leap-lab/infinicache/lambda/storage"
-	"github.com/mason-leap-lab/infinicache/lambda/store"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
-	"github.com/mason-leap-lab/infinicache/lambda/worker"
+	"github.com/ds2-lab/infinistore/common/net"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/lambda/collector"
+	"github.com/ds2-lab/infinistore/lambda/handlers"
+	lambdaLife "github.com/ds2-lab/infinistore/lambda/lifetime"
+	"github.com/ds2-lab/infinistore/lambda/migrator"
+	"github.com/ds2-lab/infinistore/lambda/storage"
+	"github.com/ds2-lab/infinistore/lambda/store"
+	"github.com/ds2-lab/infinistore/lambda/types"
+	"github.com/ds2-lab/infinistore/lambda/worker"
 )
 
 var (

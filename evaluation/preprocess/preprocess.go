@@ -8,10 +8,10 @@ import (
 	"path"
 	"regexp"
 
+	"github.com/ds2-lab/infinistore/evaluation/preprocess/options"
+	"github.com/ds2-lab/infinistore/evaluation/preprocess/processors"
 	"github.com/mason-leap-lab/go-utils/config"
 	"github.com/mason-leap-lab/go-utils/logger"
-	"github.com/mason-leap-lab/infinicache/evaluation/preprocess/options"
-	"github.com/mason-leap-lab/infinicache/evaluation/preprocess/processors"
 )
 
 var (

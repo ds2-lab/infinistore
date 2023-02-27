@@ -30,6 +30,6 @@ do
     echo "Done"
   fi
 
-  aws logs create-export-task --log-group-name $LAMBDA$i --from ${startTime} --to ${endTime} --destination "mason-leap-lab.datapool" --destination-prefix $FILE$PREFIX$i
+  aws logs create-export-task --log-group-name $LAMBDA$i --from ${startTime} --to ${endTime} --destination "ds2-lab.datapool" --destination-prefix $FILE$PREFIX$i
   sleep 2s
 done

@@ -11,20 +11,18 @@ const (
 )
 
 var (
-	// Bucket to store experiment data. No date will be stored if InputEvent.Prefix is not set.
-	S3_COLLECTOR_BUCKET string = "mason-leap-lab.datapool"
 	// Bucket to store persistent data. Keep "%s" at the end of the bucket name.
-	S3_BACKUP_BUCKET string = "infinicache.backup%s"
+	S3_BACKUP_BUCKET string = "infinistore.backup%s"
+	// Bucket to store experiment data. No date will be stored if InputEvent.Prefix is not set.
+	S3_COLLECTOR_BUCKET string = "ds2-lab.datapool"
 
-	DRY_RUN = false
+	DRY_RUN = true
 )
 
 func init() {
-	// Set required
-	S3_COLLECTOR_BUCKET = GetenvIf(os.Getenv("S3_COLLECTOR_BUCKET"), S3_COLLECTOR_BUCKET)
-
-	// Set required
+	// Overwrite if environment variables are set.
 	S3_BACKUP_BUCKET = GetenvIf(os.Getenv("S3_BACKUP_BUCKET"), S3_BACKUP_BUCKET)
+	S3_COLLECTOR_BUCKET = GetenvIf(os.Getenv("S3_COLLECTOR_BUCKET"), S3_COLLECTOR_BUCKET)
 }
 
 func GetenvIf(env string, def string) string {

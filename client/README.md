@@ -1,7 +1,6 @@
-# InfiniCache Client Library
+# InfiniStore Client Library
 
-Client Library for [infinicache](https://github.com/mason-leap-lab/infinicache)
-
+Client Library for [InfiniStore](https://github.com/ds2-lab/infinistore)
 
 ## Examples
 A simple client example with PUT/GET:
@@ -10,7 +9,8 @@ A simple client example with PUT/GET:
 package main
 
 import (
-	"github.com/mason-leap-lab/infinicache/client"
+	"github.com/ds2-lab/infinistore/client"
+	"fmt"
 	"math/rand"
 	"strings"
 )
@@ -31,7 +31,10 @@ func main() {
 
 	// start dial and PUT/GET
 	cli.Dial(addrArr)
-	cli.EcSet("foo", val)
-	cli.EcGet("foo", 1024)
+	cli.Set("foo", val)
+	reader, ok := cli.Get("foo")
+	if ok {
+		fmt.Printf("GET foo:%s\n", string(reader.ReadAll()))
+	}
 }
 ```

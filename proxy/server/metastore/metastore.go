@@ -3,7 +3,7 @@ package metastore
 import (
 	"errors"
 
-	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
+	"github.com/ds2-lab/infinistore/common/util/hashmap"
 )
 
 var (

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
+	"github.com/ds2-lab/infinistore/common/logger"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/config"
 )
 
 const (
@@ -99,7 +99,7 @@ func CheckUsage(options *CommandlineOptions) {
 	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
 	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
-	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
+	flag.StringVar(&options.Pid, "pid", "/tmp/infinistore.pid", "Path to the pid.")
 	flag.StringVar(&options.LogPath, "base", "", "Path to the log file.")
 	flag.StringVar(&options.LogFile, "log", "", "File name of the log. If dashboard is not disabled, the default value is \"log\".")
 	flag.BoolVar(&options.disableRecovery, "disable-recovery", false, "Disable data recovery on function reclaimation.")

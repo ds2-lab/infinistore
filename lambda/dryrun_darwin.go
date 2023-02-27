@@ -13,15 +13,15 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/net"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/lambda/invoker"
+	lambdaLife "github.com/ds2-lab/infinistore/lambda/lifetime"
+	"github.com/ds2-lab/infinistore/lambda/storage"
+	"github.com/ds2-lab/infinistore/lambda/store"
+	"github.com/ds2-lab/infinistore/lambda/worker"
 	"github.com/hidez8891/shm"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/net"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/lambda/invoker"
-	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	"github.com/mason-leap-lab/infinicache/lambda/storage"
-	"github.com/mason-leap-lab/infinicache/lambda/store"
-	"github.com/mason-leap-lab/infinicache/lambda/worker"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 

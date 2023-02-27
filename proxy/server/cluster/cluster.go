@@ -3,9 +3,9 @@ package cluster
 import (
 	"errors"
 
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/server/metastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 var (

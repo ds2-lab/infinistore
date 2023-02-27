@@ -8,11 +8,11 @@ import (
 
 	"github.com/mason-leap-lab/redeo/resp"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
-	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	"github.com/mason-leap-lab/infinicache/lambda/store"
-	"github.com/mason-leap-lab/infinicache/lambda/worker"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util/promise"
+	lambdaLife "github.com/ds2-lab/infinistore/lambda/lifetime"
+	"github.com/ds2-lab/infinistore/lambda/store"
+	"github.com/ds2-lab/infinistore/lambda/worker"
 )
 
 var (

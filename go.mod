@@ -1,4 +1,4 @@
-module github.com/mason-leap-lab/infinicache
+module github.com/ds2-lab/infinistore
 
 go 1.18
 

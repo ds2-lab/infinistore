@@ -3,7 +3,7 @@ package storage
 import (
 	"math"
 
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/ds2-lab/infinistore/lambda/types"
 )
 
 var (

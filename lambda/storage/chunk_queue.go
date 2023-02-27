@@ -3,7 +3,7 @@ package storage
 import (
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/ds2-lab/infinistore/lambda/types"
 )
 
 type ChunkQueue struct {

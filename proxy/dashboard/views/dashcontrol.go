@@ -1,6 +1,6 @@
 package views
 
-import "github.com/mason-leap-lab/infinicache/proxy/types"
+import "github.com/ds2-lab/infinistore/proxy/types"
 
 type DashControl interface {
 	Quit(string)

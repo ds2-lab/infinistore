@@ -1,10 +1,10 @@
 package store
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
-	"github.com/mason-leap-lab/infinicache/lambda/worker"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/lambda/lifetime"
+	"github.com/ds2-lab/infinistore/lambda/types"
+	"github.com/ds2-lab/infinistore/lambda/worker"
 )
 
 var (

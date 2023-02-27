@@ -1,12 +1,12 @@
 package metastore
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/common/logger"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 type ClusterManager interface {

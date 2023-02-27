@@ -1,6 +1,6 @@
 deploy:
 	aws configure
-	aws s3api put-bucket-policy --bucket mason-leap-lab.datapool --policy file://${GOPATH}/src/github.com/mason-leap-lab/infinicache/evaluation/cloudwatch/policy.json
+	aws s3api put-bucket-policy --bucket ds2-lab.datapool --policy file://${GOPATH}/src/github.com/ds2-lab/infinistore/evaluation/cloudwatch/policy.json
 
 prepare:
 	mkdir -p bin/
@@ -69,7 +69,7 @@ start-local: build-local
 	bin/proxy -cluster=static -functions=10 -invoker=local -disable-recovery -ip=127.0.0.1 $(PARAMS)
 
 stop-server:
-	kill -2 $(shell cat /tmp/infinicache.pid)
+	kill -2 $(shell cat /tmp/infinistore.pid)
 
 benchmark: build-bench
 	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0

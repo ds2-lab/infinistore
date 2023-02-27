@@ -5,11 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	"github.com/mason-leap-lab/go-utils/promise"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 var (

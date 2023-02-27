@@ -23,4 +23,4 @@ test: build-example
 	bin/example
 
 stop:
-	kill -2 $(shell cat /tmp/infinicache.pid)
+	kill -2 $(shell cat /tmp/infinistore.pid)

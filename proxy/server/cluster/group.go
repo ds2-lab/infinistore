@@ -4,11 +4,11 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 var (

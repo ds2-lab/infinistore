@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
+	"github.com/ds2-lab/infinistore/common/util/promise"
 	"github.com/mason-leap-lab/redeo"
 )
 

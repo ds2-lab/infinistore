@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 )
 
 // forwardConnection - Manages a forwardConnection connection, piping data between local and remote.

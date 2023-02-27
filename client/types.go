@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 
-	"github.com/mason-leap-lab/infinicache/common/redeo/client"
+	"github.com/ds2-lab/infinistore/common/redeo/client"
 )
 
 type WaitGroup interface {

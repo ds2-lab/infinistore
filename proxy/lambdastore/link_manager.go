@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/util/hashmap"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 const (

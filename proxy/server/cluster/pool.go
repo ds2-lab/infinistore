@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
-	"github.com/mason-leap-lab/infinicache/migrator"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/common/util/hashmap"
+	"github.com/ds2-lab/infinistore/migrator"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 const DEP_STATUS_POOLED = 0

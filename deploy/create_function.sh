@@ -6,14 +6,14 @@ BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="CacheNode"
 KEY="lambda"
 DEPLOY_FROM=0
-DEPLOY_CLUSTER=400
+DEPLOY_CLUSTER=1000
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
 DEPLOY_MEM=1024
 DEPLOY_VPC="-vpc"
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
 
-S3="mason-leap-lab.infinicache"
+S3="ds2-lab.infinistore"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 
@@ -31,7 +31,7 @@ read -p "Press any key to confirm, or ctrl-C to stop."
 
 cd $BASE/../lambda
 echo "Compiling lambda code..."
-GOOS=linux go build
+GOOS=linux GOARCH=amd64 go build
 echo "Compressing file..."
 zip $KEY $KEY
 echo "Putting code zip to s3"

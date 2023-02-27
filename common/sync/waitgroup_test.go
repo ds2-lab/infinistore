@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	csync "github.com/mason-leap-lab/infinicache/common/sync"
+	csync "github.com/ds2-lab/infinistore/common/sync"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

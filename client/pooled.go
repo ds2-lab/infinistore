@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/ds2-lab/infinistore/common/sync"
 )
 
 type PooledClient struct {

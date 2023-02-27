@@ -8,15 +8,15 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 
 	// "runtime"
 	// "runtime/pprof"
 	"strings"
 	"sync"
 
-	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	"github.com/ds2-lab/infinistore/lambda/lifetime"
+	"github.com/ds2-lab/infinistore/lambda/types"
 )
 
 const (

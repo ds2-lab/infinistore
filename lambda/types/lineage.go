@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 )
 
 type LineageMetaType int
