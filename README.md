@@ -168,7 +168,8 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
   Run `make test` to put/get a toy object.
 
-## Related repo
+## Related repos
 
 Benchmark tool and workload replayer [redbench](https://github.com/wangaoone/redbench)
+
 RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  
