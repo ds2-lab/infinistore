@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Run `./create_function.sh -h` for available options.
+
 BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="CacheNode"
 KEY="lambda"

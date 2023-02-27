@@ -1,9 +1,14 @@
 #!/bin/bash
 
+# Replace SUBNET_ID with the subnet id of proxies
 SUBNET_ID="subnet-0c8f8f8f8f8f8f8f8"
+# Replace ALLOCATION_ID with the id of the elastic ip
 ALLOCATION_ID="eipalloc-0c8f8f8f8f8f8f8f8"
+# Replace ROUTE_TABLE_ID with the id of the route table corresponding to the subnet
 ROUTE_TABLE_ID="rtb-0f8f8f8f8f8f8f8f8"
+# Replace NAT_NAME with the name of the nat gateway. The name is used to identify the nat gateway on deleting.
 NAT_NAME="nat-lambda"
+
 NATID=`aws ec2 describe-nat-gateways --filter "Name=tag:Name,Values=$NAT_NAME" --filter 'Name=state,Values=available' | grep NatGatewayId | awk -F \" '{ print $4 }'`
 
 if [ "$NATID" == "" ]; then
