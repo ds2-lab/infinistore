@@ -42,7 +42,8 @@ function start_proxy() {
     PREFIX=$1
     DASHBOARD=$2
     PARAMS=$3
-    if [ "$DASHBOARD" != "" ] ; then
+    DRYRUN=$4
+    if [ "$DASHBOARD" != "" ] || [ "$DRYRUN" != "" ] ; then
         echo "Run: GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -ip=\${PUBLICIP} -log=proxy.log $DASHBOARD $PARAMS"
     else
         GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=${LAMBDAPREFIX} -ip=${PUBLICIP} $PARAMS &

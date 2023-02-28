@@ -8,7 +8,7 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
 - ### EC2 Proxy
 
-  Amazon EC2 AMI: ubuntu-xenial-18.04
+  Amazon EC2 AMI: ubuntu-18.04
 
   Golang version: 1.18
 
@@ -54,9 +54,9 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
   **`AWSLambdaENIManagementAccess`**
 
-  #### Enable Lambda internet access under VPC
+  #### Enable Lambda Internet Access under VPC
 
-  Plese [refer to this article](https://aws.amazon.com/premiumsupport/knowledge-center/internet-access-lambda-function/). (You could skip this step if you do not want to run InfiniStore under VPC).
+  
 
 - ### S3
 
@@ -64,53 +64,40 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
 - ### Configuration
 
-  #### Lambda function create and config
+  #### Lambda Function Configuration and Creation
+
+  Edit the aws settings and the VPC configuration in `deploy/config.yml`. If you do not want to run InfiniStore under VPC, skip `aws-vpc-subnets` and `aws-security-groups` settings. A valid configuration will like:
+  ```yml
+  region: "us-east-1"
+  aws-iam-role: "arn:aws:iam::1234567890:role/jzhang33"
+  aws-vpc-subnets: "subnet-12345abcdef,subnet-67890abcdef"
+  aws-security-groups: "sg-abcdef0987654321"
+  s3-bucket-cos: "infinistore.cos"    # S3 bucket for InfiniStore COS layer.
+  s3-bucket-data: "infinistore.data"  # Optional. S3 bucket for collecting data required for reproducibility experiments.
+  ```
 
   Edit `deploy/create_function.sh` and `deploy/update_function.sh`
   ```shell
   DEPLOY_PREFIX="your lambda function prefix"
-  DEPLOY_CLUSTER=1000 # The number of Lambda deployments used for window rotation.
-  DEPLOY_MEM=1536 # The memory of Lambda deployments.
-  S3="your bucket name"
-  ```
-
-  Edit destination S3 bucket in `lambda/config.go`, these buckets are for data collection and durable storage.
-  ```go
-  S3_BACKUP_BUCKET = "your COS bucket%s"  // Leave %s at the end your COS bucket.
-  S3_COLLECTOR_BUCKET = "your data collection bucket" // Optional. Required for reproducibility experiments.
-  ```
-
-  Edit the aws settings and the VPC configuration in `deploy/deploy_function.go`. If you do not want to run InfiniStore under VPC, you do not need to modify the `subnet` and `securityGroup` settings.
-
-  ```go
-  ROLE = "arn:aws:iam::[aws account id]:role/[role name]"
-  REGION = "us-east-1"
-  ...
-  ...
-  subnet = []*string{
-    aws.String("your private subnet 1"),
-    aws.String("your private subnet 2"),
-  }
-  securityGroup = []*string{
-    aws.String("your security group")
-  }
+  DEPLOY_CLUSTER=1000   # The number of Lambda deployments used for window rotation.
+  DEPLOY_MEM=1536       # The memory of Lambda deployments.
+  S3="your bucket name" # S3 bucket for uploading the binary of AWS Lambda functions.
   ```
 
   Run script to create and deploy lambda functions (Also, if you do not want to run InfiniStore under VPC, you need to remove the `--no-vpc` flag on executing `deploy/create_function.sh`).
 
   ```shell
-  export GO111MODULE="on"
   go get
   deploy/create_function.sh --no-vpc 600
   ```
 
-  If lambda functions are deployed in VPC, create NAT gateway to give lambdas access to the proxy. You may use AWS console or `create_nat.sh`. Besure to change the settings as described in the script before executing.
+  If lambda functions are deployed in VPC, create NAT gateway to give Lambdas access to the proxy. You may use AWS console or `create_nat.sh`. Besure to change the settings as described in the script before executing. Plese [refer to this article](https://aws.amazon.com/premiumsupport/knowledge-center/internet-access-lambda-function/).
 
   ```shell
   deploy/create_nat.sh
   ```
 
-  #### Proxy configuration
+  #### Proxy Configuration
 
   Edit `proxy/config/config.go`, change the aws region, cluster size, and prefix of the Lambda functions.
   ```go

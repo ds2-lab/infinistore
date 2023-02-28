@@ -4,15 +4,15 @@
     {
       "Action": "s3:GetBucketAcl",
       "Effect": "Allow",
-      "Resource": "arn:aws:s3:::ds2-lab.datapool",
-      "Principal": { "Service": "logs.us-east-1.amazonaws.com" }
+      "Resource": "arn:aws:s3:::@bucket@",
+      "Principal": { "Service": "logs.@region@.amazonaws.com" }
     },
     {
       "Action": "s3:PutObject" ,
       "Effect": "Allow",
-      "Resource": "arn:aws:s3:::ds2-lab.datapool/*",
+      "Resource": "arn:aws:s3:::@bucket@/*",
       "Condition": { "StringEquals": { "s3:x-amz-acl": "bucket-owner-full-control" } },
-      "Principal": { "Service": "logs.us-east-1.amazonaws.com" }
+      "Principal": { "Service": "logs.@region@.amazonaws.com" }
     }
   ]
 }

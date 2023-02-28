@@ -3,7 +3,7 @@
 # Run `./update_function.sh -h` for available options.
 
 BASE=`pwd`/`dirname $0`
-DEPLOY_PREFIX="CacheNode"
+DEPLOY_PREFIX="MemoryNode"
 KEY="lambda"
 DEPLOY_FROM=0
 DEPLOY_CLUSTER=1000

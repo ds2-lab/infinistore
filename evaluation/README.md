@@ -2,33 +2,31 @@
 
 ## deployment
 
-AMI: ubuntu-xenial-16.04
-Golang: 1.12
+AMI: ubuntu-18.04
+Golang: 1.18
 
 ~~~
 sudo add-apt-repository ppa:longsleep/golang-backports
 sudo apt-get update
 sudo apt-get -y upgrade
-sudo apt-get install golang-go
+sudo apt-get -y install golang-go awscli zip
 
+mkdir $HOME/go
 echo "export GOPATH=$HOME/go" >> $HOME/.bashrc
+echo "export PATH=\$PATH:\$GOPATH/bin" >> $HOME/.bashrc
 . $HOME/.bashrc
-mkdir -p $HOME/go/src/github.com/wangaoone
-cd $HOME/go/src/github.com/wangaoone
-git clone https://github.com/wangaoone/LambdaObjectstore.git LambdaObjectstore
-git clone https://github.com/mason-leap-lab/redeo.git redeo
+go install github.com/ScottMansfield/nanolog/cmd/inflate@v0.2.0
+git clone https://github.com/ds2-lab/infinistore.git infinistore
 git clone https://github.com/ds2-lab/infinibench.git infinibench
 
-cd LambdaObjectstore/
-git checkout config/[tianium]
+cd infinistore/
+# git checkout config/[tianium] # optionally checkout the configuration branch
 git pull
-cd src
 go get
 
 cd $HOME/go/src/github.com/ds2-lab/infinibench
 go get
 
-sudo apt install awscli
 cd $HOME/go/src/github.com/wangaoone/LambdaObjectstore/evaluation
 make deploy
 ~~~

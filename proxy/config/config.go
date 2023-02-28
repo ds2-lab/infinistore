@@ -22,13 +22,13 @@ const ProxyFeatures = FLAG_CLIENTSIDE_FIRSTD_OPTIMIZATION | FLAG_ENABLE_LOCAL_CA
 const LambdaLogLevel = logger.LOG_LEVEL_ALL // Set to logger.LOG_LEVEL_ALL to keep Lambda log level aligned with proxy log level.
 
 // LambdaPrefix Prefix of Lambda function, overridable with command line parameter -lambda-prefix.
-const LambdaPrefix = "Your Lambda Function Prefix"
+const LambdaPrefix = "MemoryNode"
 
 // AWSRegion Region of AWS services.
 const AWSRegion = "us-east-1"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
-const LambdaMaxDeployments = 400
+const LambdaMaxDeployments = 1000
 
 // Mode of cluster.
 const StaticCluster = "static"
@@ -53,7 +53,7 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const DefaultInstanceCapacity = 1024 * 1000000 // 1GB
+const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
 const InstanceOverhead = 100 * 1000000 // MB

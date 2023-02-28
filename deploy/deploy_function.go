@@ -27,8 +27,8 @@ type Options struct {
 	// Configurable in config.yml
 	Region         string `name:"region" desc:"AWS region, change it if necessary."`
 	Role           string `name:"aws-iam-role" desc:"ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess, AWSLambdaVPCAccessExecutionRole, and AWSLambdaENIManagementAccess are required, see README.md for details)."`
-	Subnets        string `name:"aws-vpc-subnets" desc:"Subnets' ID for AWS Lambda, comma separated."`
-	SecurityGroups string `name:"aws-security-groups" desc:"Security groups' ID for AWS EC2, comma separated."`
+	Subnets        string `name:"aws-vpc-subnets" desc:"Subnets' IDs for AWS Lambda, comma separated."`
+	SecurityGroups string `name:"aws-security-groups" desc:"Security groups' IDs for AWS EC2, comma separated."`
 	COSBucket      string `name:"s3-bucket-cos" desc:"S3 bucket name for InfiniStore COS layer."`
 	DataBucket     string `name:"s3-bucket-data" desc:"S3 bucket name for collecting data originated from AWS Lambda."`
 

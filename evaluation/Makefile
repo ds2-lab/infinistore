@@ -1,9 +1,24 @@
+include config.mk
+
+DATE = $(shell date "+%Y%m%d%H%M")
+
+all: build
+	GOMAXPROCS=72 ./bin/proxy -log=proxy.log -enable-dashboard $(PARAMS) 2>error.log
+
 deploy:
 	aws configure
-	aws s3api put-bucket-policy --bucket ds2-lab.datapool --policy file://${GOPATH}/src/github.com/ds2-lab/infinistore/evaluation/cloudwatch/policy.json
+	sed 's/@region@/$(REGION)/g;s/@bucket@/$(S3_BUCKET_DATA)/g' cloudwatch/policy.json > cloudwatch/mypolicy.json
+	aws s3api put-bucket-policy --bucket $(S3_BUCKET_DATA) --policy file://$(CURDIR)/cloudwatch/mypolicy.json
 
 prepare:
 	mkdir -p bin/
+
+prepare-workload-%: $(WORKLOAD_HOME)/%.tar.gz
+	$(eval WORKLOAD := $(WORKLOAD_HOME)/$*.csv)
+	tar -xzf $(WORKLOAD_HOME)/$*.tar.gz -C $(WORKLOAD_HOME)
+
+# Rename azure workload for simplicity
+prepare-workload-azure: prepare-workload-azurefunctions-accesses-2020-bursty
 
 build: prepare
 	go build -o bin/proxy ../proxy/
@@ -15,52 +30,52 @@ build-data: prepare
 	go build -o bin/preprocess preprocess/preprocess.go
 
 build-bench: prepare
-	GO111MODULE=off go build -o bin/infinibench github.com/wangaoone/infinibench/
+	cd $(BENCH_HOME) && go build -o $(CURDIR)/bin/infinibench ./
+
+build-simulator: prepare
+	cd $(BENCH_HOME) && go build -o $(CURDIR)/bin/playback ./simulator/playback/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
-build-simulator: prepare
-	GO111MODULE=off go build -o bin/playback github.com/ds2-lab/infinibench/simulator/playback/
+dryrun: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh dryrun $(WORKLOAD) 1000 "-d=10 -p=2 -w=100 -balance"
 
-dryrun: build build-simulator
-	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
+simulate: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
 
-simulate: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
+simulate-with-dashboard: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
 
-simulate-with-dashboard: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
+playback: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
 
-playback: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
+playback-with-dashboard: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
 
-playback-with-dashboard: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+playback-accelerated: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2 -speed=10" -enable-dashboard 1>./log 2>&1 &
 
-playback-accelerated: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2 -speed=10" -enable-dashboard 1>./log 2>&1 &
-
-playback-redis: build-simulator
-	bin/playback -d 1 -p 0 -redis "redis-%04d-001.fxxiur.0001.use1.cache.amazonaws.com:6379" -redisCluster 12 -file ./data/$(DATE)_redis /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1>./data/$(DATE).log 2>&1 &
+playback-redis: build-simulator prepare-workload-dal09_blobs_50h
+	bin/playback -d 1 -p 0 -redis $(EC_ADDR) -redisCluster 12 -file ./data/$(DATE)_redis $(WORKLOAD) 1>./data/$(DATE).log 2>&1 &
 	@echo "show log: tail -f ./data/$(DATE).log"
 
-playback-redis-small: build-simulator
-	bin/playback -d 1 -p 0 -redis "redis3-%04d-001.fxxiur.0001.use1.cache.amazonaws.com:6379" -redisCluster 3 -s3 "tianium.ec.backup" -failover s3 -file ./data/$(DATE)_redis /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1>./data/$(DATE).log 2>&1 &
+playback-redis-small: build-simulator prepare-workload-dal09_blobs_50h
+	bin/playback -d 1 -p 0 -redis $(EC_ADDR) -redisCluster 3 -s3 $(S3_BUCKET_EC_BACKUP) -failover s3 -file ./data/$(DATE)_redis $(WORKLOAD) 1>./data/$(DATE).log 2>&1 &
 	@echo "show log: tail -f ./data/$(DATE).log"
 
-playback-redis-accelerated: build-simulator
-	./playback.sh custom /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv redis '-speed 10 -d 1 -p 0 -c 0 -redis "redis8-%04d-001.oqyub3.0001.use1.cache.amazonaws.com:6379" -redisCluster 8 -s3 "tianium.ec.backup" -failover s3' 1>./log 2>&1 &
+playback-redis-accelerated: build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh custom $(WORKLOAD) redis '-speed 10 -d 1 -p 0 -c 0 -redis $(EC_ADDR) -redisCluster 8 -s3 $(S3_BUCKET_EC_BACKUP) -failover s3' 1>./log 2>&1 &
 	@echo "show log: tail -f log"
 
-playback-static: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+playback-static: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
 
-playback-static-average: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
+playback-static-average: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
 
-playback-static-norecovery: build build-simulator
-	./playback.sh playback /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
+playback-static-norecovery: build build-simulator prepare-workload-dal09_blobs_50h
+	./playback.sh playback $(WORKLOAD) 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &

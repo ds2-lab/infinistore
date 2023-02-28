@@ -86,8 +86,8 @@ function dry_perform(){
 	# dryrun "-cluster=$CLUSTER $PARAMS" $FILE
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
-	echo "$FILE $PLAY_PARAMS --prefix ${PREPROXY}"
-	$FILE $PLAY_PARAMS --prefix ${PREPROXY}
+	start_proxy ${PREPROXY} "" "" 1
+	dryrun "$PLAY_PARAMS" $FILE
 }
 
 function custom(){
