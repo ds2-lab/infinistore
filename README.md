@@ -1,33 +1,24 @@
-# InfiniCache
+# InfiniStore
 
-**InfiniCache** is the first-of-its-kind, cost-effectiveness and high-performance object cache that is built atop ephemeral cloud funtions. InfiniCache is 31x - 96x cheaper than traditional cloud cache services.
+**InfiniStore** is an elastic, cost-effectiveness and high-performance object storage that is built atop ephemeral cloud funtions. Built based on [InfiniCache](https://ds2-lab.github.io/infinicache/) codebase, InfiniStore offers automatic elasticity, durability, strong consistency.
 
-Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Build a Cost-Effective Memory Cache](https://www.usenix.org/conference/fast20/presentation/wang-ao)
-
-
-### Press:
-* IEEE Spectrum: [Cloud Services Tool Lets You Pay for Data You Use—Not Data You Store](https://spectrum.ieee.org/tech-talk/computing/networks/pay-cloud-services-data-tool-news)
-* Mikhail Shilkov's paper review: [InfiniCache: Distributed Cache on Top of AWS Lambda (paper review)](https://mikhail.io/2020/03/infinicache-distributed-cache-on-aws-lambda/)
-
-## Change log
-
-- **03/07/2020:** Updated deploy procedure and fixed the bug (incorrect path) in the scripts under `deploy/`.
+The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cloud Storage](https://arxiv.org/abs/2209.01496)
 
 ## Prepare
 
 - ### EC2 Proxy
 
-  Amazon EC2 AMI: ubuntu-xenial-16.04
+  Amazon EC2 AMI: ubuntu-xenial-18.04
 
-  Golang version: 1.12
+  Golang version: 1.18
 
-  Be sure the port **6378 - 7380** is avaiable on the proxy
+  Be sure the port **6378 - 6379** is avaiable on the proxy
 
-  We recommend that EC2 proxy and Lambda functions are under the same VPC network, and deploy InfiniCache on a EC2 instance with powerful CPU and high bandwidth (`c5n` family maybe a good choice).
+  We recommend that EC2 proxy and Lambda functions are under the same VPC network, and deploy InfiniStore proxy on EC2 instances with high bandwidth (`c5n` family maybe a good choice).
 
 - ### Golang install
 
-  Jump to [install_go.md](https://github.com/mason-leap-lab/infinicache/blob/master/install_go.md)
+  Jump to [install_go.md](https://github.com/ds2-lab/infinistore/blob/master/install_go.md)
 
 - ### Package install
 
@@ -40,12 +31,11 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
   ```
 
   Clone this repo
-  ```go
-  go get -u github.com/mason-leap-lab/infinicache
+  ```shell
+  git clone https://github.com/ds2-lab/infinistore.git
   ```
 
   Run `aws configure` to setup your AWS credential.
-
   ```shell
   aws configure
   ```
@@ -54,7 +44,7 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   #### Lambda Role setup
 
-  Go to AWS IAM console and create a role for the lambda cache node (Lambda function).
+  Go to AWS IAM console and create a role for the Lambda memory node (Lambda function).
 
   AWS IAM console -> Roles -> Create Role -> Lambda ->
 
@@ -66,7 +56,7 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   #### Enable Lambda internet access under VPC
 
-  Plese [refer to this article](https://aws.amazon.com/premiumsupport/knowledge-center/internet-access-lambda-function/). (You could skip this step if you do not want to run InfiniCache under VPC).
+  Plese [refer to this article](https://aws.amazon.com/premiumsupport/knowledge-center/internet-access-lambda-function/). (You could skip this step if you do not want to run InfiniStore under VPC).
 
 - ### S3
 
@@ -78,24 +68,19 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   Edit `deploy/create_function.sh` and `deploy/update_function.sh`
   ```shell
-  PREFIX="your lambda function prefix"
+  DEPLOY_PREFIX="your lambda function prefix"
+  DEPLOY_CLUSTER=1000 # The number of Lambda deployments used for window rotation.
+  DEPLOY_MEM=1536 # The memory of Lambda deployments.
   S3="your bucket name"
-  cluster=400 # number of lambda in the cache pool
-  mem=1536
   ```
 
-  Edit destination S3 bucket in `lambda/collector/collector.go`, this bucket is for the bill duration log from CloudWatch.
+  Edit destination S3 bucket in `lambda/config.go`, these buckets are for data collection and durable storage.
   ```go
-  AWSRegion = "us-east-1"
-  S3BUCKET = "your bucket name"
+  S3_BACKUP_BUCKET = "your COS bucket%s"  // Leave %s at the end your COS bucket.
+  S3_COLLECTOR_BUCKET = "your data collection bucket" // Optional. Required for reproducibility experiments.
   ```
 
-  Edit `lambda/migrator/client.go`,  change AWS region if necessary.
-  ```go
-  AWSRegion = "us-east-1"
-  ```
-
-  Edit the aws settings and the VPC configuration in `deploy/deploy_function.go`. If you do not want to run InfiniCache under VPC, you do not need to modify the `subnet` and `securityGroup` settings.
+  Edit the aws settings and the VPC configuration in `deploy/deploy_function.go`. If you do not want to run InfiniStore under VPC, you do not need to modify the `subnet` and `securityGroup` settings.
 
   ```go
   ROLE = "arn:aws:iam::[aws account id]:role/[role name]"
@@ -103,20 +88,26 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
   ...
   ...
   subnet = []*string{
-    aws.String("your subnet 1"),
-    aws.String("your subnet 2"),
+    aws.String("your private subnet 1"),
+    aws.String("your private subnet 2"),
   }
   securityGroup = []*string{
     aws.String("your security group")
   }
   ```
 
-  Run script to create and deploy lambda functions (Also, if you do not want to run InfiniCache under VPC, you need to set the `vpc` flag to be `false` in `deploy/create_function.sh`).
+  Run script to create and deploy lambda functions (Also, if you do not want to run InfiniStore under VPC, you need to remove the `--no-vpc` flag on executing `deploy/create_function.sh`).
 
   ```shell
   export GO111MODULE="on"
   go get
-  deploy/create_function.sh 60
+  deploy/create_function.sh --no-vpc 600
+  ```
+
+  If lambda functions are deployed in VPC, create NAT gateway to give lambdas access to the proxy. You may use AWS console or `create_nat.sh`. Besure to change the settings as described in the script before executing.
+
+  ```shell
+  deploy/create_nat.sh
   ```
 
   #### Proxy configuration
@@ -124,7 +115,7 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
   Edit `proxy/config/config.go`, change the aws region, cluster size, and prefix of the Lambda functions.
   ```go
   const AWSRegion = "us-east-1"
-  const NumLambdaClusters = 400
+  const NumLambdaClusters = 1000
   const LambdaPrefix = "Your Lambda Function Prefix"
   const ServerPublicIp = ""  // Leave it empty if using VPC.
   ```
@@ -133,13 +124,13 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
 - Proxy server
 
-  Run `make start` to start proxy server.  `make start` would print nothing to the console. If you want to check the log message, you need to set the `debug` flag to be `true` in the `proxy/proxy.go`.
+  Run `make start` for quick starting the proxy server. The proxy will show a console dashboard to track Lambda invocation. Logs by default is in file `log` in the same folder. `debug` option is available for more detail logs.
 
   ```bash
-  make start
+  make start ["PARAMS=--debug"]
   ```
 
-  To stop proxy server, run `make stop`. If `make stop` is not working, you could use `pgrep proxy`, `pgrep go` to find the pid, and check the `infinicache pid` and kill them.
+  To stop proxy server, press `ctrl+c` or `q` if dashboard is displayed, otherwise, run `make stop`. If `make stop` were not working, you could use `pgrep proxy`, `pgrep go`, or check `/tmp/infinistore.pid` to find the pid and kill the proxy.
 
 - Client library
 
@@ -153,14 +144,18 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   ```bash
   ~$ go run client/example/main.go
-  2020/03/08 05:05:19 EcRedis Set foo 14630930
-  2020/03/08 05:05:19 EcRedis Got foo 3551124 ( 2677371 865495 )
+  2023/02/26 23:07:48 EcRedis Set foo 15 160250633
+  2023/02/26 23:07:48 EcRedis Got foo 15 28614169 ( 28574763 34758 )
+  GET foo:Hello infinity!(28.698376ms)
   ```
 
 - Stand-alone local simulation
 
+  On Mac, InfiniStore can be run in local simulation mode, which will initiate local processes as cloud functions.
+
   Enable local function execution by editing `lambda/config.go`:
   ```go
+  S3_BACKUP_BUCKET = "your S3 bucket%s"  // Leave %s at the end your S3 bucket.
   DRY_RUN = true
   ```
 
@@ -168,8 +163,8 @@ Our FAST'20 Paper: [InfiniCache: Exploiting Ephemeral Serverless Functions to Bu
 
   Run `make test` to put/get a toy object.
 
-## Related repo
+## Related repos
 
-Client Library [ecRedis](https://github.com/mason-leap-lab/infinicache/tree/master/client)  
-Redis Protocol [redeo](https://github.com/mason-leap-lab/redeo)  
-Benchmark tool [redbench](https://github.com/wangaoone/redbench)
+Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/infinibench)
+
+RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  

@@ -1,12 +1,14 @@
 #!/bin/bash
 
+# Run `./create_function.sh -h` for available options.
+
 BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="Store1VPCNode"
 KEY="lambda"
 DEPLOY_FROM=0
-DEPLOY_CLUSTER=2000
+DEPLOY_CLUSTER=1000
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
-DEPLOY_MEM=1024
+DEPLOY_MEM=1536
 DEPLOY_VPC="-vpc"
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
@@ -29,12 +31,12 @@ read -p "Press any key to confirm, or ctrl-C to stop."
 
 cd $BASE/../lambda
 echo "Compiling lambda code..."
-GOOS=linux go build
+GOOS=linux GOARCH=amd64 go build
 echo "Compressing file..."
 zip $KEY $KEY
 echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Creating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} -create -config -prefix=$DEPLOY_PREFIX $DEPLOY_VPC -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -yaml $BASE/config.yml -s3-bucket-lambda ${S3} -create -prefix=$DEPLOY_PREFIX $DEPLOY_VPC -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 rm $KEY*

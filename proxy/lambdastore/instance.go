@@ -17,19 +17,19 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	awsSession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/lambda"
+	"github.com/ds2-lab/infinistore/common/logger"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util"
+	"github.com/ds2-lab/infinistore/common/util/hashmap"
+	"github.com/ds2-lab/infinistore/lambda/invoker"
+	"github.com/ds2-lab/infinistore/proxy/collector"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
 	"github.com/mason-leap-lab/go-utils/promise"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/common/util/hashmap"
-	"github.com/mason-leap-lab/infinicache/lambda/invoker"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -104,7 +104,7 @@ var (
 	TriggerTimeout = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
 	// TODO: Make RTT dynamic, global or per instance.
 	RTT                   = 20 * time.Millisecond
-	DefaultConnectTimeout = 200 * time.Millisecond // Decide by RTT.
+	DefaultConnectTimeout = 1000 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	PromisedGoodDue       = 1 * time.Second // Keep consistent with lambda/lifetime/timeout.TICK_ERROR_EXTEND
 	MinValidationInterval = RTT             // MinValidationInterval The minimum interval between validations.

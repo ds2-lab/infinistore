@@ -1,0 +1,1 @@
+ycsb-fields: READ.Return=OK->reads,READ.Return=ERROR->reads_err,READ.Average->read_average,READ.p50->read_p50,READ.p90->read_p90,READ.p99->read_p99,UPDATE.Return=OK->updates,UPDATE.Return=ERROR->updates_err,UPDATE.Average->updates_average,UPDATE.p50->updates_p50,UPDATE.p90->updates_p90,UPDATE.p99->updates_p99,OVERALL.Throughput(ops/sec)->throughput

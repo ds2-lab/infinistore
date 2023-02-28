@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	// . "github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	// . "github.com/ds2-lab/infinistore/proxy/lambdastore"
 )
 
 var (

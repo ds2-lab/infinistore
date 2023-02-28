@@ -57,7 +57,7 @@ function bench() {
     P=$7
     OP=$8
     FILE=$9
-    $BINDIR/redbench -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
+    $BINDIR/infinibench -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
     -sz $SZ -d $D -p $P -op $OP -file $FILE -dec -i 1000
 }
 

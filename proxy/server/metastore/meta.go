@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	safesync "github.com/mason-leap-lab/infinicache/common/sync"
+	safesync "github.com/ds2-lab/infinistore/common/sync"
 )
 
 const (

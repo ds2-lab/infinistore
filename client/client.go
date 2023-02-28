@@ -12,11 +12,11 @@ import (
 
 	// cuckoo "github.com/seiflotfy/cuckoofilter"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/net"
-	"github.com/mason-leap-lab/infinicache/common/redeo/client"
-	"github.com/mason-leap-lab/infinicache/common/sync"
-	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/net"
+	"github.com/ds2-lab/infinistore/common/redeo/client"
+	"github.com/ds2-lab/infinistore/common/sync"
+	"github.com/ds2-lab/infinistore/common/util"
 )
 
 var (
@@ -43,7 +43,7 @@ var (
 
 type reqCtxKey string
 
-// Client InfiniCache client
+// Client defines a InfiniStore client
 type Client struct {
 	EC           reedsolomon.Encoder
 	Ring         *consistent.Consistent

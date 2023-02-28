@@ -1,0 +1,6 @@
+region: "us-east-1"
+aws-iam-role: "arn:aws:iam::205616672683:role/jzhang33"
+aws-vpc-subnets: "subnet-0922312408cf8f9ab,subnet-0dae3bda0928da1b9"
+aws-security-groups: "sg-02db9835d66449bb8"
+s3-bucket-cos: "jzhang33.infinicache"
+s3-bucket-data: "jzhang33.default"

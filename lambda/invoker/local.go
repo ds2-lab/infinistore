@@ -14,8 +14,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/lambda"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 	"github.com/hidez8891/shm"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (

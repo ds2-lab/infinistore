@@ -1,12 +1,14 @@
 #!/bin/bash
 
+# Run `./update_function.sh -h` for available options.
+
 BASE=`pwd`/`dirname $0`
 DEPLOY_PREFIX="Store1VPCNode"
 KEY="lambda"
 DEPLOY_FROM=0
-DEPLOY_CLUSTER=2000
+DEPLOY_CLUSTER=1000
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
-DEPLOY_MEM=3072
+DEPLOY_MEM=1536
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
 
@@ -36,7 +38,7 @@ if [ "$CODE" == "-code" ] ; then
     if [ ! $NO_BUILD ] ; then
         cd $BASE/../lambda
         echo "Compiling lambda code..."
-        GOOS=linux go build
+        GOOS=linux GOARCH=amd64 go build
         echo "Compressing file..."
         zip $KEY $KEY
         echo "Putting code zip to s3"
@@ -55,7 +57,7 @@ else
 fi
 
 echo "Updating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} $CODE $CONFIG -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -yaml $BASE/config.yml -s3-bucket-lambda ${S3} $CODE $CONFIG -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 
 if [ "$CODE" == "-code" ] && [ ! $NO_BUILD  ] ; then
   rm $KEY*

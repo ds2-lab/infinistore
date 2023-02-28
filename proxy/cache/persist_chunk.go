@@ -10,11 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/redeo/resp"
 
-	"github.com/mason-leap-lab/infinicache/common/redeo/server"
-	"github.com/mason-leap-lab/infinicache/common/sync/atomic"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/common/redeo/server"
+	"github.com/ds2-lab/infinistore/common/sync/atomic"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 var (

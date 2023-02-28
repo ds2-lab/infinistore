@@ -6,7 +6,7 @@ import (
 	"math"
 
 	// "github.com/google/uuid"
-	. "github.com/mason-leap-lab/infinicache/common/types"
+	. "github.com/ds2-lab/infinistore/common/types"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

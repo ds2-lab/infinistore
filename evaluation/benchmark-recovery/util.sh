@@ -43,6 +43,6 @@ function bench() {
     # SZ=$5
     # OP=$6
     # INTERVAL=$7
-    $BINDIR/redbench -addrlist localhost:6378 -n $1 -c $2 -keymin $3 -keymax $4 \
+    $BINDIR/infinibench -addrlist localhost:6378 -n $1 -c $2 -keymin $3 -keymax $4 \
       -sz $5 -cli=redis -op $6 -i $7
 }

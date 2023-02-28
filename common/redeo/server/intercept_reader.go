@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/ds2-lab/infinistore/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 

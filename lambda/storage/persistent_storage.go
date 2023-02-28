@@ -17,10 +17,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/cespare/xxhash"
 
-	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
+	mys3 "github.com/ds2-lab/infinistore/common/aws/s3"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util"
+	"github.com/ds2-lab/infinistore/lambda/types"
 )
 
 const (

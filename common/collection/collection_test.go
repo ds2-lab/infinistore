@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	syncCollection "github.com/mason-leap-lab/infinicache/common/collection/sync"
+	syncCollection "github.com/ds2-lab/infinistore/common/collection/sync"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

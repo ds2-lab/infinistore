@@ -1,9 +1,9 @@
 package lambdastore
 
 import (
+	"github.com/ds2-lab/infinistore/common/logger"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 type Backer interface {

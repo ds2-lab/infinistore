@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/net"
-	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/net"
+	"github.com/ds2-lab/infinistore/common/util"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
-	infinicache "github.com/mason-leap-lab/infinicache/client"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
+	infinistore "github.com/ds2-lab/infinistore/client"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/proxy/collector"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
 )
 
 type RedisAdapter struct {
@@ -113,7 +113,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	dt := time.Since(t)
 	code := "500"
 	size := 0
-	if err == infinicache.ErrNotFound {
+	if err == infinistore.ErrNotFound {
 		w.AppendNil()
 		w.Flush()
 		code = "404"
@@ -134,7 +134,7 @@ func (a *RedisAdapter) handleGet(w resp.ResponseWriter, c *resp.Command) {
 	collector.Collect(collector.LogEndtoEnd, protocol.CMD_GET, code, int64(size), t.UnixNano(), int64(dt))
 }
 
-func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client {
+func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinistore.Client {
 	shortcut := net.Shortcut.Prepare(a.localAddr, int(redeoClient.ID()), a.d+a.p)
 	if shortcut.Client == nil {
 		var addresses []string
@@ -146,7 +146,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 			addresses[a.localIdx] = shortcut.Address
 		}
 
-		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
+		client := infinistore.NewClient(a.d, a.p, ECMaxGoroutine)
 		shortcut.Client = client
 		shortcut.OnValidate = func(mock *net.MockConn) {
 			go a.server.ServeForeignClient(mock.Server, false)
@@ -161,7 +161,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 			net.Shortcut.Invalidate(shortcut)
 		}()
 	}
-	return shortcut.Client.(*infinicache.Client)
+	return shortcut.Client.(*infinistore.Client)
 }
 
 func (a *RedisAdapter) Close() {

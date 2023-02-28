@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util/promise"
-	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util/promise"
+	"github.com/ds2-lab/infinistore/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )

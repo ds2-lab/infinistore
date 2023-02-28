@@ -1,7 +1,7 @@
 package metastore
 
 import (
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

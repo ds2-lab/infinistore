@@ -7,12 +7,12 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/ds2-lab/infinistore/common/util"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/types"
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (

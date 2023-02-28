@@ -1,7 +1,7 @@
 package syncCollection
 
 import (
-	"github.com/mason-leap-lab/infinicache/common/collection"
+	"github.com/ds2-lab/infinistore/common/collection"
 )
 
 type WaitGroup interface {

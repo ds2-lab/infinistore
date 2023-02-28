@@ -8,7 +8,7 @@ PWD=`dirname $0`
 DATE=`date "+%Y%m%d%H%M"`
 ENTRY="data/$DATE"
 NODE_PREFIX="Store1VPCNode"
-PID=/tmp/infinicache.pid
+PID=/tmp/infinistore.pid
 
 source $PWD/util.sh
 mkdir -p "$PWD/$ENTRY"
@@ -31,11 +31,11 @@ function perform(){
 
 	start_proxy $PREPROXY "$DASHBOARD" "$PROXY_PARAMS"
   # Wait for proxy is ready
-	while [ ! -f /tmp/infinicache.pid ]
+	while [ ! -f /tmp/infinistore.pid ]
 	do
 		sleep 1s
 	done
-	cat /tmp/infinicache.pid
+	cat /tmp/infinistore.pid
 	sleep 1s
 
 	# playback
@@ -58,7 +58,7 @@ function perform(){
 	kill -2 `cat $PID`
   # Wait for proxy cleaned up
 	TIMEOUT=60
-  while [ -f /tmp/infinicache.pid ]
+  while [ -f /tmp/infinistore.pid ]
 	do
 		sleep 1s
 		((TIMEOUT=TIMEOUT-1))

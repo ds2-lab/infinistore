@@ -15,8 +15,8 @@ import (
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 
+	protocol "github.com/ds2-lab/infinistore/common/types"
 	"github.com/mason-leap-lab/go-utils/promise"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (

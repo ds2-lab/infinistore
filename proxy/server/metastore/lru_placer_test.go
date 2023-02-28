@@ -6,15 +6,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ds2-lab/infinistore/common/logger"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
-	"github.com/mason-leap-lab/infinicache/common/logger"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 var container []*Meta

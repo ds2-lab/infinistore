@@ -3,7 +3,7 @@ package storage_test
 import (
 	"testing"
 
-	"github.com/mason-leap-lab/infinicache/lambda/storage"
+	"github.com/ds2-lab/infinistore/lambda/storage"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

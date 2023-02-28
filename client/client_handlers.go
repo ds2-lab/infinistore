@@ -13,12 +13,12 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/redeo/client"
+	protocol "github.com/ds2-lab/infinistore/common/types"
+	"github.com/ds2-lab/infinistore/common/util"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/go-utils"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/redeo/client"
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/common/util"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -141,7 +141,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, err
 // Internal error if the bool is set to false
 func (c *Client) Get(key string) (ReadAllCloser, bool) {
 	_, reader, err := c.EcGet(key, 0)
-	return reader, err != nil
+	return reader, err == nil
 }
 
 // EcGet Internal API

@@ -3,9 +3,9 @@ package config
 import (
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 )
 
 // FLAG_FIXED_INTERVAL_WARMUP warms up lambda with fixed interval regardless workload.

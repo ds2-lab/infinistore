@@ -5,17 +5,17 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ds2-lab/infinistore/common/logger"
+	"github.com/ds2-lab/infinistore/common/util"
+	"github.com/ds2-lab/infinistore/common/util/cache"
 	"github.com/mason-leap-lab/go-utils/mapreduce"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/infinicache/common/util/cache"
 
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
-	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
-	"github.com/mason-leap-lab/infinicache/proxy/server/metastore"
-	"github.com/mason-leap-lab/infinicache/proxy/types"
+	"github.com/ds2-lab/infinistore/proxy/collector"
+	"github.com/ds2-lab/infinistore/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/lambdastore"
+	"github.com/ds2-lab/infinistore/proxy/server/metastore"
+	"github.com/ds2-lab/infinistore/proxy/types"
 )
 
 type SliceInitializer func(int) (int, int)

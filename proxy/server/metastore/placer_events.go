@@ -1,6 +1,6 @@
 package metastore
 
-import "github.com/mason-leap-lab/infinicache/proxy/types"
+import "github.com/ds2-lab/infinistore/proxy/types"
 
 const (
 	PlacerEventBeforePlacing = "before_placing"

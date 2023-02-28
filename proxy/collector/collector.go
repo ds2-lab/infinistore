@@ -9,7 +9,7 @@ import (
 
 	"github.com/ScottMansfield/nanolog"
 
-	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/ds2-lab/infinistore/proxy/global"
 )
 
 const (

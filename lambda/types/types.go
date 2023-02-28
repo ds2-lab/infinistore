@@ -101,7 +101,7 @@ type Chunk struct {
 	// CHUNK_RECOVERING is only used for ensure atomicity, check Available to ensure recovery status.
 	Status    uint32
 	Available uint64         // Bytes available now. Used for recovering
-	Notifier  sync.WaitGroup // See benchmarks in github.com/mason-leap-lab/infinicache/common/sync
+	Notifier  sync.WaitGroup // See benchmarks in github.com/ds2-lab/infinistore/common/sync
 	Accessed  time.Time
 	Bucket    string
 	Backup    bool

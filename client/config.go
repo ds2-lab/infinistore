@@ -3,7 +3,7 @@ package client
 import (
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/proxy/config"
+	"github.com/ds2-lab/infinistore/proxy/config"
 )
 
 var (

@@ -3,7 +3,7 @@ package lambdastore
 import (
 	"fmt"
 
-	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/ds2-lab/infinistore/common/logger"
 )
 
 type Deployment struct {

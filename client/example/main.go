@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mason-leap-lab/infinicache/client"
+	"github.com/ds2-lab/infinistore/client"
 )
 
 var (

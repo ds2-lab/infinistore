@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	protocol "github.com/ds2-lab/infinistore/common/types"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

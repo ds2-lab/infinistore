@@ -17,7 +17,7 @@ mkdir -p $HOME/go/src/github.com/wangaoone
 cd $HOME/go/src/github.com/wangaoone
 git clone https://github.com/wangaoone/LambdaObjectstore.git LambdaObjectstore
 git clone https://github.com/mason-leap-lab/redeo.git redeo
-git clone https://github.com/wangaoone/redbench.git redbench
+git clone https://github.com/ds2-lab/infinibench.git infinibench
 
 cd LambdaObjectstore/
 git checkout config/[tianium]
@@ -25,7 +25,7 @@ git pull
 cd src
 go get
 
-cd $HOME/go/src/github.com/wangaoone/redbench
+cd $HOME/go/src/github.com/ds2-lab/infinibench
 go get
 
 sudo apt install awscli

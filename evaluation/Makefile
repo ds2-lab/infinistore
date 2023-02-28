@@ -5,7 +5,7 @@ all: build
 
 deploy:
 	aws configure
-	aws s3api put-bucket-policy --bucket jzhang33.default --policy file://${GOPATH}/src/github.com/mason-leap-lab/infinicache/evaluation/cloudwatch/policy.json
+	aws s3api put-bucket-policy --bucket jzhang33.default --policy file://${GOPATH}/src/github.com/ds2-lab/infinistore/evaluation/cloudwatch/policy.json
 
 prepare:
 	mkdir -p bin/
@@ -17,16 +17,16 @@ build-local: build
 	go build -o bin/lambda ../lambda/
 
 build-data: prepare
-	go build -o bin/preprocess benchmark-recovery/preprocess.go
+	go build -o bin/preprocess preprocess/preprocess.go
 
 build-bench: prepare
-	GO111MODULE=off go build -o bin/redbench github.com/wangaoone/redbench/
+	GO111MODULE=off go build -o bin/infinibench github.com/wangaoone/infinibench/
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
 build-simulator: prepare
-	GO111MODULE=off go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
+	GO111MODULE=off go build -o bin/playback github.com/ds2-lab/infinibench/simulator/playback/
 
 dryrun: build build-simulator
 	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
@@ -78,28 +78,28 @@ start-local: build-local
 	bin/proxy -cluster=window -functions=10 -invoker=local -ip=127.0.0.1 $(PARAMS)
 
 stop-server:
-	kill -2 $(shell cat /tmp/infinicache.pid)
+	kill -2 $(shell cat /tmp/infinistore.pid)
 
 benchmark: build-bench
-	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -esz 1048576 -d 10 -p 2 -op 0
-	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+	bin/infinibench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/infinibench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
 benchmark-recovery: build build-bench
 	benchmark-recovery/benchmark.sh 1>./log 2>&1 &
 
 test: build-bench
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 10 -p 2 -op 0
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -d 10 -p 2 -op 1
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 10 -p 2 -op 0
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -d 10 -p 2 -op 1
 
 test-redis: build-bench
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
 
 test-local: build-bench
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 50
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0
+	bin/infinibench -n 1 -c 1 -keymin 1 -keymax 1 -d 1 -p 0 -op 1 -i 50
 
 test-local-small: build-bench
-	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -sz 100 -d 1 -p 0 -op 0
-	bin/redbench -n 1 -c 1 -keymin 2 -keymax 2 -d 1 -p 0 -op 1
+	bin/infinibench -n 1 -c 1 -keymin 2 -keymax 2 -sz 100 -d 1 -p 0 -op 0
+	bin/infinibench -n 1 -c 1 -keymin 2 -keymax 2 -d 1 -p 0 -op 1
 
