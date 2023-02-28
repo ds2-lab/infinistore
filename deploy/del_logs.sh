@@ -3,9 +3,9 @@
 # deleting log in cloudWatch with prefix
 
 BASE=`pwd`/`dirname $0`
-DEPLOY_PREFIX="CacheNode"
+DEPLOY_PREFIX="MemoryNode"
 DEPLOY_FROM=0
-DEPLOY_CLUSTER=400
+DEPLOY_CLUSTER=1000
 ARG_PROMPT="[num_logs]"
 
 EMPH="\033[1;33m"
