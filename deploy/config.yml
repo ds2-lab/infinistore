@@ -1,0 +1,6 @@
+region: "us-east-1"
+aws-iam-role: "arn:aws:iam::[aws account id]:role/[role name]"
+aws-vpc-subnets: "sb-your-subnet-1,sb-your-subnet-2"
+aws-security-groups: "sg-your-security-group"
+s3-bucket-cos: ""
+s3-bucket-data: ""

@@ -8,7 +8,7 @@ KEY="lambda"
 DEPLOY_FROM=0
 DEPLOY_CLUSTER=1000
 DEPLOY_TO=$((DEPLOY_CLUSTER-1))
-DEPLOY_MEM=1024
+DEPLOY_MEM=1536
 ARG_PROMPT="timeout"
 EXPECTING_ARGS=1
 
@@ -57,7 +57,7 @@ else
 fi
 
 echo "Updating Lambda deployments..."
-go run $BASE/deploy_function.go -S3 ${S3} $CODE $CONFIG -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
+go run $BASE/deploy_function.go -yaml $BASE/config.yml -s3-bucket-lambda ${S3} $CODE $CONFIG -prefix=$DEPLOY_PREFIX -vpc -key=$KEY -from=$DEPLOY_FROM -to=${DEPLOY_CLUSTER} -mem=$DEPLOY_MEM -timeout=$TIMEOUT
 
 if [ "$CODE" == "-code" ] && [ ! $NO_BUILD  ] ; then
   rm $KEY*

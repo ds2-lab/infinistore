@@ -44,7 +44,7 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
   #### Lambda Role setup
 
-  Go to AWS IAM console and create a role for the lambda cache node (Lambda function).
+  Go to AWS IAM console and create a role for the Lambda memory node (Lambda function).
 
   AWS IAM console -> Roles -> Create Role -> Lambda ->
 
@@ -69,8 +69,8 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
   Edit `deploy/create_function.sh` and `deploy/update_function.sh`
   ```shell
   DEPLOY_PREFIX="your lambda function prefix"
-  DEPLOY_CLUSTER=400 # The number of Lambda deployments used for window rotation.
-  DEPLOY_MEM=1024 # The memory of Lambda deployments.
+  DEPLOY_CLUSTER=1000 # The number of Lambda deployments used for window rotation.
+  DEPLOY_MEM=1536 # The memory of Lambda deployments.
   S3="your bucket name"
   ```
 
@@ -78,11 +78,6 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
   ```go
   S3_BACKUP_BUCKET = "your COS bucket%s"  // Leave %s at the end your COS bucket.
   S3_COLLECTOR_BUCKET = "your data collection bucket" // Optional. Required for reproducibility experiments.
-  ```
-
-  Edit `lambda/migrator/client.go`,  change AWS region if necessary.
-  ```go
-  AWSRegion = "us-east-1"
   ```
 
   Edit the aws settings and the VPC configuration in `deploy/deploy_function.go`. If you do not want to run InfiniStore under VPC, you do not need to modify the `subnet` and `securityGroup` settings.
@@ -170,6 +165,6 @@ The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cl
 
 ## Related repos
 
-Benchmark tool and workload replayer [redbench](https://github.com/wangaoone/redbench)
+Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/infinibench)
 
 RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  
