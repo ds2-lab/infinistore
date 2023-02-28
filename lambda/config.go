@@ -17,7 +17,7 @@ var (
 	// Bucket to store experiment data. No date will be stored if InputEvent.Prefix is not set.
 	S3_COLLECTOR_BUCKET string = "ds2-lab.datapool"
 
-	DRY_RUN = true
+	DRY_RUN = false
 )
 
 func init() {
