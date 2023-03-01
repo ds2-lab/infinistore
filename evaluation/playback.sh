@@ -7,8 +7,10 @@ fi
 PWD=`dirname $0`
 DATE=`date "+%Y%m%d%H%M"`
 ENTRY="data/$DATE"
-NODE_PREFIX="Store1VPCNode"
 PID=/tmp/infinistore.pid
+COLOROK="\e[32m"
+COLORFAIL="\e[31m"
+ENDCOLOR="\e[0m"
 
 source $PWD/util.sh
 mkdir -p "$PWD/$ENTRY"
@@ -29,6 +31,7 @@ function perform(){
 
 	PREPROXY=$PWD/$ENTRY/simulate-$CLUSTER$COMPACT
 
+	echo -e "Use $COLOROK$DATE$ENDCOLOR as experiment ID for data processing."
 	start_proxy $PREPROXY "$DASHBOARD" "$PROXY_PARAMS"
   # Wait for proxy is ready
 	while [ ! -f /tmp/infinistore.pid ]

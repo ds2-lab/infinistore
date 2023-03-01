@@ -37,32 +37,48 @@ build-simulator: prepare
 
 microbench:
 	./slap.sh 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 dryrun: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh dryrun $(WORKLOAD) 1000 "-d=10 -p=2 -w=100 -balance"
 
 simulate: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 simulate-with-dashboard: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
 
 playback: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 playback-with-dashboard: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
+
+playback-azure-with-dashboard: build build-simulator prepare-workload-azure
+	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
 
 playback-accelerated: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 1000 "" "-d=10 -p=2 -speed=10" -enable-dashboard 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 playback-redis: build-simulator prepare-workload-dal09_blobs_50h
-	bin/playback -d 1 -p 0 -redis $(EC_ADDR) -redisCluster 12 -file ./data/$(DATE)_redis $(WORKLOAD) 1>./data/$(DATE).log 2>&1 &
-	@echo "show log: tail -f ./data/$(DATE).log"
+	./playback.sh custom $(WORKLOAD) redis '-d 1 -p 0 -c 0 -redis "$(EC_ADDR)" -redisCluster 12' 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 playback-redis-small: build-simulator prepare-workload-dal09_blobs_50h
-	bin/playback -d 1 -p 0 -redis $(EC_ADDR) -redisCluster 3 -s3 $(S3_BUCKET_EC_BACKUP) -failover s3 -file ./data/$(DATE)_redis $(WORKLOAD) 1>./data/$(DATE).log 2>&1 &
-	@echo "show log: tail -f ./data/$(DATE).log"
+	./playback.sh custom $(WORKLOAD) redis '-d 1 -p 0 -c 0 -redis "$(EC_ADDR)" -redisCluster 3 -s3 $(S3_BUCKET_EC_BACKUP) -failover s3' 1>./log 2>&1 &
+	@echo "show log: tail -f log"
 
 playback-redis-accelerated: build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh custom $(WORKLOAD) redis '-speed 10 -d 1 -p 0 -c 0 -redis $(EC_ADDR) -redisCluster 8 -s3 $(S3_BUCKET_EC_BACKUP) -failover s3' 1>./log 2>&1 &
@@ -70,12 +86,21 @@ playback-redis-accelerated: build-simulator prepare-workload-dal09_blobs_50h
 
 playback-static: build build-simulator prepare-workload-dal09_blobs_50h
 	./playback.sh playback $(WORKLOAD) 400 "-cluster=static -functions=400" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
 
 playback-static-average: build build-simulator prepare-workload-dal09_blobs_50h
-	./playback.sh playback $(WORKLOAD) 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=95" -enable-dashboard 1>./log 2>&1 &
+	./playback.sh playback $(WORKLOAD) 95 "-cluster=static -functions=95" "-d=10 -p=2 -fo=300" -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
 
 playback-static-norecovery: build build-simulator prepare-workload-dal09_blobs_50h
-	./playback.sh playback $(WORKLOAD) 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
+	./playback.sh playback $(WORKLOAD) 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+	sleep 1s
+	cat ./log
+	@echo "show log: tail -f log"
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
