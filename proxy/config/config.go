@@ -28,7 +28,7 @@ const LambdaPrefix = "Store1VPCNode"
 const AWSRegion = "us-east-1"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
-const LambdaMaxDeployments = 2000
+const LambdaMaxDeployments = 1000
 
 // Mode of cluster.
 const StaticCluster = "static"
@@ -53,7 +53,7 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const DefaultInstanceCapacity = 3072 * 1000000 // 3GB
+const DefaultInstanceCapacity = 1536 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
 const InstanceOverhead = 200 * 1000000 // 200MB

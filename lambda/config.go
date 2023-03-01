@@ -13,9 +13,9 @@ const (
 
 var (
 	// Bucket to store persistent data.
-	S3_BACKUP_BUCKET string = "infinistore.backup%s"
+	S3_BACKUP_BUCKET string = "[your COS bucket]"
 	// Bucket to store experiment data. No date will be stored if InputEvent.Prefix is not set.
-	S3_COLLECTOR_BUCKET string = "ds2-lab.datapool"
+	S3_COLLECTOR_BUCKET string = "[your data bucket]"
 
 	DRY_RUN = false
 )

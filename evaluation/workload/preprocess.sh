@@ -1,18 +1,23 @@
 #!/bin/bash
 
-LAMBDAPREFIX="Store1VPCNode"
+BASE=`pwd`/`dirname $0`
+BIN=$BASE/../bin
+
+# Configurable variables
+LAMBDAPREFIX="Store1VPCNode"     # The prefix of the lambda functions as "DEPLOY_PREFIX" or "--prefix" on executing deploy/create_function.sh.
+DATA=$BASE/../downloaded      # The directory where the data is stored.
+OUTPUT=$DATA/$PREFIX
+CLUSTER=1000                  # The number of Lambda functions that corresponds to individual experiment settings. This value is equal to "--cluster" on executing the proxy.
 
 PREFIX=$1
 if [ "$PREFIX" == "" ] ; then
-  echo "Manual: preprocess prefix"
+  echo "Manual: $0 prefix [cluster]"
   exit
 fi
 
-BASE=`pwd`/`dirname $0`
-BIN=$BASE/../bin
-DATA=$BASE/../downloaded
-OUTPUT=$DATA/$PREFIX
-CLUSTER=1000
+if [ "$2" != "" ] ; then
+  CLUSTER=$2
+fi
 
 mkdir -p $OUTPUT
 

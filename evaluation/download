@@ -1,9 +1,13 @@
 #!/bin/bash
 
 PWD=`dirname $0`
-DATA="~/go/src/github.com/ds2-lab/infinistore/evaluation/data"
-DOWNLOAD=$PWD/downloaded/proxy/
-REMOTE="ubuntu@server.gmu.tianium.com"
+PRIVATEKEY=~/.ssh/tianium              # The private key to access the remote machine. Password mode is not supported.
+REMOTE="ubuntu@server.gmu.tianium.com" # Leave empty as "" to process data locally
+REMOTE_HOME="~/infinistore/evaluation" # The evaluation directory on the remote machine
+DATA_HOME="data"                       # The data directory on the remote machine
+REMOTE_DATA=$REMOTE_HOME/$DATA_HOME
+LOCAL_DATA=$PWD/$DATA_HOME
+LOCAL_DEST=$PWD/downloaded/proxy/      # The local directory to store the downloaded data
 
 FOLDER=$1
 # date "+%Y%m%d%H%M" -d "$FOLDER" > /dev/null  2>&1 # Linux
@@ -16,10 +20,18 @@ if [ "$FOLDER" == "" ] ; then
 	exit 1
 fi
 
+mkdir -p $DOWNLOAD
+
 if [ "$2" != "" ] ; then
 	REMOTE=$2
 fi
 
-mkdir -p $DOWNLOAD
-ssh -i ~/.ssh/tianium -t $REMOTE "cd $DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER"
-scp -i ~/.ssh/tianium $REMOTE:$DATA/$FOLDER.tar.gz $DOWNLOAD
+if [ "$REMOTE" != "" ] ; then
+	echo "Downloading experiment($FOLDER) data from $REMOTE:$REMOTE_DATA to $LOCAL_DEST"
+	ssh -i $PRIVATEKEY -t $REMOTE "cd $REMOTE_DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER"
+	scp -i $PRIVATEKEY $REMOTE:$REMOTE_DATA/$FOLDER.tar.gz $LOCAL_DEST
+else
+	echo "Processing data locally. Copying experiment($FOLDER) data from $LOCAL_DATA to $LOCAL_DEST"
+	cd $LOCAL_DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER
+	cp $LOCAL_DATA/$FOLDER.tar.gz $LOCAL_DEST
+fi
