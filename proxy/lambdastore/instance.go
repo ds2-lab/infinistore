@@ -1290,7 +1290,7 @@ func (ins *Instance) flagValidatedLocked(conn *Connection, errs ...error) (*Conn
 		err = errs[0]
 	}
 	if _, resolveErr := ins.validated.Resolve(conn, err); resolveErr == nil {
-		if err != nil && err != ErrWarmupReturn && err != ErrInstanceReclaimed {
+		if err != nil && err != ErrWarmupReturn && err != ErrInstanceReclaimed && err != ErrInstanceClosed {
 			numFailure := atomic.AddUint32(&ins.numFailure, 1)
 			ins.log.Warn("[%v]Validation failed: %v", ins, err)
 			if int(numFailure) >= MaxValidationFailure || err == ErrValidationTimeout {
@@ -1393,10 +1393,10 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 	if lastErr != nil {
 		ins.ResetDue(false, "request failure") // Force ping on error
-		if leftAttempts == 0 {
-			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
-		} else {
+		if leftAttempts > 0 {
 			ins.log.Error("Abandon retrial: %v", lastErr)
+		} else if lastErr != ErrInstanceClosed {
+			ins.log.Error("%v, give up: %v", cmd.FailureError(), lastErr)
 		}
 		if request, ok := cmd.(*types.Request); ok {
 			request.SetErrorResponse(lastErr)

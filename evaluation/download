@@ -1,17 +1,22 @@
 #!/bin/bash
 
 PWD=`dirname $0`
+FULLPATH=`realpath $PWD`
+OS=`uname`
 PRIVATEKEY=~/.ssh/tianium              # The private key to access the remote machine. Password mode is not supported.
 REMOTE="ubuntu@server.gmu.tianium.com" # Leave empty as "" to process data locally
 REMOTE_HOME="~/infinistore/evaluation" # The evaluation directory on the remote machine
 DATA_HOME="data"                       # The data directory on the remote machine
 REMOTE_DATA=$REMOTE_HOME/$DATA_HOME
-LOCAL_DATA=$PWD/$DATA_HOME
-LOCAL_DEST=$PWD/downloaded/proxy/      # The local directory to store the downloaded data
+LOCAL_DATA=$FULLPATH/$DATA_HOME
+LOCAL_DEST=$FULLPATH/downloaded/proxy/      # The local directory to store the downloaded data
 
 FOLDER=$1
-# date "+%Y%m%d%H%M" -d "$FOLDER" > /dev/null  2>&1 # Linux
-date -jf "%Y%m%d%H%M" "$FOLDER" > /dev/null  2>&1  # Mac
+if [ "$OS" == "Darwin" ] ; then
+	date -jf "%Y%m%d%H%M" "$FOLDER" > /dev/null  2>&1  # Mac
+else
+	date -d "$(echo $FOLDER | sed 's/^\(....\)\(..\)\(..\)\(..\)\(..\)$/\1-\2-\3 \4:\5/')" > /dev/null  2>&1 # Suppose linux
+fi
 if [ $? -ne 0 ]; then
 		FOLDER=""
 fi
@@ -20,17 +25,18 @@ if [ "$FOLDER" == "" ] ; then
 	exit 1
 fi
 
-mkdir -p $DOWNLOAD
+mkdir -p $LOCAL_DEST
 
 if [ "$2" != "" ] ; then
 	REMOTE=$2
 fi
 
-if [ "$REMOTE" != "" ] ; then
+if [ "$REMOTE" != "" ] && [ "$REMOTE" != "-" ] ; then
 	echo "Downloading experiment($FOLDER) data from $REMOTE:$REMOTE_DATA to $LOCAL_DEST"
 	ssh -i $PRIVATEKEY -t $REMOTE "cd $REMOTE_DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER"
 	scp -i $PRIVATEKEY $REMOTE:$REMOTE_DATA/$FOLDER.tar.gz $LOCAL_DEST
 else
+	
 	echo "Processing data locally. Copying experiment($FOLDER) data from $LOCAL_DATA to $LOCAL_DEST"
 	cd $LOCAL_DATA && tar -czf $FOLDER.tar.gz $FOLDER $FOLDER*.log $FOLDER*.clog logs/$FOLDER
 	cp $LOCAL_DATA/$FOLDER.tar.gz $LOCAL_DEST

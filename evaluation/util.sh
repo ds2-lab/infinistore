@@ -36,13 +36,14 @@ function update_lambda_mem() {
 
 
 function start_proxy() {
-    echo "running proxy server"
+    echo "Starting proxy server..."
     PREFIX=$1
     DASHBOARD=$2
     PARAMS=$3
     DRYRUN=$4
     if [ "$DASHBOARD" != "" ] || [ "$DRYRUN" != "" ] ; then
-        echo "Run: GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -ip=\${PUBLICIP} -log=proxy.log $DASHBOARD $PARAMS"
+        echo "Run following command on separate terminal to proceed:"
+        echo "GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=\${LAMBDAPREFIX} -ip=\${PUBLICIP} -log=proxy.log $DASHBOARD $PARAMS"
     else
         GOMAXPROCS=36 $BINDIR/proxy -prefix=$PREFIX -lambda-prefix=${LAMBDAPREFIX} -ip=${PUBLICIP} $PARAMS &
     fi

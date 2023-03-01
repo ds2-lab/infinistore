@@ -50,16 +50,16 @@ make [target]
 
 ### Collecting
 
-For specified experiment prefix in date format: e.g. 202011070320, config `./download` as commented and execute:
+For specified experiment prefix in date format: e.g. 202011070320.
 
 ~~~bash
 export EXPERIMENT=202011070320
 ~~~
 
-To collect logs on the proxy:
+To collect logs on the proxy, config `./download` as commented and execute (add "-" to process data locally):
 
 ~~~bash
-./download ${EXPERIMENT}
+./download ${EXPERIMENT} [-]
 ~~~
 
 To collect data collected in Lambda nodes from S3, such as Lambda side request logs, and recovery performance data.
@@ -70,7 +70,7 @@ cloudwatch/download.sh ${EXPERIMENT} data
 
 To collect exported cloudwatch logs from S3
 
-~~~
+~~~bash
 cloudwatch/download.sh ${EXPERIMENT} log
 ~~~
 
