@@ -1,8 +1,8 @@
 # InfiniStore
 
-**InfiniStore** is an elastic, cost-effectiveness and high-performance object storage that is built atop ephemeral cloud funtions. Built based on [InfiniCache](https://ds2-lab.github.io/infinicache/) codebase, InfiniStore offers automatic elasticity, durability, strong consistency.
+**InfiniStore** is an elastic, cost-effective, and high-performance object storage built atop ephemeral cloud funtions. Built on top of the [InfiniCache](https://ds2-lab.github.io/infinicache/) codebase, InfiniStore offers automatic elasticity, durability, strong consistency, and high performance.
 
-The preprint of VLDB'23 paper is accessible now as: [Sion: Elastic Serverless Cloud Storage](https://arxiv.org/abs/2209.01496)
+The preprint of our VLDB'23 paper can be viewed at: [InfiniStore: Elastic Serverless Cloud Storage](https://arxiv.org/abs/2209.01496)
 
 ## Prepare
 
