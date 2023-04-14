@@ -156,7 +156,7 @@ Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/in
 
 RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  
 
-## To cite InfiniCache
+## To cite InfiniStore
 
 ```
 @inproceedings {vldb23-infinistore,
