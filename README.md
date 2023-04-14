@@ -2,7 +2,7 @@
 
 **InfiniStore** is an elastic, cost-effective, and high-performance object storage built atop ephemeral cloud funtions. Built on top of the [InfiniCache](https://ds2-lab.github.io/infinicache/) codebase, InfiniStore offers automatic elasticity, durability, strong consistency, and high performance.
 
-The preprint of our VLDB'23 paper can be viewed at: [InfiniStore: Elastic Serverless Cloud Storage](https://arxiv.org/abs/2209.01496)
+The preprint of our VLDB'23 paper can be viewed at: [InfiniStore: Elastic Serverless Cloud Storage](https://arxiv.org/abs/2209.01496).
 
 ## Prepare
 
@@ -155,3 +155,26 @@ The preprint of our VLDB'23 paper can be viewed at: [InfiniStore: Elastic Server
 Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/infinibench)
 
 RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  
+
+## To cite InfiniCache
+
+```
+@article{vldb23-infinistore,
+  author       = {Jingyuan Zhang, Ao Wang, Xiaolong Ma, Benjamin Carver, Nicholas John Newman, Ali Anwar, Lukas Rupprecht, Dimitrios Skourtis, Vasily Tarasov, Feng Yan,  Yue Cheng},
+  title        = {InfiniStore: Elastic Serverless Cloud Storage},
+  journal      = {Proc. {VLDB} Endow.},
+  volume       = {16},
+  number       = {7},
+  pages        = {1629--1642},
+  year         = {2023},
+  url          = {https://www.vldb.org/pvldb/vol16/p1629-zhang.pdf},
+  bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+```
+
+
+## Contributing
+
+Please feel free to hack on InfiniStore! We're happy to accept contributions.
+
