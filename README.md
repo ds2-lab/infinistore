@@ -172,7 +172,6 @@ RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-lea
   pages        = {1629--1642},
   year         = {2023},
   url          = {https://www.vldb.org/pvldb/vol16/p1629-zhang.pdf},
-  bibsource    = {dblp computer science bibliography, https://dblp.org}
 }
 
 ```
