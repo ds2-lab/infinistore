@@ -150,11 +150,15 @@ The preprint of our VLDB'23 paper can be viewed at: [InfiniStore: Elastic Server
 
   Run `make test` to put/get a toy object.
 
+
+
 ## Related repos
 
-Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/infinibench)
+Benchmark tool and workload replayer [infinibench](https://github.com/ds2-lab/infinibench).
 
-RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo)  
+RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-leap-lab/redeo).   
+
+
 
 ## To cite InfiniStore
 
