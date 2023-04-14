@@ -159,7 +159,7 @@ RESP (REdis Serialization Protocol) library [redeo](https://github.com/mason-lea
 ## To cite InfiniCache
 
 ```
-@article{vldb23-infinistore,
+@inproceedings {vldb23-infinistore,
   author       = {Jingyuan Zhang, Ao Wang, Xiaolong Ma, Benjamin Carver, Nicholas John Newman, Ali Anwar, Lukas Rupprecht, Dimitrios Skourtis, Vasily Tarasov, Feng Yan,  Yue Cheng},
   title        = {InfiniStore: Elastic Serverless Cloud Storage},
   journal      = {Proc. {VLDB} Endow.},
